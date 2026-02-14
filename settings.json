@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "base_url": "http://localhost:1234",
+  "chat_model": "mistralai/ministral-3-14b-reasoning",
+  "embed_model": "text-embedding-nomic-embed-text-v1.5",
+  "lang": "de",
+  "theme": "monokai",
+  "chunk_size": 800,
+  "k": 5,
+  "custom_apis": [],
+  "personas": [
+    {
+      "id": "persona-default",
+      "name": "Standard",
+      "prompt": ""
+    }
+  ],
+  "allow_code_exec": false,
+  "allow_nanogo": false
+}

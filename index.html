@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>tinyRAG</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-theme="dark">
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <h1>tinyRAG</h1>
+    <div class="sub"><span id="chunkCount">-</span> Chunks in der Wissensbasis</div>
+    <button class="new-chat-btn" id="newChatBtn">+ Neuer Chat</button>
+  </div>
+
+  <div class="sidebar-tabs" role="tablist" aria-label="Sidebar Tabs">
+    <button class="sidebar-tab active" data-sidebar-tab="chats" role="tab" aria-selected="true">Chats</button>
+    <button class="sidebar-tab" data-sidebar-tab="sources" role="tab" aria-selected="false">Quellen</button>
+  </div>
+
+  <div id="sidebar-chats" class="sidebar-list" role="tabpanel"></div>
+  <div id="sidebar-sources" class="sidebar-list" style="display:none" role="tabpanel"></div>
+</aside>
+
+<!-- Main -->
+<main class="main">
+  <div class="main-tabs">
+    <button class="main-tab active" data-main-tab="chat">Chat</button>
+    <button class="main-tab" data-main-tab="search">Suche</button>
+    <button class="main-tab" data-main-tab="ingest">Daten hinzufügen</button>
+
+    <div class="spacer"></div>
+
+    <label class="debug-toggle" title="Wähle eine Persona (Pre-Prompt)">
+      <span style="margin-right:6px">Persona</span>
+      <select id="personaSelect"></select>
+    </label>
+
+    <label class="debug-toggle" title="Zeigt die RAG-Kontextdaten an, die das System für die Antwort verwendet">
+      <input type="checkbox" id="debugMode"> Debug
+    </label>
+    
+    <button class="settings-btn" id="settingsBtn" title="Einstellungen">⚙</button>
+  </div>
+
+  <!-- Chat -->
+  <section id="panel-chat" class="main-panel active" aria-label="Chat">
+    <div class="chat-messages" id="chatMessages">
+      <div class="empty-state" id="chatEmpty">
+        <div class="icon">💬</div>
+        <p>Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat-Eingabe"></textarea>
+      <button id="chatBtn">Senden</button>
+    </div>
+  </section>
+
+  <!-- Search -->
+  <section id="panel-search" class="main-panel" aria-label="Suche">
+    <label for="searchQ">Semantische Suche in den Chunks</label>
+    <div class="row">
+      <input type="text" id="searchQ" placeholder="Suchbegriff…" autocomplete="off">
+      <button class="btn-primary" id="searchBtn">Suchen</button>
+    </div>
+    <div class="results" id="searchResults"></div>
+  </section>
+
+  <!-- Ingest -->
+  <section id="panel-ingest" class="main-panel" aria-label="Daten hinzufügen">
+    <div class="sidebar-tabs ingest-tabs" role="tablist" aria-label="Import Tabs">
+      <button class="sidebar-tab active" data-ingest-tab="wiki" role="tab" aria-selected="true">Wikipedia</button>
+      <button class="sidebar-tab" data-ingest-tab="url" role="tab" aria-selected="false">URL</button>
+      <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false">Text</button>
+      <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false">Upload</button>
+      <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false">Ordner</button>
+    </div>
+
+    <div id="ingest-wiki">
+      <label>Wikipedia-Artikel laden</label>
+      <div class="row">
+        <input type="text" id="wikiArticle" placeholder="z.B. Sonnensystem">
+        <input type="text" id="wikiLang" value="de" style="max-width:60px" aria-label="Wiki Sprache">
+        <button class="btn-primary" id="wikiBtn">Laden</button>
+      </div>
+      <div id="wikiStatus" role="status" aria-live="polite"></div>
+      <div id="wikiSuggestions" class="wiki-suggestions-box"></div>
+    </div>
+
+    <div id="ingest-url" style="display:none">
+      <label>Beliebige Webseite scrapen</label>
+      <div class="row">
+        <input type="text" id="scrapeUrl" placeholder="https://example.com/page" inputmode="url">
+        <button class="btn-primary" id="urlBtn">Scrapen</button>
+      </div>
+      <div id="urlStatus"></div>
+    </div>
+
+    <div id="ingest-text" style="display:none">
+      <label for="textTitle">Titel (optional)</label>
+      <input type="text" id="textTitle" placeholder="Mein Dokument">
+      <label for="textContent">Text</label>
+      <textarea id="textContent" rows="8" placeholder="Text hier einfügen…"></textarea>
+      <div class="actions-row">
+        <button class="btn-primary" id="textBtn">Speichern &amp; Einbetten</button>
+      </div>
+      <div id="textStatus"></div>
+    </div>
+
+    <div id="ingest-upload" style="display:none">
+      <label>Textdatei hochladen</label>
+      <div class="drop-zone" id="dropZone">
+        <p>Datei hierher ziehen oder klicken</p>
+        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log">
+      </div>
+      <div id="uploadStatus"></div>
+    </div>
+
+    <div id="ingest-folder" style="display:none">
+      <label>Ordner importieren (alle Textdateien)</label>
+      <p class="hint">Absoluter Pfad zum Ordner auf dem Server. Unterstützte Dateien: .txt, .md, .csv, .json, .xml, .html, .log u.a.</p>
+      <div class="row">
+        <input type="text" id="folderPath" placeholder="/pfad/zum/ordner">
+        <label class="inline-check"><input type="checkbox" id="folderRecursive" checked> Rekursiv</label>
+        <button class="btn-primary" id="folderBtn">Importieren</button>
+      </div>
+      <div id="folderStatus"></div>
+    </div>
+  </section>
+</main>
+
+<!-- Settings Modal -->
+<div id="settingsModal" class="modal-overlay" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Einstellungen">
+    <div class="modal-header">
+      <h2>Einstellungen</h2>
+      <button class="modal-close" id="settingsClose" aria-label="Schließen">×</button>
+    </div>
+
+    <!-- Settings Tabs -->
+    <div class="settings-tabs" role="tablist" aria-label="Einstellungen Tabs">
+      <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true">Allgemein</button>
+      <button class="settings-tab" data-settings-tab="llm" role="tab" aria-selected="false">LLM Backend</button>
+      <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false">Custom APIs</button>
+      <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false">Personas</button>
+    </div>
+
+    <!-- Tab: General -->
+    <div id="settings-general" class="settings-panel active settings-section">
+      <h3>Erscheinungsbild</h3>
+      <label>Theme</label>
+      <div class="theme-grid" id="themeGrid">
+        <div class="theme-card active" data-theme-id="dark">
+          <div class="preview">
+            <span style="background:#0f1115"></span>
+            <span style="background:#151922"></span>
+            <span style="background:#5aa7ff"></span>
+          </div>
+          <div class="label">Dark</div>
+        </div>
+        <div class="theme-card" data-theme-id="light">
+          <div class="preview">
+            <span style="background:#f5f5f7"></span>
+            <span style="background:#ffffff"></span>
+            <span style="background:#0071e3"></span>
+          </div>
+          <div class="label">Light</div>
+        </div>
+        <div class="theme-card" data-theme-id="nord">
+          <div class="preview">
+            <span style="background:#2e3440"></span>
+            <span style="background:#3b4252"></span>
+            <span style="background:#88c0d0"></span>
+          </div>
+          <div class="label">Nord</div>
+        </div>
+        <div class="theme-card" data-theme-id="solarized">
+          <div class="preview">
+            <span style="background:#002b36"></span>
+            <span style="background:#073642"></span>
+            <span style="background:#268bd2"></span>
+          </div>
+          <div class="label">Solarized</div>
+        </div>
+        <div class="theme-card" data-theme-id="monokai">
+          <div class="preview">
+            <span style="background:#1e1f1c"></span>
+            <span style="background:#272822"></span>
+            <span style="background:#66d9ef"></span>
+          </div>
+          <div class="label">Monokai</div>
+        </div>
+        <div class="theme-card" data-theme-id="dracula">
+          <div class="preview">
+            <span style="background:#282a36"></span>
+            <span style="background:#343746"></span>
+            <span style="background:#bd93f9"></span>
+          </div>
+          <div class="label">Dracula</div>
+        </div>
+      </div>
+
+      <div class="settings-footnote" style="margin-top:16px;padding:0;background:none">
+        Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.
+      </div>
+      <div style="margin-top:12px">
+        <label class="inline-check"><input type="checkbox" id="allowNanoGo"> Erlaube Ausführung von nanoGo (interpretiertes Go) </label>
+        <div class="hint">Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.</div>
+      </div>
+    </div>
+
+    <!-- Tab: LLM Backend -->
+    <div id="settings-llm" class="settings-panel settings-section">
+      <h3>LLM Backend</h3>
+
+      <div class="settings-grid">
+        <div>
+          <label for="setBaseUrl">API Endpoint (OpenAI-kompatibel)</label>
+          <input id="setBaseUrl" type="text" placeholder="http://localhost:1234">
+          <div class="mini-actions">
+            <button class="tool-btn" id="btnDiscover">Auto-Discovery</button>
+            <button class="tool-btn suggested" id="btnTestEndpoint">Test &amp; Modelle laden</button>
+          </div>
+          <div class="tool-status" id="endpointStatus"></div>
+        </div>
+
+        <div>
+          <label for="setChatModel">Chat-Modell</label>
+          <select id="setChatModel"></select>
+          <small class="help" id="chatHint"></small>
+
+          <label for="setEmbedModel" style="margin-top:.8rem">Embedding-Modell</label>
+          <select id="setEmbedModel"></select>
+          <small class="help warn" id="embedHint"></small>
+        </div>
+      </div>
+
+      <div class="discover-box" id="discoverBox" style="display:none"></div>
+
+      <div class="actions-row">
+        <button class="btn-primary" id="btnSaveSettings">Speichern</button>
+        <span class="tool-status" id="saveStatus"></span>
+      </div>
+    </div>
+
+    <!-- Tab: Custom APIs -->
+    <div id="settings-apis" class="settings-panel settings-section">
+      <h3>Custom APIs</h3>
+      <div id="apiList" class="api-list"><p class="muted">Lade…</p></div>
+
+      <h4>Neue API hinzufügen</h4>
+      <label for="newApiName">Name</label>
+      <input id="newApiName" placeholder="z.B. StackOverflow">
+      <label for="newApiTemplate">URL-Template (mit $q)</label>
+      <input id="newApiTemplate" placeholder="https://example.com/search?q=$q">
+      <label for="newApiDesc">Beschreibung (optional)</label>
+      <input id="newApiDesc" placeholder="Wofür ist die Quelle gut?">
+      <div class="actions-row">
+        <button class="btn-primary" id="btnAddCustomApi">Hinzufügen</button>
+      </div>
+    </div>
+
+    <!-- Tab: Personas -->
+    <div id="settings-personas" class="settings-panel settings-section">
+      <h3>Persönlichkeiten (Pre-Prompts)</h3>
+      <div id="personaList" class="api-list"><p class="muted">Lade…</p></div>
+
+      <h4>Neue Persona</h4>
+      <label for="newPersonaName">Name</label>
+      <input id="newPersonaName" placeholder="z.B. Sachlicher Modus">
+      <label for="newPersonaPrompt">Pre-Prompt</label>
+      <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…"></textarea>
+      <div class="actions-row">
+        <button class="btn-primary" id="btnAddPersona">Hinzufügen</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
