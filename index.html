@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="de" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,154 +9,177 @@
 </head>
 <body data-theme="dark">
 
+<!-- Skip navigation link for keyboard users -->
+<a href="#main-content" class="skip-link" data-i18n="skip_to_main">Skip to main content</a>
+
 <!-- Sidebar -->
-<aside class="sidebar">
+<aside class="sidebar" role="complementary" aria-label="Sidebar navigation">
   <div class="sidebar-header">
     <h1>tinyRAG</h1>
-    <div class="sub"><span id="chunkCount">-</span> Chunks in der Wissensbasis</div>
-    <button class="new-chat-btn" id="newChatBtn">+ Neuer Chat</button>
+    <div class="sub" aria-live="polite"><span id="chunkCount" aria-label="Number of chunks">-</span> <span data-i18n="chunks_in_knowledge_base">Chunks in der Wissensbasis</span></div>
+    <button class="new-chat-btn" id="newChatBtn" aria-label="Start new chat"><span data-i18n="new_chat">+ Neuer Chat</span></button>
   </div>
 
   <div class="sidebar-tabs" role="tablist" aria-label="Sidebar Tabs">
-    <button class="sidebar-tab active" data-sidebar-tab="chats" role="tab" aria-selected="true">Chats</button>
-    <button class="sidebar-tab" data-sidebar-tab="sources" role="tab" aria-selected="false">Quellen</button>
+    <button class="sidebar-tab active" data-sidebar-tab="chats" role="tab" aria-selected="true" aria-controls="sidebar-chats" id="tab-chats"><span data-i18n="chats">Chats</span></button>
+    <button class="sidebar-tab" data-sidebar-tab="sources" role="tab" aria-selected="false" aria-controls="sidebar-sources" id="tab-sources"><span data-i18n="sources">Quellen</span></button>
   </div>
 
-  <div id="sidebar-chats" class="sidebar-list" role="tabpanel"></div>
-  <div id="sidebar-sources" class="sidebar-list" style="display:none" role="tabpanel"></div>
+  <div id="sidebar-chats" class="sidebar-list" role="tabpanel" aria-labelledby="tab-chats"></div>
+  <div id="sidebar-sources" class="sidebar-list" style="display:none" role="tabpanel" aria-labelledby="tab-sources"></div>
 </aside>
 
 <!-- Main -->
-<main class="main">
-  <div class="main-tabs">
-    <button class="main-tab active" data-main-tab="chat">Chat</button>
-    <button class="main-tab" data-main-tab="search">Suche</button>
-    <button class="main-tab" data-main-tab="ingest">Daten hinzufügen</button>
+<main class="main" id="main-content" role="main">
+  <div class="main-tabs" role="tablist" aria-label="Main navigation">
+    <button class="main-tab active" data-main-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat" id="tab-chat"><span data-i18n="chat">Chat</span></button>
+    <button class="main-tab" data-main-tab="search" role="tab" aria-selected="false" aria-controls="panel-search" id="tab-search"><span data-i18n="search">Suche</span></button>
+    <button class="main-tab" data-main-tab="ingest" role="tab" aria-selected="false" aria-controls="panel-ingest" id="tab-ingest"><span data-i18n="ingest">Daten hinzufügen</span></button>
 
     <div class="spacer"></div>
 
-    <label class="debug-toggle" title="Wähle eine Persona (Pre-Prompt)">
-      <span style="margin-right:6px">Persona</span>
-      <select id="personaSelect"></select>
+    <label class="debug-toggle" for="personaSelect">
+      <span style="margin-right:6px" data-i18n="persona">Persona</span>
+      <select id="personaSelect" aria-label="Select persona (pre-prompt)"></select>
     </label>
 
-    <label class="debug-toggle" title="Zeigt die RAG-Kontextdaten an, die das System für die Antwort verwendet">
-      <input type="checkbox" id="debugMode"> Debug
+    <label class="debug-toggle" for="debugMode">
+      <input type="checkbox" id="debugMode" aria-describedby="debug-description">
+      <span data-i18n="debug">Debug</span>
     </label>
+    <span id="debug-description" class="visually-hidden" data-i18n="debug_description">Shows RAG context data that the system uses for the response</span>
     
-    <button class="settings-btn" id="settingsBtn" title="Einstellungen">⚙</button>
+    <button class="settings-btn" id="settingsBtn" aria-label="Open settings">
+      <span aria-hidden="true">⚙</span>
+      <span class="visually-hidden" data-i18n="settings">Einstellungen</span>
+    </button>
   </div>
 
   <!-- Chat -->
-  <section id="panel-chat" class="main-panel active" aria-label="Chat">
-    <div class="chat-messages" id="chatMessages">
+  <section id="panel-chat" class="main-panel active" role="tabpanel" aria-labelledby="tab-chat">
+    <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions">
       <div class="empty-state" id="chatEmpty">
-        <div class="icon">💬</div>
-        <p>Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p>
+        <div class="icon" aria-hidden="true">💬</div>
+        <p data-i18n="chat_empty_state">Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p>
       </div>
     </div>
 
     <div class="chat-input-area">
-      <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat-Eingabe"></textarea>
-      <button id="chatBtn">Senden</button>
+      <label for="chatQ" class="visually-hidden" data-i18n="chat_input_label">Enter your question</label>
+      <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
+      <button id="chatBtn" aria-label="Send message"><span data-i18n="send">Senden</span></button>
     </div>
   </section>
 
   <!-- Search -->
-  <section id="panel-search" class="main-panel" aria-label="Suche">
-    <label for="searchQ">Semantische Suche in den Chunks</label>
+  <section id="panel-search" class="main-panel" role="tabpanel" aria-labelledby="tab-search">
+    <label for="searchQ" data-i18n="search_label">Semantische Suche in den Chunks</label>
     <div class="row">
-      <input type="text" id="searchQ" placeholder="Suchbegriff…" autocomplete="off">
-      <button class="btn-primary" id="searchBtn">Suchen</button>
+      <input type="text" id="searchQ" placeholder="Suchbegriff…" autocomplete="off" aria-label="Search query" data-i18n-placeholder="search_placeholder">
+      <button class="btn-primary" id="searchBtn" aria-label="Execute search"><span data-i18n="search_button">Suchen</span></button>
     </div>
-    <div class="results" id="searchResults"></div>
+    <div class="results" id="searchResults" role="region" aria-live="polite" aria-label="Search results"></div>
   </section>
 
   <!-- Ingest -->
-  <section id="panel-ingest" class="main-panel" aria-label="Daten hinzufügen">
+  <section id="panel-ingest" class="main-panel" role="tabpanel" aria-labelledby="tab-ingest">
     <div class="sidebar-tabs ingest-tabs" role="tablist" aria-label="Import Tabs">
-      <button class="sidebar-tab active" data-ingest-tab="wiki" role="tab" aria-selected="true">Wikipedia</button>
-      <button class="sidebar-tab" data-ingest-tab="url" role="tab" aria-selected="false">URL</button>
-      <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false">Text</button>
-      <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false">Upload</button>
-      <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false">Ordner</button>
+      <button class="sidebar-tab active" data-ingest-tab="wiki" role="tab" aria-selected="true" aria-controls="ingest-wiki" id="tab-wiki"><span data-i18n="wikipedia">Wikipedia</span></button>
+      <button class="sidebar-tab" data-ingest-tab="url" role="tab" aria-selected="false" aria-controls="ingest-url" id="tab-url"><span data-i18n="url">URL</span></button>
+      <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false" aria-controls="ingest-text" id="tab-text"><span data-i18n="text">Text</span></button>
+      <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false" aria-controls="ingest-upload" id="tab-upload"><span data-i18n="upload">Upload</span></button>
+      <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false" aria-controls="ingest-folder" id="tab-folder"><span data-i18n="folder">Ordner</span></button>
     </div>
 
-    <div id="ingest-wiki">
-      <label>Wikipedia-Artikel laden</label>
+    <div id="ingest-wiki" role="tabpanel" aria-labelledby="tab-wiki">
+      <label for="wikiArticle" data-i18n="wiki_label">Wikipedia-Artikel laden</label>
       <div class="row">
-        <input type="text" id="wikiArticle" placeholder="z.B. Sonnensystem">
-        <input type="text" id="wikiLang" value="de" style="max-width:60px" aria-label="Wiki Sprache">
-        <button class="btn-primary" id="wikiBtn">Laden</button>
+        <input type="text" id="wikiArticle" placeholder="z.B. Sonnensystem" aria-label="Wikipedia article name" data-i18n-placeholder="wiki_placeholder">
+        <label for="wikiLang" class="visually-hidden" data-i18n="wiki_lang_label">Wikipedia language code</label>
+        <input type="text" id="wikiLang" value="de" style="max-width:60px" aria-label="Wikipedia language code">
+        <button class="btn-primary" id="wikiBtn" aria-label="Load Wikipedia article"><span data-i18n="load">Laden</span></button>
       </div>
       <div id="wikiStatus" role="status" aria-live="polite"></div>
-      <div id="wikiSuggestions" class="wiki-suggestions-box"></div>
+      <div id="wikiSuggestions" class="wiki-suggestions-box" role="region" aria-label="Wikipedia suggestions"></div>
     </div>
 
-    <div id="ingest-url" style="display:none">
-      <label>Beliebige Webseite scrapen</label>
+    <div id="ingest-url" style="display:none" role="tabpanel" aria-labelledby="tab-url">
+      <label for="scrapeUrl" data-i18n="url_label">Beliebige Webseite scrapen</label>
       <div class="row">
-        <input type="text" id="scrapeUrl" placeholder="https://example.com/page" inputmode="url">
-        <button class="btn-primary" id="urlBtn">Scrapen</button>
+        <input type="text" id="scrapeUrl" placeholder="https://example.com/page" inputmode="url" aria-label="URL to scrape" data-i18n-placeholder="url_placeholder">
+        <button class="btn-primary" id="urlBtn" aria-label="Scrape webpage"><span data-i18n="scrape">Scrapen</span></button>
       </div>
-      <div id="urlStatus"></div>
+      <div id="urlStatus" role="status" aria-live="polite"></div>
     </div>
 
-    <div id="ingest-text" style="display:none">
-      <label for="textTitle">Titel (optional)</label>
-      <input type="text" id="textTitle" placeholder="Mein Dokument">
-      <label for="textContent">Text</label>
-      <textarea id="textContent" rows="8" placeholder="Text hier einfügen…"></textarea>
+    <div id="ingest-text" style="display:none" role="tabpanel" aria-labelledby="tab-text">
+      <label for="textTitle" data-i18n="text_title_label">Titel (optional)</label>
+      <input type="text" id="textTitle" placeholder="Mein Dokument" aria-label="Document title" data-i18n-placeholder="text_title_placeholder">
+      <label for="textContent" data-i18n="text_content_label">Text</label>
+      <textarea id="textContent" rows="8" placeholder="Text hier einfügen…" aria-label="Document content" data-i18n-placeholder="text_content_placeholder"></textarea>
       <div class="actions-row">
-        <button class="btn-primary" id="textBtn">Speichern &amp; Einbetten</button>
+        <button class="btn-primary" id="textBtn" aria-label="Save and embed text"><span data-i18n="save_embed">Speichern &amp; Einbetten</span></button>
       </div>
-      <div id="textStatus"></div>
+      <div id="textStatus" role="status" aria-live="polite"></div>
     </div>
 
-    <div id="ingest-upload" style="display:none">
-      <label>Textdatei hochladen</label>
-      <div class="drop-zone" id="dropZone">
-        <p>Datei hierher ziehen oder klicken</p>
-        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log">
+    <div id="ingest-upload" style="display:none" role="tabpanel" aria-labelledby="tab-upload">
+      <label for="fileInput" data-i18n="upload_label">Textdatei hochladen</label>
+      <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop zone for file upload">
+        <p data-i18n="drop_zone_text">Datei hierher ziehen oder klicken</p>
+        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log" aria-label="File input">
       </div>
-      <div id="uploadStatus"></div>
+      <div id="uploadStatus" role="status" aria-live="polite"></div>
     </div>
 
-    <div id="ingest-folder" style="display:none">
-      <label>Ordner importieren (alle Textdateien)</label>
-      <p class="hint">Absoluter Pfad zum Ordner auf dem Server. Unterstützte Dateien: .txt, .md, .csv, .json, .xml, .html, .log u.a.</p>
+    <div id="ingest-folder" style="display:none" role="tabpanel" aria-labelledby="tab-folder">
+      <label for="folderPath" data-i18n="folder_label">Ordner importieren (alle Textdateien)</label>
+      <p class="hint" data-i18n="folder_hint">Absoluter Pfad zum Ordner auf dem Server. Unterstützte Dateien: .txt, .md, .csv, .json, .xml, .html, .log u.a.</p>
       <div class="row">
-        <input type="text" id="folderPath" placeholder="/pfad/zum/ordner">
-        <label class="inline-check"><input type="checkbox" id="folderRecursive" checked> Rekursiv</label>
-        <button class="btn-primary" id="folderBtn">Importieren</button>
+        <input type="text" id="folderPath" placeholder="/pfad/zum/ordner" aria-label="Folder path" data-i18n-placeholder="folder_placeholder">
+        <label class="inline-check" for="folderRecursive">
+          <input type="checkbox" id="folderRecursive" checked aria-label="Import recursively">
+          <span data-i18n="recursive">Rekursiv</span>
+        </label>
+        <button class="btn-primary" id="folderBtn" aria-label="Import folder"><span data-i18n="import">Importieren</span></button>
       </div>
-      <div id="folderStatus"></div>
+      <div id="folderStatus" role="status" aria-live="polite"></div>
     </div>
   </section>
 </main>
 
 <!-- Settings Modal -->
 <div id="settingsModal" class="modal-overlay" aria-hidden="true">
-  <div class="modal" role="dialog" aria-modal="true" aria-label="Einstellungen">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="modal-header">
-      <h2>Einstellungen</h2>
-      <button class="modal-close" id="settingsClose" aria-label="Schließen">×</button>
+      <h2 id="settings-title" data-i18n="settings_title">Einstellungen</h2>
+      <button class="modal-close" id="settingsClose" aria-label="Close settings dialog">
+        <span aria-hidden="true">×</span>
+      </button>
     </div>
 
     <!-- Settings Tabs -->
-    <div class="settings-tabs" role="tablist" aria-label="Einstellungen Tabs">
-      <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true">Allgemein</button>
-      <button class="settings-tab" data-settings-tab="llm" role="tab" aria-selected="false">LLM Backend</button>
-      <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false">Custom APIs</button>
-      <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false">Personas</button>
+    <div class="settings-tabs" role="tablist" aria-label="Settings tabs">
+      <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-general" id="stab-general"><span data-i18n="general">Allgemein</span></button>
+      <button class="settings-tab" data-settings-tab="llm" role="tab" aria-selected="false" aria-controls="settings-llm" id="stab-llm"><span data-i18n="llm_backend">LLM Backend</span></button>
+      <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false" aria-controls="settings-apis" id="stab-apis"><span data-i18n="custom_apis">Custom APIs</span></button>
+      <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas"><span data-i18n="personas">Personas</span></button>
     </div>
 
     <!-- Tab: General -->
-    <div id="settings-general" class="settings-panel active settings-section">
-      <h3>Erscheinungsbild</h3>
-      <label>Theme</label>
-      <div class="theme-grid" id="themeGrid">
-        <div class="theme-card active" data-theme-id="dark">
+    <div id="settings-general" class="settings-panel active settings-section" role="tabpanel" aria-labelledby="stab-general">
+      <h3 data-i18n="appearance">Erscheinungsbild</h3>
+      
+      <!-- Language Selection -->
+      <label for="langSelect" data-i18n="language">Sprache / Language</label>
+      <select id="langSelect" aria-label="Select language">
+        <option value="de">Deutsch</option>
+        <option value="en">English</option>
+      </select>
+      
+      <label data-i18n="theme">Theme</label>
+      <div class="theme-grid" id="themeGrid" role="radiogroup" aria-label="Theme selection">
+        <div class="theme-card active" data-theme-id="dark" role="radio" aria-checked="true" tabindex="0" aria-label="Dark theme">
           <div class="preview">
             <span style="background:#0f1115"></span>
             <span style="background:#151922"></span>
@@ -164,7 +187,7 @@
           </div>
           <div class="label">Dark</div>
         </div>
-        <div class="theme-card" data-theme-id="light">
+        <div class="theme-card" data-theme-id="light" role="radio" aria-checked="false" tabindex="-1" aria-label="Light theme">
           <div class="preview">
             <span style="background:#f5f5f7"></span>
             <span style="background:#ffffff"></span>
@@ -172,7 +195,7 @@
           </div>
           <div class="label">Light</div>
         </div>
-        <div class="theme-card" data-theme-id="nord">
+        <div class="theme-card" data-theme-id="nord" role="radio" aria-checked="false" tabindex="-1" aria-label="Nord theme">
           <div class="preview">
             <span style="background:#2e3440"></span>
             <span style="background:#3b4252"></span>
@@ -180,7 +203,7 @@
           </div>
           <div class="label">Nord</div>
         </div>
-        <div class="theme-card" data-theme-id="solarized">
+        <div class="theme-card" data-theme-id="solarized" role="radio" aria-checked="false" tabindex="-1" aria-label="Solarized theme">
           <div class="preview">
             <span style="background:#002b36"></span>
             <span style="background:#073642"></span>
@@ -188,7 +211,7 @@
           </div>
           <div class="label">Solarized</div>
         </div>
-        <div class="theme-card" data-theme-id="monokai">
+        <div class="theme-card" data-theme-id="monokai" role="radio" aria-checked="false" tabindex="-1" aria-label="Monokai theme">
           <div class="preview">
             <span style="background:#1e1f1c"></span>
             <span style="background:#272822"></span>
@@ -196,7 +219,7 @@
           </div>
           <div class="label">Monokai</div>
         </div>
-        <div class="theme-card" data-theme-id="dracula">
+        <div class="theme-card" data-theme-id="dracula" role="radio" aria-checked="false" tabindex="-1" aria-label="Dracula theme">
           <div class="preview">
             <span style="background:#282a36"></span>
             <span style="background:#343746"></span>
@@ -207,77 +230,80 @@
       </div>
 
       <div class="settings-footnote" style="margin-top:16px;padding:0;background:none">
-        Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.
+        <span data-i18n="endpoint_note">Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.</span>
       </div>
       <div style="margin-top:12px">
-        <label class="inline-check"><input type="checkbox" id="allowNanoGo"> Erlaube Ausführung von nanoGo (interpretiertes Go) </label>
-        <div class="hint">Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.</div>
+        <label class="inline-check" for="allowNanoGo">
+          <input type="checkbox" id="allowNanoGo" aria-describedby="nanogo-desc">
+          <span data-i18n="allow_nanogo">Erlaube Ausführung von nanoGo (interpretiertes Go)</span>
+        </label>
+        <div class="hint" id="nanogo-desc" data-i18n="nanogo_hint">Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.</div>
       </div>
     </div>
 
     <!-- Tab: LLM Backend -->
-    <div id="settings-llm" class="settings-panel settings-section">
-      <h3>LLM Backend</h3>
+    <div id="settings-llm" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-llm">
+      <h3 data-i18n="llm_backend">LLM Backend</h3>
 
       <div class="settings-grid">
         <div>
-          <label for="setBaseUrl">API Endpoint (OpenAI-kompatibel)</label>
-          <input id="setBaseUrl" type="text" placeholder="http://localhost:1234">
+          <label for="setBaseUrl" data-i18n="api_endpoint">API Endpoint (OpenAI-kompatibel)</label>
+          <input id="setBaseUrl" type="text" placeholder="http://localhost:1234" aria-label="API Endpoint">
           <div class="mini-actions">
-            <button class="tool-btn" id="btnDiscover">Auto-Discovery</button>
-            <button class="tool-btn suggested" id="btnTestEndpoint">Test &amp; Modelle laden</button>
+            <button class="tool-btn" id="btnDiscover" aria-label="Auto-discover endpoints"><span data-i18n="auto_discovery">Auto-Discovery</span></button>
+            <button class="tool-btn suggested" id="btnTestEndpoint" aria-label="Test endpoint and load models"><span data-i18n="test_load_models">Test &amp; Modelle laden</span></button>
           </div>
-          <div class="tool-status" id="endpointStatus"></div>
+          <div class="tool-status" id="endpointStatus" role="status" aria-live="polite"></div>
         </div>
 
         <div>
-          <label for="setChatModel">Chat-Modell</label>
-          <select id="setChatModel"></select>
+          <label for="setChatModel" data-i18n="chat_model">Chat-Modell</label>
+          <select id="setChatModel" aria-label="Select chat model"></select>
           <small class="help" id="chatHint"></small>
 
-          <label for="setEmbedModel" style="margin-top:.8rem">Embedding-Modell</label>
-          <select id="setEmbedModel"></select>
+          <label for="setEmbedModel" style="margin-top:.8rem" data-i18n="embedding_model">Embedding-Modell</label>
+          <select id="setEmbedModel" aria-label="Select embedding model"></select>
           <small class="help warn" id="embedHint"></small>
         </div>
       </div>
 
-      <div class="discover-box" id="discoverBox" style="display:none"></div>
+      <div class="discover-box" id="discoverBox" style="display:none" role="region" aria-label="Discovery results"></div>
 
       <div class="actions-row">
-        <button class="btn-primary" id="btnSaveSettings">Speichern</button>
-        <span class="tool-status" id="saveStatus"></span>
+        <button class="btn-primary" id="btnSaveSettings" aria-label="Save settings"><span data-i18n="save">Speichern</span></button>
+        <span class="tool-status" id="saveStatus" role="status" aria-live="polite"></span>
       </div>
     </div>
 
     <!-- Tab: Custom APIs -->
-    <div id="settings-apis" class="settings-panel settings-section">
-      <h3>Custom APIs</h3>
-      <div id="apiList" class="api-list"><p class="muted">Lade…</p></div>
+    <div id="settings-apis" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-apis">
+      <h3 data-i18n="custom_apis">Custom APIs</h3>
+      <div id="apiList" class="api-list" role="list" aria-label="Custom API list"><p class="muted" data-i18n="loading">Lade…</p></div>
 
-      <h4>Neue API hinzufügen</h4>
-      <label for="newApiName">Name</label>
-      <input id="newApiName" placeholder="z.B. StackOverflow">
-      <label for="newApiTemplate">URL-Template (mit $q)</label>
-      <input id="newApiTemplate" placeholder="https://example.com/search?q=$q">
-      <label for="newApiDesc">Beschreibung (optional)</label>
-      <input id="newApiDesc" placeholder="Wofür ist die Quelle gut?">
+      <h4 data-i18n="add_new_api">Neue API hinzufügen</h4>
+      <label for="newApiName" data-i18n="api_name">Name</label>
+      <input id="newApiName" placeholder="z.B. StackOverflow" aria-label="API name" data-i18n-placeholder="api_name_placeholder">
+      <label for="newApiTemplate" data-i18n="api_template">URL-Template (mit $q)</label>
+      <input id="newApiTemplate" placeholder="https://example.com/search?q=$q" aria-label="API URL template" data-i18n-placeholder="api_template_placeholder">
+      <label for="newApiDesc" data-i18n="api_description">Beschreibung (optional)</label>
+      <input id="newApiDesc" placeholder="Wofür ist die Quelle gut?" aria-label="API description" data-i18n-placeholder="api_desc_placeholder">
       <div class="actions-row">
-        <button class="btn-primary" id="btnAddCustomApi">Hinzufügen</button>
+        <button class="btn-primary" id="btnAddCustomApi" aria-label="Add custom API"><span data-i18n="add">Hinzufügen</span></button>
       </div>
     </div>
 
     <!-- Tab: Personas -->
-    <div id="settings-personas" class="settings-panel settings-section">
-      <h3>Persönlichkeiten (Pre-Prompts)</h3>
-      <div id="personaList" class="api-list"><p class="muted">Lade…</p></div>
+    <div id="settings-personas" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-personas">
+      <h3 data-i18n="personas">Persönlichkeiten (Pre-Prompts)</h3>
+      <div id="personaList" class="api-list" role="list" aria-label="Persona list"><p class="muted" data-i18n="loading">Lade…</p></div>
 
-      <h4>Neue Persona</h4>
-      <label for="newPersonaName">Name</label>
-      <input id="newPersonaName" placeholder="z.B. Sachlicher Modus">
-      <label for="newPersonaPrompt">Pre-Prompt</label>
-      <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…"></textarea>
+      <h4 data-i18n="new_persona">Neue Persona</h4>
+      <label for="newPersonaName" data-i18n="persona_name">Name</label>
+      <input id="newPersonaName" placeholder="z.B. Sachlicher Modus" aria-label="Persona name" data-i18n-placeholder="persona_name_placeholder">
+      <label for="newPersonaPrompt" data-i18n="persona_prompt">Pre-Prompt</label>
+      <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…" aria-label="Persona pre-prompt" data-i18n-placeholder="persona_prompt_placeholder"></textarea>
       <div class="actions-row">
-        <button class="btn-primary" id="btnAddPersona">Hinzufügen</button>
+        <button class="btn-primary" id="btnAddPersona" aria-label="Add persona"><span data-i18n="add">Hinzufügen</span></button>
       </div>
     </div>
 

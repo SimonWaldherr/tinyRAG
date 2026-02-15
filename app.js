@@ -113,7 +113,81 @@ const _translations = {
     ok_chunks: (chunks, total) => `OK: ${chunks} Chunks hinzugefügt. Total: ${total}`,
     not_found_intro: 'Nicht gefunden. Meintest du:',
     error_prefix: 'Fehler: ',
-    assistant_typing: 'Assistent denkt nach'
+    assistant_typing: 'Assistent denkt nach',
+    // New translations for UI elements
+    skip_to_main: 'Zum Hauptinhalt springen',
+    chunks_in_knowledge_base: 'Chunks in der Wissensbasis',
+    new_chat: '+ Neuer Chat',
+    chats: 'Chats',
+    sources: 'Quellen',
+    chat: 'Chat',
+    search: 'Suche',
+    ingest: 'Daten hinzufügen',
+    persona: 'Persona',
+    debug: 'Debug',
+    debug_description: 'Zeigt die RAG-Kontextdaten an, die das System für die Antwort verwendet',
+    settings: 'Einstellungen',
+    chat_empty_state: 'Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.',
+    chat_input_label: 'Ihre Frage eingeben',
+    chat_input_placeholder: 'Frage eingeben…',
+    send: 'Senden',
+    search_label: 'Semantische Suche in den Chunks',
+    search_placeholder: 'Suchbegriff…',
+    search_button: 'Suchen',
+    wikipedia: 'Wikipedia',
+    url: 'URL',
+    text: 'Text',
+    upload: 'Upload',
+    folder: 'Ordner',
+    wiki_label: 'Wikipedia-Artikel laden',
+    wiki_placeholder: 'z.B. Sonnensystem',
+    wiki_lang_label: 'Wikipedia-Sprachcode',
+    load: 'Laden',
+    url_label: 'Beliebige Webseite scrapen',
+    url_placeholder: 'https://example.com/page',
+    scrape: 'Scrapen',
+    text_title_label: 'Titel (optional)',
+    text_title_placeholder: 'Mein Dokument',
+    text_content_label: 'Text',
+    text_content_placeholder: 'Text hier einfügen…',
+    save_embed: 'Speichern & Einbetten',
+    upload_label: 'Textdatei hochladen',
+    drop_zone_text: 'Datei hierher ziehen oder klicken',
+    folder_label: 'Ordner importieren (alle Textdateien)',
+    folder_hint: 'Absoluter Pfad zum Ordner auf dem Server. Unterstützte Dateien: .txt, .md, .csv, .json, .xml, .html, .log u.a.',
+    folder_placeholder: '/pfad/zum/ordner',
+    recursive: 'Rekursiv',
+    import: 'Importieren',
+    settings_title: 'Einstellungen',
+    general: 'Allgemein',
+    llm_backend: 'LLM Backend',
+    custom_apis: 'Custom APIs',
+    personas: 'Personas',
+    appearance: 'Erscheinungsbild',
+    language: 'Sprache / Language',
+    theme: 'Theme',
+    endpoint_note: 'Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.',
+    allow_nanogo: 'Erlaube Ausführung von nanoGo (interpretiertes Go)',
+    nanogo_hint: 'Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.',
+    api_endpoint: 'API Endpoint (OpenAI-kompatibel)',
+    auto_discovery: 'Auto-Discovery',
+    test_load_models: 'Test & Modelle laden',
+    chat_model: 'Chat-Modell',
+    embedding_model: 'Embedding-Modell',
+    save: 'Speichern',
+    add_new_api: 'Neue API hinzufügen',
+    api_name: 'Name',
+    api_name_placeholder: 'z.B. StackOverflow',
+    api_template: 'URL-Template (mit $q)',
+    api_template_placeholder: 'https://example.com/search?q=$q',
+    api_description: 'Beschreibung (optional)',
+    api_desc_placeholder: 'Wofür ist die Quelle gut?',
+    add: 'Hinzufügen',
+    new_persona: 'Neue Persona',
+    persona_name: 'Name',
+    persona_name_placeholder: 'z.B. Sachlicher Modus',
+    persona_prompt: 'Pre-Prompt',
+    persona_prompt_placeholder: 'Instruktionen, Tonalität, Stil…'
   },
   en: {
     loading: 'Loading…',
@@ -124,7 +198,81 @@ const _translations = {
     ok_chunks: (chunks, total) => `OK: ${chunks} chunks added. Total: ${total}`,
     not_found_intro: 'Not found. Did you mean:',
     error_prefix: 'Error: ',
-    assistant_typing: 'Assistant is thinking'
+    assistant_typing: 'Assistant is thinking',
+    // New translations for UI elements
+    skip_to_main: 'Skip to main content',
+    chunks_in_knowledge_base: 'Chunks in knowledge base',
+    new_chat: '+ New Chat',
+    chats: 'Chats',
+    sources: 'Sources',
+    chat: 'Chat',
+    search: 'Search',
+    ingest: 'Add Data',
+    persona: 'Persona',
+    debug: 'Debug',
+    debug_description: 'Shows RAG context data that the system uses for the response',
+    settings: 'Settings',
+    chat_empty_state: 'Ask a question about your knowledge base.<br>The answer is based on stored documents.',
+    chat_input_label: 'Enter your question',
+    chat_input_placeholder: 'Enter question…',
+    send: 'Send',
+    search_label: 'Semantic search in chunks',
+    search_placeholder: 'Search term…',
+    search_button: 'Search',
+    wikipedia: 'Wikipedia',
+    url: 'URL',
+    text: 'Text',
+    upload: 'Upload',
+    folder: 'Folder',
+    wiki_label: 'Load Wikipedia article',
+    wiki_placeholder: 'e.g., Solar System',
+    wiki_lang_label: 'Wikipedia language code',
+    load: 'Load',
+    url_label: 'Scrape any webpage',
+    url_placeholder: 'https://example.com/page',
+    scrape: 'Scrape',
+    text_title_label: 'Title (optional)',
+    text_title_placeholder: 'My Document',
+    text_content_label: 'Text',
+    text_content_placeholder: 'Paste text here…',
+    save_embed: 'Save & Embed',
+    upload_label: 'Upload text file',
+    drop_zone_text: 'Drag file here or click',
+    folder_label: 'Import folder (all text files)',
+    folder_hint: 'Absolute path to folder on server. Supported files: .txt, .md, .csv, .json, .xml, .html, .log, etc.',
+    folder_placeholder: '/path/to/folder',
+    recursive: 'Recursive',
+    import: 'Import',
+    settings_title: 'Settings',
+    general: 'General',
+    llm_backend: 'LLM Backend',
+    custom_apis: 'Custom APIs',
+    personas: 'Personas',
+    appearance: 'Appearance',
+    language: 'Language',
+    theme: 'Theme',
+    endpoint_note: 'Note: The endpoint field expects the base URL without <code>/v1</code>. If you enter <code>/v1</code>, it will be automatically removed.',
+    allow_nanogo: 'Allow execution of nanoGo (interpreted Go)',
+    nanogo_hint: 'Recommended: only enable if you want to allow executions from trusted sources.',
+    api_endpoint: 'API Endpoint (OpenAI-compatible)',
+    auto_discovery: 'Auto-Discovery',
+    test_load_models: 'Test & Load Models',
+    chat_model: 'Chat Model',
+    embedding_model: 'Embedding Model',
+    save: 'Save',
+    add_new_api: 'Add New API',
+    api_name: 'Name',
+    api_name_placeholder: 'e.g., StackOverflow',
+    api_template: 'URL Template (with $q)',
+    api_template_placeholder: 'https://example.com/search?q=$q',
+    api_description: 'Description (optional)',
+    api_desc_placeholder: 'What is the source good for?',
+    add: 'Add',
+    new_persona: 'New Persona',
+    persona_name: 'Name',
+    persona_name_placeholder: 'e.g., Formal Mode',
+    persona_prompt: 'Pre-Prompt',
+    persona_prompt_placeholder: 'Instructions, tone, style…'
   }
 };
 
@@ -137,23 +285,33 @@ function t(key, ...args){
 
 function applyTranslations(lang){
   uiLang = (lang||'de').split('-')[0];
-  // Buttons / placeholders
-  const map = [
-    {sel: '#wikiBtn', text: {de:'Laden', en:'Load'}},
-    {sel: '#urlBtn', text: {de:'Scrapen', en:'Scrape'}},
-    {sel: '#textBtn', text: {de:'Speichern & Einbetten', en:'Save & Embed'}},
-    {sel: '#folderBtn', text: {de:'Importieren', en:'Import'}},
-    {sel: '#chatBtn', text: {de:'Senden', en:'Send'}},
-    {sel: '#searchBtn', text: {de:'Suchen', en:'Search'}}
-  ];
-  map.forEach(m => {
-    const el = document.querySelector(m.sel);
-    if(el){
-      const txt = m.text[uiLang] || m.text.de;
-      el.textContent = txt;
-      el.setAttribute('aria-label', txt);
+  
+  // Update HTML lang attribute
+  document.documentElement.setAttribute('lang', uiLang);
+  
+  // Apply data-i18n translations
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    const text = t(key);
+    if(text !== key){
+      el.innerHTML = text;
     }
   });
+  
+  // Apply data-i18n-placeholder translations
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    const key = el.getAttribute('data-i18n-placeholder');
+    const text = t(key);
+    if(text !== key){
+      el.placeholder = text;
+    }
+  });
+  
+  // Update language selector
+  const langSelect = document.getElementById('langSelect');
+  if(langSelect){
+    langSelect.value = uiLang;
+  }
 }
 
 function autosize(el){
@@ -173,8 +331,13 @@ function applyTheme(id){
   // Update meta color-scheme for browser chrome
   const meta = document.querySelector('meta[name="color-scheme"]');
   if(meta) meta.content = (id === 'light') ? 'light' : 'dark';
-  // Update theme cards active state
-  $$('.theme-card').forEach(c => c.classList.toggle('active', c.dataset.themeId === id));
+  // Update theme cards active state and ARIA attributes
+  $$('.theme-card').forEach(c => {
+    const isActive = c.dataset.themeId === id;
+    c.classList.toggle('active', isActive);
+    c.setAttribute('aria-checked', isActive ? 'true' : 'false');
+    c.setAttribute('tabindex', isActive ? '0' : '-1');
+  });
 }
 
 async function setTheme(id){
@@ -188,6 +351,7 @@ function showSettingsTab(name){
     const isActive = b.dataset.settingsTab === name;
     b.classList.toggle('active', isActive);
     b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    b.setAttribute('tabindex', isActive ? '0' : '-1');
   });
   $$('.settings-panel').forEach(p => {
     p.classList.toggle('active', p.id === 'settings-'+name);
@@ -207,19 +371,63 @@ function onEnter(el, handler){
 function showTab(group, name){
   // group: 'main' or 'sidebar' or 'ingest'
   if(group === 'main'){
-    $$('.main-tab').forEach(b => b.classList.toggle('active', b.dataset.mainTab === name));
+    $$('.main-tab').forEach(b => {
+      const isActive = b.dataset.mainTab === name;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      b.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
     $$('.main-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-'+name));
   }else if(group === 'sidebar'){
-    $$('.sidebar-tab').forEach(b => b.classList.toggle('active', b.dataset.sidebarTab === name));
+    $$('.sidebar-tab').forEach(b => {
+      const isActive = b.dataset.sidebarTab === name;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      b.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
     $('#sidebar-chats').style.display = (name === 'chats') ? '' : 'none';
     $('#sidebar-sources').style.display = (name === 'sources') ? '' : 'none';
   }else if(group === 'ingest'){
-    $$('.ingest-tabs .sidebar-tab').forEach(b => b.classList.toggle('active', b.dataset.ingestTab === name));
+    $$('.ingest-tabs .sidebar-tab').forEach(b => {
+      const isActive = b.dataset.ingestTab === name;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      b.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
     $('#ingest-wiki').style.display = (name === 'wiki') ? '' : 'none';
     $('#ingest-url').style.display = (name === 'url') ? '' : 'none';
     $('#ingest-text').style.display = (name === 'text') ? '' : 'none';
     $('#ingest-upload').style.display = (name === 'upload') ? '' : 'none';
     $('#ingest-folder').style.display = (name === 'folder') ? '' : 'none';
+  }
+}
+
+// Handle keyboard navigation for tab lists (ARIA best practices)
+function handleTabKeydown(e, selector, group){
+  if(!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+  
+  e.preventDefault();
+  const tabs = Array.from(document.querySelectorAll(selector));
+  const currentIndex = tabs.indexOf(e.target);
+  let newIndex = currentIndex;
+  
+  if(e.key === 'ArrowLeft'){
+    newIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
+  }else if(e.key === 'ArrowRight'){
+    newIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
+  }else if(e.key === 'Home'){
+    newIndex = 0;
+  }else if(e.key === 'End'){
+    newIndex = tabs.length - 1;
+  }
+  
+  const newTab = tabs[newIndex];
+  if(newTab){
+    newTab.focus();
+    // Activate the tab
+    const dataAttr = group === 'main' ? 'mainTab' : group === 'sidebar' ? 'sidebarTab' : 'ingestTab';
+    const tabName = newTab.dataset[dataAttr];
+    if(tabName) showTab(group, tabName);
   }
 }
 
@@ -494,13 +702,64 @@ async function initSettingsUI(){
   await loadPersonas();
 }
 
+let modalFocusTrap = null;
+
 function openModal(){
-  $('#settingsModal').classList.add('open');
-  $('#settingsModal').setAttribute('aria-hidden','false');
+  const modal = $('#settingsModal');
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
+  
+  // Store the element that triggered the modal
+  modalFocusTrap = document.activeElement;
+  
+  // Focus the first focusable element in the modal
+  setTimeout(() => {
+    const focusableElements = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if(focusableElements.length > 0){
+      focusableElements[0].focus();
+    }
+  }, 100);
+  
+  // Trap focus in modal
+  modal.addEventListener('keydown', trapFocusInModal);
 }
+
 function closeModal(){
-  $('#settingsModal').classList.remove('open');
-  $('#settingsModal').setAttribute('aria-hidden','true');
+  const modal = $('#settingsModal');
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden','true');
+  
+  // Remove focus trap
+  modal.removeEventListener('keydown', trapFocusInModal);
+  
+  // Return focus to the element that opened the modal
+  if(modalFocusTrap){
+    modalFocusTrap.focus();
+    modalFocusTrap = null;
+  }
+}
+
+function trapFocusInModal(e){
+  if(e.key !== 'Tab') return;
+  
+  const modal = $('#settingsModal');
+  const focusableElements = Array.from(modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'));
+  const firstElement = focusableElements[0];
+  const lastElement = focusableElements[focusableElements.length - 1];
+  
+  if(e.shiftKey){
+    // Shift + Tab
+    if(document.activeElement === firstElement){
+      e.preventDefault();
+      lastElement.focus();
+    }
+  }else{
+    // Tab
+    if(document.activeElement === lastElement){
+      e.preventDefault();
+      firstElement.focus();
+    }
+  }
 }
 
 async function discoverEndpoints(){
@@ -1115,6 +1374,14 @@ function initUpload(){
   const inp = $('#fileInput');
 
   dz.addEventListener('click', ()=>inp.click());
+  
+  // Add keyboard support for drop zone
+  dz.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter' || e.key === ' '){
+      e.preventDefault();
+      inp.click();
+    }
+  });
 
   function handleFile(file){
     if(!file) return;
@@ -1188,9 +1455,18 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     mermaid.initialize({startOnLoad:false, theme:'dark', securityLevel:'strict'});
   }
   // Tabs
-  $$('.main-tab').forEach(b => b.addEventListener('click', ()=>showTab('main', b.dataset.mainTab)));
-  $$('.sidebar-tab').forEach(b => b.addEventListener('click', ()=>showTab('sidebar', b.dataset.sidebarTab)));
-  $$('.ingest-tabs .sidebar-tab').forEach(b => b.addEventListener('click', ()=>showTab('ingest', b.dataset.ingestTab)));
+  $$('.main-tab').forEach(b => {
+    b.addEventListener('click', ()=>showTab('main', b.dataset.mainTab));
+    b.addEventListener('keydown', (e)=>handleTabKeydown(e, '.main-tab', 'main'));
+  });
+  $$('.sidebar-tab').forEach(b => {
+    b.addEventListener('click', ()=>showTab('sidebar', b.dataset.sidebarTab));
+    b.addEventListener('keydown', (e)=>handleTabKeydown(e, '.sidebar-tab:not(.ingest-tabs .sidebar-tab)', 'sidebar'));
+  });
+  $$('.ingest-tabs .sidebar-tab').forEach(b => {
+    b.addEventListener('click', ()=>showTab('ingest', b.dataset.ingestTab));
+    b.addEventListener('keydown', (e)=>handleTabKeydown(e, '.ingest-tabs .sidebar-tab', 'ingest'));
+  });
 
   $('#debugMode').addEventListener('change', (e)=>{ debugMode = e.target.checked; });
 
@@ -1254,10 +1530,57 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#settingsModal').addEventListener('click', (e)=>{ if(e.target.id === 'settingsModal') closeModal(); });
 
   // Settings tabs
-  $$('.settings-tab').forEach(b => b.addEventListener('click', ()=>showSettingsTab(b.dataset.settingsTab)));
+  $$('.settings-tab').forEach(b => {
+    b.addEventListener('click', ()=>showSettingsTab(b.dataset.settingsTab));
+    b.addEventListener('keydown', (e)=>{
+      if(!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const tabs = $$('.settings-tab');
+      const currentIndex = tabs.indexOf(e.target);
+      let newIndex = currentIndex;
+      if(e.key === 'ArrowLeft'){
+        newIndex = currentIndex > 0 ? currentIndex - 1 : tabs.length - 1;
+      }else if(e.key === 'ArrowRight'){
+        newIndex = currentIndex < tabs.length - 1 ? currentIndex + 1 : 0;
+      }else if(e.key === 'Home'){
+        newIndex = 0;
+      }else if(e.key === 'End'){
+        newIndex = tabs.length - 1;
+      }
+      const newTab = tabs[newIndex];
+      if(newTab){
+        newTab.focus();
+        showSettingsTab(newTab.dataset.settingsTab);
+      }
+    });
+  });
 
   // Theme cards
-  $$('.theme-card').forEach(c => c.addEventListener('click', ()=>setTheme(c.dataset.themeId)));
+  $$('.theme-card').forEach(c => {
+    c.addEventListener('click', ()=>setTheme(c.dataset.themeId));
+    // Keyboard navigation for theme cards (radio group)
+    c.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        setTheme(c.dataset.themeId);
+      }
+    });
+  });
+
+  // Language selector
+  const langSelect = $('#langSelect');
+  if(langSelect){
+    langSelect.addEventListener('change', async (e)=>{
+      const newLang = e.target.value;
+      applyTranslations(newLang);
+      // Save language preference to settings
+      try{
+        await apiPost('/api/settings/lang', {lang: newLang});
+      }catch(err){
+        console.error('Failed to save language:', err);
+      }
+    });
+  }
 
   $('#btnDiscover').addEventListener('click', discoverEndpoints);
   $('#btnTestEndpoint').addEventListener('click', testEndpointAndLoadModels);
