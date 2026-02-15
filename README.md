@@ -1,5 +1,9 @@
 # tinyRAG
 
+[![Go Version](https://img.shields.io/github/go-mod/go-version/SimonWaldherr/tinyRAG)](https://golang.org)
+[![Release](https://img.shields.io/github/v/release/SimonWaldherr/tinyRAG?label=release)](https://github.com/SimonWaldherr/tinyRAG/releases)
+[![Stars](https://img.shields.io/github/stars/SimonWaldherr/tinyRAG?style=social)](https://github.com/SimonWaldherr/tinyRAG/stargazers)
+
 A lightweight Retrieval-Augmented Generation (RAG) system with a modern web interface, built in Go.
 
 ## Features
