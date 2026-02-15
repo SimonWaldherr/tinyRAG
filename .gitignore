@@ -1,0 +1,25 @@
+# Binaries
+tinyRAG
+tinyRAG.exe
+
+# Database files
+*.gob
+*.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Settings (may contain sensitive data)
+# settings.json - uncomment if you don't want to commit settings
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db

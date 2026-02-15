@@ -540,13 +540,19 @@ func (c *lmClient) listModels(baseOverride string) ([]string, error) {
 	if strings.TrimSpace(baseOverride) != "" {
 		base = normalizeBaseURL(baseOverride)
 	}
-	req, _ := http.NewRequest("GET", base+"/v1/models", nil)
+	req, err := http.NewRequest("GET", base+"/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create models request: %w", err)
+	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read models response: %w", readErr)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("models HTTP %d: %s", resp.StatusCode, string(raw))
 	}
@@ -580,13 +586,19 @@ type embResp struct {
 // embed sends multiple `texts` to the embedding endpoint and returns
 // their vector embeddings.
 func (c *lmClient) embed(texts []string) ([][]float64, error) {
-	body, _ := json.Marshal(embReq{Model: c.embedModel, Input: texts})
+	body, err := json.Marshal(embReq{Model: c.embedModel, Input: texts})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
+	}
 	resp, err := c.http.Post(c.base+"/v1/embeddings", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read embeddings response: %w", readErr)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("embed %d: %s", resp.StatusCode, string(raw))
 	}
