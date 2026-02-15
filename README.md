@@ -1,5 +1,6 @@
 # tinyRAG
 
+[![DOI](https://zenodo.org/badge/1158167759.svg)](https://doi.org/10.5281/zenodo.18652377)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/SimonWaldherr/tinyRAG)](https://golang.org)
 [![Release](https://img.shields.io/github/v/release/SimonWaldherr/tinyRAG?label=release)](https://github.com/SimonWaldherr/tinyRAG/releases)
 [![Stars](https://img.shields.io/github/stars/SimonWaldherr/tinyRAG?style=social)](https://github.com/SimonWaldherr/tinyRAG/stargazers)
