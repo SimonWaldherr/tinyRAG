@@ -166,7 +166,10 @@ func (ss *settingsStore) save() error {
 
 // saveLocked writes settings to disk and must be called with `ss.mu` held.
 func (ss *settingsStore) saveLocked() error {
-	b, _ := json.MarshalIndent(ss.s, "", "  ")
+	b, err := json.MarshalIndent(ss.s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
 	b = append(b, '\n')
 	tmp := ss.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
@@ -537,13 +540,19 @@ func (c *lmClient) listModels(baseOverride string) ([]string, error) {
 	if strings.TrimSpace(baseOverride) != "" {
 		base = normalizeBaseURL(baseOverride)
 	}
-	req, _ := http.NewRequest("GET", base+"/v1/models", nil)
+	req, err := http.NewRequest("GET", base+"/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create models request: %w", err)
+	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read models response: %w", readErr)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("models HTTP %d: %s", resp.StatusCode, string(raw))
 	}
@@ -577,13 +586,19 @@ type embResp struct {
 // embed sends multiple `texts` to the embedding endpoint and returns
 // their vector embeddings.
 func (c *lmClient) embed(texts []string) ([][]float64, error) {
-	body, _ := json.Marshal(embReq{Model: c.embedModel, Input: texts})
+	body, err := json.Marshal(embReq{Model: c.embedModel, Input: texts})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
+	}
 	resp, err := c.http.Post(c.base+"/v1/embeddings", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read embeddings response: %w", readErr)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("embed %d: %s", resp.StatusCode, string(raw))
 	}
@@ -629,9 +644,15 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 	all := make([]chatMsg, 0, len(msgs)+1)
 	all = append(all, chatMsg{Role: "system", Content: system})
 	all = append(all, msgs...)
-	body, _ := json.Marshal(chatReq{Model: c.chatModel, Messages: all, Stream: true})
+	body, err := json.Marshal(chatReq{Model: c.chatModel, Messages: all, Stream: true})
+	if err != nil {
+		return fmt.Errorf("failed to marshal chat request: %w", err)
+	}
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", c.base+"/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -639,7 +660,10 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("chat HTTP %d (failed to read body: %v)", resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("chat HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 
@@ -688,7 +712,12 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 
 // vecJSON marshals a float64 slice into a JSON string for SQL usage.
 func vecJSON(v []float64) string {
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		// This should never happen with float64 slices, but handle it anyway
+		log.Printf("Warning: failed to marshal vector: %v", err)
+		return "[]"
+	}
 	return string(b)
 }
 
@@ -3542,7 +3571,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 						continue
 					}
 					content, err := io.ReadAll(io.LimitReader(rc, 6*1024*1024))
-					rc.Close()
+					if closeErr := rc.Close(); closeErr != nil && err == nil {
+						err = closeErr
+					}
 					if err != nil {
 						errorsList = append(errorsList, f.Name+": "+err.Error())
 						continue
