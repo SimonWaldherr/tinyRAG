@@ -2490,7 +2490,6 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 			// Persist + apply
 			settings.mu.Lock()
-			defer settings.mu.Unlock()
 			settings.s.BaseURL = req.BaseURL
 			settings.s.ChatModel = req.ChatModel
 			settings.s.EmbedModel = req.EmbedModel
@@ -2498,6 +2497,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				settings.s.Theme = req.Theme
 			}
 			_ = settings.saveLocked()
+			settings.mu.Unlock()
 
 			rag.setLM(tmp)
 
