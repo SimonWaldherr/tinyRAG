@@ -112,6 +112,19 @@ function renderBubbleContent(el, content){
   }
 }
 
+function createThinkingPanel(thinking){
+  const details = document.createElement('details');
+  details.className = 'thinking-panel';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Reasoning anzeigen';
+  const body = document.createElement('div');
+  body.className = 'thinking-body';
+  renderBubbleContent(body, thinking || '');
+  details.appendChild(summary);
+  details.appendChild(body);
+  return details;
+}
+
 /**
  * Copy text to clipboard using the modern API.
  * Shows a temporary success state on the triggering element if provided.
@@ -207,6 +220,95 @@ window.fillChat = function(txt){
     askChat();
   }
 };
+
+function buildEmptyStateHtml(){
+  return `
+    <div class="empty-state" id="chatEmpty">
+      <div class="icon" aria-hidden="true">💬</div>
+      <p data-i18n="chat_empty_state">${t('chat_empty_state')}</p>
+      <div class="chat-suggestions">
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_summarize_val')}')">📝 <span>${t('sugg_summarize')}</span></button>
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_newest_val')}')">🆕 <span>${t('sugg_newest')}</span></button>
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_analyze_val')}')">🔍 <span>${t('sugg_analyze')}</span></button>
+      </div>
+    </div>`;
+}
+
+function resolveProviderName(url){
+  if(!url) return '';
+  const u = url.toLowerCase();
+  if(u.includes('openai.com')) return 'OpenAI';
+  if(u.includes('ollama')) return 'Ollama';
+  if(u.includes('lmstudio') || u.includes('lm-studio') || u.includes('lmstudio.ai')) return 'LM Studio';
+  if(u.includes('localhost') || u.includes('127.0.0.1')) return 'Local LLM';
+  return 'Remote LLM';
+}
+
+function setSidebarOpen(open){
+  const sidebar = $('#appSidebar');
+  const toggle = $('#sidebarToggle');
+  if(!sidebar || !toggle) return;
+  sidebar.classList.toggle('open', !!open);
+  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  document.body.classList.toggle('sidebar-open', !!open);
+}
+
+function closeSidebarIfMobile(){
+  if(window.innerWidth <= 960) setSidebarOpen(false);
+}
+
+function currentModeSummary(){
+  const modes = [];
+  if(autoSearchMode) modes.push('Auto-Search');
+  if(deepMode) modes.push('Deep Research');
+  if(offlineMode) modes.push('Offline');
+  return modes.length ? modes.join(' · ') : 'Standard';
+}
+
+function updateWorkspaceStrip(){
+  const providerEl = $('#providerPill strong');
+  const personaEl = $('#personaPill strong');
+  const modeEl = $('#modePill strong');
+  if(providerEl){
+    providerEl.textContent = $('#openaiBadge strong')?.textContent?.trim() || 'LLM';
+  }
+  if(personaEl){
+    const persona = cachedPersonas.find(p => p.id === currentPersonaId);
+    personaEl.textContent = persona?.name || $('#personaSelect')?.selectedOptions?.[0]?.textContent || 'Standard';
+  }
+  if(modeEl){
+    modeEl.textContent = currentModeSummary();
+  }
+}
+
+function fillChatWithSearchHit(content){
+  const q = $('#chatQ');
+  if(!q) return;
+  const excerpt = (content || '').trim().slice(0, 500);
+  q.value = `Nutze diesen Treffer als Kontext und beantworte meine Frage präzise:\n\n${excerpt}`;
+  autosize(q);
+  showTab('main', 'chat');
+  q.focus();
+}
+
+function stripToolRequestText(raw){
+  if(!raw) return '';
+  const start = raw.indexOf('[TOOL_REQUEST]');
+  if(start === -1) return raw.trim();
+  const endMarker = '[/TOOL_REQUEST]';
+  const end = raw.indexOf(endMarker, start);
+  if(end === -1){
+    return raw.slice(0, start).trim();
+  }
+  return (raw.slice(0, start) + raw.slice(end + endMarker.length)).trim();
+}
+
+function stripInternalThinking(raw){
+  if(!raw) return '';
+  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/\[THINK\][\s\S]*?\[\/THINK\]/g, '');
+  cleaned = cleaned.replace(/(<think>|\[THINK\])[\s\S]*$/i, '');
+  return cleaned.trim();
+}
 
 // Read the ingest embed-model selector UI and return the effective model string.
 // Priority: select value -> custom input when 'custom' selected -> empty string
@@ -699,7 +801,7 @@ function renderDebugPanel(data){
   return panel;
 }
 
-function msgElement(role, content, timeIso, model, modelMeta){
+function msgElement(role, content, timeIso, model, modelMeta, thinking){
   const msg = document.createElement('div');
   msg.className = `msg ${role}`;
   const bubble = document.createElement('div');
@@ -727,6 +829,9 @@ function msgElement(role, content, timeIso, model, modelMeta){
   }
   meta.textContent = metaText;
   msg.appendChild(bubble);
+  if(role === 'assistant' && thinking && thinking.trim()){
+    msg.appendChild(createThinkingPanel(thinking));
+  }
   msg.appendChild(meta);
 
   if(role === 'assistant'){
@@ -747,10 +852,10 @@ function msgElement(role, content, timeIso, model, modelMeta){
   return msg;
 }
 
-function addMessage(role, content, timeIso, model, modelMeta){
+function addMessage(role, content, timeIso, model, modelMeta, thinking){
   const wrap = $('#chatMessages');
   $('#chatEmpty').style.display = 'none';
-  wrap.appendChild(msgElement(role, content, timeIso || new Date().toISOString(), model, modelMeta));
+  wrap.appendChild(msgElement(role, content, timeIso || new Date().toISOString(), model, modelMeta, thinking));
   wrap.scrollTop = wrap.scrollHeight;
 }
 
@@ -758,10 +863,24 @@ function replaceAssistantLast(text){
   const msgs = $$('#chatMessages .msg.assistant .bubble');
   if(msgs.length === 0) return;
   const bubble = msgs[msgs.length-1];
-  renderBubbleContent(bubble, text);
+  renderBubbleContent(bubble, stripInternalThinking(text));
   bubble.classList.remove('typing');
   const wrap = $('#chatMessages');
   wrap.scrollTop = wrap.scrollHeight;
+}
+
+function setAssistantLastThinking(thinking){
+  const msgs = $$('#chatMessages .msg.assistant');
+  if(msgs.length === 0) return;
+  const msg = msgs[msgs.length-1];
+  const existing = msg.querySelector('.thinking-panel');
+  if(existing) existing.remove();
+  if(thinking && thinking.trim()){
+    const meta = msg.querySelector('.meta');
+    const panel = createThinkingPanel(thinking);
+    if(meta) msg.insertBefore(panel, meta);
+    else msg.appendChild(panel);
+  }
 }
 
 async function refreshStats(){
@@ -770,6 +889,11 @@ async function refreshStats(){
     $('#chunkCount').textContent = stats.chunks ?? '-';
     // Also refresh sources list when open
     await refreshSources(stats.sources || []);
+    const searchMeta = $('#searchMeta');
+    if(searchMeta){
+      searchMeta.textContent = `Top-K 8 · ${stats.chunks ?? 0} Chunks`;
+    }
+    updateWorkspaceStrip();
   }catch(e){}
 }
 
@@ -817,7 +941,8 @@ async function refreshChats(){
         await fetch('/api/chat/'+encodeURIComponent(c.id), {method:'DELETE'});
         if(currentChatId === c.id){
           currentChatId = '';
-          $('#chatMessages').innerHTML = `<div class="empty-state" id="chatEmpty"><div class="icon">💬</div><p>Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p></div>`;
+          $('#chatMessages').innerHTML = buildEmptyStateHtml();
+          updateWorkspaceStrip();
         }
         await refreshChats();
         return;
@@ -836,44 +961,28 @@ async function loadChat(id){
     const sel = $('#personaSelect'); if(sel) sel.value = currentPersonaId;
   }
   
-  const emptyHtml = `
-    <div class="empty-state" id="chatEmpty">
-      <div class="icon" aria-hidden="true">💬</div>
-      <p data-i18n="chat_empty_state">${t('chat_empty_state')}</p>
-      <div class="chat-suggestions">
-        <button class="suggestion-btn" onclick="fillChat('${t('sugg_summarize_val')}')">📝 <span>${t('sugg_summarize')}</span></button>
-        <button class="suggestion-btn" onclick="fillChat('${t('sugg_newest_val')}')">🆕 <span>${t('sugg_newest')}</span></button>
-        <button class="suggestion-btn" onclick="fillChat('${t('sugg_analyze_val')}')">🔍 <span>${t('sugg_analyze')}</span></button>
-      </div>
-    </div>`;
-
-  $('#chatMessages').innerHTML = emptyHtml;
+  $('#chatMessages').innerHTML = buildEmptyStateHtml();
   if(!c.messages || !c.messages.length){
     $('#chatEmpty').style.display = '';
   }else{
     $('#chatEmpty').style.display = 'none';
-    c.messages.forEach(m => addMessage(m.role, m.content, m.time, m.model, m.model_meta));
+    c.messages.forEach(m => addMessage(m.role, m.content, m.time, m.model, m.model_meta, m.thinking));
   }
   await refreshChats();
   showTab('sidebar','chats');
   showTab('main','chat');
+  closeSidebarIfMobile();
+  updateWorkspaceStrip();
 }
 
 async function newChat(){
   const c = await apiPost('/api/chats/new', {persona_id: currentPersonaId});
   currentChatId = c.id;
-  $('#chatMessages').innerHTML = `
-    <div class="empty-state" id="chatEmpty">
-      <div class="icon" aria-hidden="true">💬</div>
-      <p data-i18n="chat_empty_state">${t('chat_empty_state')}</p>
-      <div class="chat-suggestions">
-        <button class="suggestion-btn" onclick="fillChat('${t('sugg_summarize_val')}')">📝 <span>${t('sugg_summarize')}</span></button>
-        <button class="suggestion-btn" onclick="fillChat('${t('sugg_newest_val')}')">🆕 <span>${t('sugg_newest')}</span></button>
-        <button class="suggestion-btn" onclick="fillChat('${t('sugg_analyze_val')}')">🔍 <span>${t('sugg_analyze')}</span></button>
-      </div>
-    </div>`;
+  $('#chatMessages').innerHTML = buildEmptyStateHtml();
   await refreshChats();
   showTab('main','chat');
+  closeSidebarIfMobile();
+  updateWorkspaceStrip();
 }
 
 async function refreshSources(src){
@@ -1021,19 +1130,8 @@ function updateOpenAIBadge(s){
   if(!badge) return;
   const chatBase = (s && (s.chat_base || s.base_url)) ? (s.chat_base || s.base_url) : '';
   const embedBase = (s && (s.embed_base || s.base_url)) ? (s.embed_base || s.base_url) : '';
-
-  function resolveName(url){
-    if(!url) return '';
-    const u = url.toLowerCase();
-    if(u.includes('openai.com')) return 'OpenAI';
-    if(u.includes('ollama')) return 'Ollama';
-    if(u.includes('lmstudio') || u.includes('lm-studio') || u.includes('lmstudio.ai')) return 'LM Studio';
-    if(u.includes('localhost') || u.includes('127.0.0.1')) return 'Local LLM';
-    return 'Remote LLM';
-  }
-
-  const chatName = resolveName(chatBase);
-  const embedName = resolveName(embedBase);
+  const chatName = resolveProviderName(chatBase);
+  const embedName = resolveProviderName(embedBase);
   const anyBase = (chatBase || embedBase || '').toLowerCase();
   const usingOpenAI = !!(s && s.openai_key_present && anyBase && anyBase.includes('openai.com'));
 
@@ -1041,6 +1139,7 @@ function updateOpenAIBadge(s){
     badge.style.display = '';
     badge.innerHTML = '<span>Using</span><strong>OpenAI</strong>';
     badge.title = 'OpenAI';
+    updateWorkspaceStrip();
     return;
   }
 
@@ -1053,10 +1152,12 @@ function updateOpenAIBadge(s){
     if(chatName) parts.push('Chat: ' + chatName);
     if(embedName) parts.push('Embed: ' + embedName);
     badge.title = parts.join('\n');
+    updateWorkspaceStrip();
     return;
   }
 
   badge.style.display = 'none';
+  updateWorkspaceStrip();
 }
 
 // Initialize the LLM provider switcher UI and wire selection actions.
@@ -1573,6 +1674,7 @@ async function loadPersonas(){
     }
     if(currentPersonaId) sel.value = currentPersonaId;
   }
+  updateWorkspaceStrip();
 
   // Render list in settings
   const box = $('#personaList');
@@ -1657,42 +1759,76 @@ var cachedCustomAPIs=[];
 var cachedModules=[];
 var cachedPersonas=[];
 
+const TOOL_META = {
+  wikipedia: {group:'research'},
+  duckduckgo: {group:'research'},
+  wiktionary: {group:'reference'},
+  stackoverflow: {group:'code'},
+  websearch: {group:'research'},
+  news: {group:'research'},
+  calculate: {group:'compute'},
+  nanogo: {group:'compute'},
+  shell: {group:'danger'},
+  tinygo: {group:'danger'}
+};
+
+function toolButtonHtml(toolName, label, icon, extraClass=''){
+  return '<button class="tool-btn'+extraClass+'" data-tool="'+escHtml(toolName)+'">'+icon+' '+escHtml(label)+'</button>';
+}
+
 function renderToolSuggestion(tr, chatEl, originalQuestion){
   const div = document.createElement('div');
   div.className = 'tool-suggestion';
-  const builtinTools = ['wikipedia','duckduckgo','wiktionary','stackoverflow','websearch','news','calculate','nanogo','shell','tinygo'];
-  let h = '<div class="tool-header"><span class="tool-icon">\u{1F50D}</span> Zusätzliche Informationen benötigt</div>';
-  h += '<div class="tool-desc">Das Modell hat nicht genügend Kontext oder möchte Code ausführen:</div>';
-  h += '<textarea class="tool-query-edit" rows="3">'+escHtml(tr.query)+'</textarea>';
-  h += '<div class="tool-actions">';
-  h += '<span class="tool-actions-label">Aktion:</span>';
-  for(let i=0;i<builtinTools.length;i++){
-    const t = builtinTools[i];
-    const icon = toolIcons[t]||'\u{1F527}';
-    const label = toolLabels[t]||t;
-    const suggested = (t===tr.tool) ? ' suggested' : '';
-    h += '<button class="tool-btn'+suggested+'" data-tool="'+t+'">'+icon+' '+label+'</button>';
-  }
-  // custom APIs
-  for(let j=0;j<cachedCustomAPIs.length;j++){
-    const api = cachedCustomAPIs[j];
-    const suggested2 = (api.id===tr.tool)?' suggested':'';
-    h += '<button class="tool-btn'+suggested2+'" data-tool="'+escHtml(api.id)+'">\u{1F310} '+escHtml(api.name)+'</button>';
-  }
-  for(let j=0;j<cachedModules.length;j++){
-    const mod = cachedModules[j];
-    if(!mod.enabled) continue;
-    const toolName = 'module:'+mod.id;
-    const suggested3 = (toolName===tr.tool)?' suggested':'';
-    h += '<button class="tool-btn'+suggested3+'" data-tool="'+escHtml(toolName)+'">\u{1F9E9} '+escHtml(mod.name)+'</button>';
-  }
-  h += '<button class="btn-reject">\u274C Ablehnen</button>';
+  const suggestedTool = tr.tool || 'websearch';
+  const suggestedIcon = toolIcons[suggestedTool] || '\u{1F527}';
+  const suggestedLabel = toolLabels[suggestedTool] || suggestedTool;
+  const suggestedGroup = TOOL_META[suggestedTool]?.group || 'research';
+
+  const builtinTools = ['websearch','wikipedia','duckduckgo','news','stackoverflow','wiktionary','calculate','nanogo','shell','tinygo'];
+  const preferredAlternatives = builtinTools.filter(t => t !== suggestedTool && TOOL_META[t]?.group === suggestedGroup && TOOL_META[t]?.group !== 'danger').slice(0, 2);
+  const secondaryAlternatives = builtinTools.filter(t => t !== suggestedTool && !preferredAlternatives.includes(t) && TOOL_META[t]?.group !== 'danger');
+  const advancedTools = builtinTools.filter(t => TOOL_META[t]?.group === 'danger');
+
+  let h = '<div class="tool-header"><div><span class="tool-icon">\u{1F50D}</span> Zusätzliche Recherche vorgeschlagen</div><span class="tool-badge">Empfohlen: '+escHtml(suggestedLabel)+'</span></div>';
+  h += '<div class="tool-desc">Der lokale Kontext reicht vermutlich noch nicht aus. Passe die Anfrage an oder starte direkt die empfohlene Aktion.</div>';
+  h += '<label class="tool-query-label">Anfrage</label>';
+  h += '<textarea class="tool-query-edit" rows="2">'+escHtml(tr.query)+'</textarea>';
+  h += '<div class="tool-primary-actions">';
+  h += '<button class="btn-primary tool-run-primary" data-tool="'+escHtml(suggestedTool)+'">'+suggestedIcon+' '+escHtml(suggestedLabel)+' ausführen</button>';
+  preferredAlternatives.forEach(t => {
+    h += toolButtonHtml(t, toolLabels[t] || t, toolIcons[t] || '\u{1F527}');
+  });
+  h += '<button class="btn-reject">Nicht jetzt</button>';
   h += '</div>';
+
+  h += '<details class="tool-more">';
+  h += '<summary>Weitere Tools</summary>';
+  h += '<div class="tool-actions">';
+  secondaryAlternatives.forEach(t => {
+    h += toolButtonHtml(t, toolLabels[t] || t, toolIcons[t] || '\u{1F527}', t === suggestedTool ? ' suggested' : '');
+  });
+  cachedCustomAPIs.forEach(api => {
+    const suggested2 = (api.id===suggestedTool)?' suggested':'';
+    h += toolButtonHtml(api.id, api.name, '\u{1F310}', suggested2);
+  });
+  cachedModules.forEach(mod => {
+    if(!mod.enabled) return;
+    const toolName = 'module:'+mod.id;
+    const suggested3 = (toolName===suggestedTool)?' suggested':'';
+    h += toolButtonHtml(toolName, mod.name, '\u{1F9E9}', suggested3);
+  });
+  if(advancedTools.length){
+    h += '<div class="tool-advanced-label">Erweiterte Tools</div>';
+    advancedTools.forEach(t => {
+      h += toolButtonHtml(t, toolLabels[t] || t, toolIcons[t] || '\u{1F527}', ' danger');
+    });
+  }
+  h += '</div></details>';
   h += '<div class="tool-status"></div>';
   div.innerHTML = h;
   div.dataset.originalQuestion = originalQuestion;
   // attach handlers
-  div.querySelectorAll('.tool-btn').forEach(b=>{
+  div.querySelectorAll('.tool-btn,.tool-run-primary').forEach(b=>{
     b.addEventListener('click', (ev)=>{ executeToolFromCard(ev.currentTarget); });
   });
   const rej = div.querySelector('.btn-reject');
@@ -1705,7 +1841,8 @@ function dismissToolCard(btn){
   const card = btn.closest('.tool-suggestion');
   if(!card) return;
   card.querySelector('.tool-status').textContent = 'Abgelehnt';
-  const actions = card.querySelector('.tool-actions'); if(actions) actions.style.display = 'none';
+  const primary = card.querySelector('.tool-primary-actions'); if(primary) primary.style.display = 'none';
+  const more = card.querySelector('.tool-more'); if(more) more.style.display = 'none';
 }
 
 function executeToolFromCard(btn){
@@ -1723,7 +1860,7 @@ function executeToolAndReask(btn, tool, query, originalQuestion){
   if(!card) return;
   const status = card.querySelector('.tool-status');
   // disable buttons
-  card.querySelectorAll('.tool-btn,.btn-reject').forEach(b=>b.disabled=true);
+  card.querySelectorAll('.tool-btn,.tool-run-primary,.btn-reject').forEach(b=>b.disabled=true);
   const input = card.querySelector('.tool-query-edit'); if(input) input.disabled = true;
   status.innerHTML = '<span class="spinner"></span>' + (toolIcons[tool]||'') + ' ' + escHtml(toolLabels[tool]||tool) + ': Suche läuft…';
 
@@ -1731,7 +1868,7 @@ function executeToolAndReask(btn, tool, query, originalQuestion){
     if(!resp.ok){
       const t = await resp.text();
       status.innerHTML = '<span style="color:var(--red)">Fehler: '+escHtml(t)+'</span>';
-      card.querySelectorAll('.tool-btn,.btn-reject').forEach(b=>b.disabled=false);
+      card.querySelectorAll('.tool-btn,.tool-run-primary,.btn-reject').forEach(b=>b.disabled=false);
       if(input) input.disabled=false;
       return;
     }
@@ -1746,7 +1883,7 @@ function executeToolAndReask(btn, tool, query, originalQuestion){
     }, 500);
   }).catch(function(e){
     status.innerHTML = '<span style="color:var(--red)">Fehler: '+escHtml(e.message||String(e))+'</span>';
-    card.querySelectorAll('.tool-btn,.btn-reject').forEach(b=>b.disabled=false);
+    card.querySelectorAll('.tool-btn,.tool-run-primary,.btn-reject').forEach(b=>b.disabled=false);
     if(input) input.disabled=false;
   });
 }
@@ -1804,6 +1941,7 @@ async function askChat(){
     }
   }catch(e){}
   let acc = '';
+  let reasoningAcc = '';
   let hasError = false;
 
   try{
@@ -1864,6 +2002,7 @@ async function askChat(){
             }
             // refresh chats sidebar
             refreshChats();
+            updateWorkspaceStrip();
           }catch(e){}
           continue;
         }
@@ -1895,6 +2034,31 @@ async function askChat(){
           }catch(e){}
           continue;
         }
+        if(event === 'tool_result'){
+          try{
+            const tr = JSON.parse(dataStr);
+            if(tr && tr.source && tr.output){
+              acc = '';
+              replaceAssistantLast(`🔎 ${tr.tool || 'Tool'} wurde ausgeführt. Antwort wird mit den neuen Informationen überarbeitet…`);
+              const bubbles = $$('#chatMessages .msg.assistant .bubble');
+              if(bubbles.length){
+                typingBubble = bubbles[bubbles.length-1];
+                typingBubble.classList.add('typing');
+              }
+            }
+          }catch(e){}
+          continue;
+        }
+        if(event === 'reasoning'){
+          try{
+            const reasoning = JSON.parse(dataStr);
+            if(typeof reasoning === 'string'){
+              reasoningAcc = reasoning;
+              setAssistantLastThinking(reasoningAcc);
+            }
+          }catch(e){}
+          continue;
+        }
 
         // default data stream
         if(dataStr === '[DONE]'){
@@ -1909,8 +2073,8 @@ async function askChat(){
                 bubble.textContent = '❌ Keine Antwort vom LLM erhalten';
                 hasError = true;
               }else{
-                // Strip [TOOL_REQUEST] markers, then render final markdown
-                const cleaned = raw.replace(/\[TOOL_REQUEST\][\s\S]*?\[\/TOOL_REQUEST\]/g,'').trim();
+                // Strip complete or truncated [TOOL_REQUEST] markers before final rendering.
+                const cleaned = stripInternalThinking(stripToolRequestText(raw));
                 renderBubbleContent(bubble, cleaned);
               }
             }
@@ -1942,6 +2106,8 @@ async function runSearch(){
   const q = $('#searchQ').value.trim();
   if(!q) return;
   $('#searchResults').innerHTML = `<p class="muted">Suche…</p>`;
+  const searchMeta = $('#searchMeta');
+  if(searchMeta) searchMeta.textContent = `Top-K 8 · ${q}`;
   try{
     const res = await apiPost('/api/search', {query:q, k: 8});
     if(!res.length){
@@ -1952,7 +2118,19 @@ async function runSearch(){
     res.forEach(r=>{
       const div = document.createElement('div');
       div.className = 'result';
-      div.innerHTML = `<div class="score">Score: ${Number(r.score).toFixed(4)}</div><div>${escHtml(r.content)}</div>`;
+      div.innerHTML = `
+        <div class="result-head">
+          <div class="score">Score: ${Number(r.score).toFixed(4)}</div>
+          <span class="panel-badge">semantischer Treffer</span>
+        </div>
+        <div class="result-content">${escHtml(r.content)}</div>
+        <div class="result-actions">
+          <button class="result-action primary">Im Chat nutzen</button>
+          <button class="result-action">Kopieren</button>
+        </div>`;
+      const [useBtn, copyBtn] = div.querySelectorAll('.result-action');
+      useBtn.addEventListener('click', ()=>fillChatWithSearchHit(r.content));
+      copyBtn.addEventListener('click', ()=>copyToClipboard(r.content, copyBtn));
       $('#searchResults').appendChild(div);
     });
   }catch(e){
@@ -2139,6 +2317,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     if(s && s.theme) applyTheme(s.theme);
     updateOpenAIBadge(s);
     initLLMSwitcher(s);
+    updateWorkspaceStrip();
   }catch(e){
     applyTranslations(navigator.language || 'de');
   }
@@ -2150,7 +2329,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   }
   // Tabs
   $$('.main-tab').forEach(b => {
-    b.addEventListener('click', ()=>showTab('main', b.dataset.mainTab));
+    b.addEventListener('click', ()=>{ showTab('main', b.dataset.mainTab); closeSidebarIfMobile(); });
     b.addEventListener('keydown', (e)=>handleTabKeydown(e, '.main-tab', 'main'));
   });
   $$('.sidebar-tab').forEach(b => {
@@ -2165,16 +2344,16 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#debugMode').addEventListener('change', (e)=>{ debugMode = e.target.checked; });
   const deepToggle = $('#deepMode');
   if(deepToggle){
-    deepToggle.addEventListener('change', (e)=>{ deepMode = e.target.checked; });
+    deepToggle.addEventListener('change', (e)=>{ deepMode = e.target.checked; updateWorkspaceStrip(); });
   }
   const offlineToggle = $('#offlineMode');
   if(offlineToggle){
-    offlineToggle.addEventListener('change', (e)=>{ offlineMode = e.target.checked; });
+    offlineToggle.addEventListener('change', (e)=>{ offlineMode = e.target.checked; updateWorkspaceStrip(); });
   }
   const autoSearchToggle = $('#autoSearchMode');
   if(autoSearchToggle){
     autoSearchMode = autoSearchToggle.checked;
-    autoSearchToggle.addEventListener('change', (e)=>{ autoSearchMode = e.target.checked; });
+    autoSearchToggle.addEventListener('change', (e)=>{ autoSearchMode = e.target.checked; updateWorkspaceStrip(); });
   }
 
   // Chat
@@ -2183,8 +2362,19 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   if(personaSelect){
     personaSelect.addEventListener('change', (e)=>{
       currentPersonaId = e.target.value;
+      updateWorkspaceStrip();
     });
   }
+  const sidebarToggle = $('#sidebarToggle');
+  if(sidebarToggle){
+    sidebarToggle.addEventListener('click', ()=>{
+      const sidebar = $('#appSidebar');
+      setSidebarOpen(!sidebar?.classList.contains('open'));
+    });
+  }
+  window.addEventListener('resize', ()=>{
+    if(window.innerWidth > 960) setSidebarOpen(false);
+  });
   const chatBox = $('#chatQ');
   if(chatBox){
     chatBox.addEventListener('input', ()=>autosize(chatBox));
@@ -2310,4 +2500,5 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     showLLMMissingModal(e.message||String(e));
   }
   await refreshChats();
+  updateWorkspaceStrip();
 });

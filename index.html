@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>tinyRAG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </head>
@@ -41,7 +44,7 @@
     <div class="spacer"></div>
 
     <label class="debug-toggle" for="personaSelect">
-      <span style="margin-right:6px" data-i18n="persona">Persona</span>
+      <span data-i18n="persona">Persona</span>
       <select id="personaSelect" aria-label="Select persona (pre-prompt)"></select>
     </label>
 
@@ -55,7 +58,7 @@
       <span aria-hidden="true">⚙</span>
       <span class="visually-hidden" data-i18n="settings">Einstellungen</span>
     </button>
-    <label class="llm-switcher" style="margin-left:8px">
+    <label class="llm-switcher">
       <select id="llmSwitcher" aria-label="Select LLM provider">
         <option value="openai">ChatGPT (OpenAI)</option>
         <option value="lmstudio">LM Studio (local)</option>
@@ -63,13 +66,13 @@
         <option value="custom">Custom...</option>
       </select>
     </label>
-    <label class="model-chooser" style="margin-left:6px;display:flex;align-items:center;gap:6px">
-      <select id="llmModelSelect" aria-label="Select chat model" style="display:none;min-width:180px">
+    <label class="model-chooser">
+      <select id="llmModelSelect" aria-label="Select chat model" style="display:none">
         <option value="">(Use recommended)</option>
       </select>
       <button id="llmApplyBtn" class="btn-small" style="display:none">Apply</button>
     </label>
-    <div id="openaiBadge" class="openai-badge" style="display:none;margin-left:8px">
+    <div id="openaiBadge" class="openai-badge" style="display:none">
       <span>Using</span>
       <strong>OpenAI</strong>
     </div>
@@ -147,13 +150,13 @@
       <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false" aria-controls="ingest-folder" id="tab-folder"><span data-i18n="folder">Ordner</span></button>
     </div>
 
-    <div style="margin-top:.5rem;display:flex;gap:8px;align-items:center">
-      <label for="ingestEmbedSelect" style="margin:0;white-space:nowrap">Embedding-Modell (optional)</label>
-      <select id="ingestEmbedSelect" style="max-width:360px;flex:0 0 360px">
+    <div class="ingest-embed-row">
+      <label for="ingestEmbedSelect" class="ingest-embed-label">Embedding-Modell (optional)</label>
+      <select id="ingestEmbedSelect" class="ingest-embed-select">
         <option value="">(Default / use settings)</option>
         <option value="custom">-- Custom --</option>
       </select>
-      <input id="ingestEmbedCustom" type="text" placeholder="z.B. text-embedding-3-small" style="flex:1;max-width:360px;display:none">
+      <input id="ingestEmbedCustom" type="text" placeholder="z.B. text-embedding-3-small" class="ingest-embed-custom" style="display:none">
     </div>
 
     <div id="ingest-wiki" role="tabpanel" aria-labelledby="tab-wiki">
@@ -161,7 +164,7 @@
       <div class="row">
         <input type="text" id="wikiArticle" placeholder="z.B. Sonnensystem" aria-label="Wikipedia article name" data-i18n-placeholder="wiki_placeholder">
         <label for="wikiLang" class="visually-hidden" data-i18n="wiki_lang_label">Wikipedia language code</label>
-        <input type="text" id="wikiLang" value="de" style="max-width:60px" aria-label="Wikipedia language code">
+        <input type="text" id="wikiLang" value="de" class="input-narrow" aria-label="Wikipedia language code">
         <button class="btn-primary" id="wikiBtn" aria-label="Load Wikipedia article"><span data-i18n="load">Laden</span></button>
       </div>
       <div id="wikiStatus" role="status" aria-live="polite"></div>
@@ -212,11 +215,11 @@
     </div>
 
     <!-- Maintenance Section at bottom of Ingest -->
-    <div style="margin-top: 32px; padding: 20px; border-top: 1px solid var(--border); background: rgba(255,59,48,0.05); border-radius: 16px;">
-      <h4 style="color: var(--danger); margin: 0 0 8px 0; font-size: 16px;" data-i18n="maintenance">Wartung</h4>
-      <p class="muted" style="font-size: 13px; margin: 0 0 16px 0;" data-i18n="clear_chunks_info">Lösche alle Chunks in der Wissensbasis. Diese Aktion kann nicht rückgängig gemacht werden.</p>
-      <button class="btn-primary" id="clearChunksBtn" style="background: var(--danger); color: white; border: none;" aria-label="Clear all chunks"><span data-i18n="clear_chunks">Wissensbasis leeren</span></button>
-      <div id="clearStatus" role="status" aria-live="polite" style="margin-top: 10px;"></div>
+    <div class="maintenance-section">
+      <h4 data-i18n="maintenance">Wartung</h4>
+      <p class="hint" data-i18n="clear_chunks_info">Lösche alle Chunks in der Wissensbasis. Diese Aktion kann nicht rückgängig gemacht werden.</p>
+      <button class="btn-primary btn-danger" id="clearChunksBtn" aria-label="Clear all chunks"><span data-i18n="clear_chunks">Wissensbasis leeren</span></button>
+      <div id="clearStatus" role="status" aria-live="polite" class="tool-status"></div>
     </div>
   </section>
 </main>
@@ -303,10 +306,10 @@
         </div>
       </div>
 
-      <div class="settings-footnote" style="margin-top:16px;padding:0;background:none">
+      <div class="settings-footnote">
         <span data-i18n="endpoint_note">Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.</span>
       </div>
-      <div style="margin-top:12px">
+      <div class="settings-nanogo">
         <label class="inline-check" for="allowNanoGo">
           <input type="checkbox" id="allowNanoGo" aria-describedby="nanogo-desc">
           <span data-i18n="allow_nanogo">Erlaube Ausführung von nanoGo (interpretiertes Go)</span>
@@ -323,27 +326,27 @@
         <div>
           <label for="setBaseUrl" data-i18n="api_endpoint">API Endpoint (OpenAI-kompatibel)</label>
           <input id="setBaseUrl" type="text" placeholder="http://localhost:1234" aria-label="API Endpoint">
-          <div style="margin-top:.5rem;color:var(--muted);font-size:13px">Standard: derselbe Endpoint wird für Chat und Embeddings verwendet. Für fortgeschrittene Setups kannst du getrennte Endpoints verwenden.</div>
+          <p class="hint">Standard: derselbe Endpoint wird für Chat und Embeddings verwendet. Für fortgeschrittene Setups kannst du getrennte Endpoints verwenden.</p>
 
-          <label class="inline-check" style="margin-top:.6rem">
+          <label class="inline-check">
             <input type="checkbox" id="useSeparateEndpoints">
-            <span style="margin-left:8px">Getrennte Chat/Embedding Endpoints verwenden</span>
+            <span>Getrennte Chat/Embedding Endpoints verwenden</span>
           </label>
 
-          <div id="advancedEndpoints" style="display:none;margin-top:.6rem">
+          <div id="advancedEndpoints" style="display:none">
             <label for="setChatBase">Chat Endpoint (z. B. api.openai.com oder lokales Ollama)</label>
             <input id="setChatBase" type="text" placeholder="http://localhost:1234" aria-label="Chat endpoint">
-            <label for="setEmbedBase" style="margin-top:.6rem">Embedding Endpoint (z. B. lokaler Embed-Service)</label>
+            <label for="setEmbedBase">Embedding Endpoint (z. B. lokaler Embed-Service)</label>
             <input id="setEmbedBase" type="text" placeholder="http://localhost:1234" aria-label="Embed endpoint">
           </div>
 
-          <label for="setOpenAIKey" style="margin-top:.6rem">OpenAI API Key (optional)</label>
-          <div style="display:flex;gap:8px;align-items:center">
+          <label for="setOpenAIKey">OpenAI API Key (optional)</label>
+          <div class="input-btn-row">
             <input id="setOpenAIKey" type="password" placeholder="sk-..." aria-label="OpenAI API Key">
             <button class="tool-btn" id="btnUseOpenAI" title="Schnell konfigurieren: OpenAI als Endpoint verwenden">Use OpenAI</button>
             <button class="tool-btn danger" id="btnClearOpenAI" title="Stored OpenAI key löschen">Delete Key</button>
           </div>
-          <div id="openaiHint" class="hint" style="margin-top:6px">Trage deinen OpenAI-Key ein und klicke auf <strong>Use OpenAI</strong>, dann auf <strong>Speichern</strong>.</div>
+          <div id="openaiHint" class="hint">Trage deinen OpenAI-Key ein und klicke auf <strong>Use OpenAI</strong>, dann auf <strong>Speichern</strong>.</div>
           <div class="mini-actions">
             <button class="tool-btn" id="btnDiscover" aria-label="Auto-discover endpoints"><span data-i18n="auto_discovery">Auto-Discovery</span></button>
             <button class="tool-btn suggested" id="btnTestEndpoint" aria-label="Test endpoint and load models"><span data-i18n="test_load_models">Test &amp; Modelle laden</span></button>
@@ -356,7 +359,7 @@
           <select id="setChatModel" aria-label="Select chat model"></select>
           <small class="help" id="chatHint"></small>
 
-          <label for="setEmbedModel" style="margin-top:.8rem" data-i18n="embedding_model">Embedding-Modell</label>
+          <label for="setEmbedModel" data-i18n="embedding_model">Embedding-Modell</label>
           <select id="setEmbedModel" aria-label="Select embedding model"></select>
           <small class="help warn" id="embedHint"></small>
         </div>
@@ -366,7 +369,7 @@
 
       <div class="actions-row">
         <button class="btn-primary" id="btnSaveSettings" aria-label="Save settings"><span data-i18n="save">Speichern</span></button>
-        <button class="tool-btn danger" id="btnClearAllChunks" title="Alle Chunks löschen" style="margin-left:8px">Alle Chunks löschen</button>
+        <button class="tool-btn danger" id="btnClearAllChunks" title="Alle Chunks löschen">Alle Chunks löschen</button>
         <span class="tool-status" id="saveStatus" role="status" aria-live="polite"></span>
       </div>
     </div>
@@ -406,7 +409,7 @@
       <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…" aria-label="Persona pre-prompt" data-i18n-placeholder="persona_prompt_placeholder"></textarea>
       <div class="actions-row">
         <button class="btn-primary" id="btnAddPersona" aria-label="Add persona"><span data-i18n="add">Hinzufügen</span></button>
-        <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas" style="margin-left:8px">Beispiel-Personas hinzufügen</button>
+        <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas">Beispiel-Personas hinzufügen</button>
       </div>
     </div>
 

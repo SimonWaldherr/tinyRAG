@@ -122,6 +122,36 @@ func normalizeBaseURL(raw string) string {
 	return u
 }
 
+func defaultPersonas() []persona {
+	return []persona{
+		{
+			ID:     "persona-default",
+			Name:   "Standard",
+			Prompt: "Du bist ein praeziser, nuetzlicher Assistent. Antworte klar, knapp und ohne Marketing-Ton. Trenne Fakten, Schlussfolgerungen und Unsicherheiten sauber.",
+		},
+		{
+			ID:     "persona-formal",
+			Name:   "Formal",
+			Prompt: "Du antwortest sachlich, professionell und gut strukturiert. Vermeide Umgangssprache, bleibe knapp und formuliere belastbare Aussagen vorsichtig.",
+		},
+		{
+			ID:     "persona-friendly",
+			Name:   "Friendly",
+			Prompt: "Du antwortest freundlich und gut verstaendlich, aber nicht flapsig. Erklaere nur so viel wie noetig und vermeide unbelegte Behauptungen.",
+		},
+		{
+			ID:     "persona-expert",
+			Name:   "Expert",
+			Prompt: "Du antwortest wie ein fachlich starker Analyst. Prioritaet haben Genauigkeit, Annahmen, Randfaelle und belastbare Begruendung statt Schein-Sicherheit.",
+		},
+		{
+			ID:     "persona-concise",
+			Name:   "Concise",
+			Prompt: "Du antwortest sehr knapp und direkt. Nur die wichtigsten Punkte, keine Wiederholungen, keine Fuellsaetze, keine spekulativen Ausschmueckungen.",
+		},
+	}
+}
+
 // defaultSettingsFromFlags builds initial `appSettings` from CLI flags
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
@@ -154,13 +184,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 		if os.IsNotExist(err) {
 			ss.s = defaults
 			if len(ss.s.Personas) == 0 {
-				ss.s.Personas = []persona{
-					{ID: "persona-default", Name: "Standard", Prompt: ""},
-					{ID: "persona-formal", Name: "Formal", Prompt: "You are a formal assistant. Use a polite, professional tone and concise sentences."},
-					{ID: "persona-friendly", Name: "Friendly", Prompt: "You are friendly and approachable. Use an informal tone and give helpful examples where useful."},
-					{ID: "persona-expert", Name: "Expert", Prompt: "You are an expert in the relevant field. Provide detailed, technical answers and cite assumptions when needed."},
-					{ID: "persona-concise", Name: "Concise", Prompt: "Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity."},
-				}
+				ss.s.Personas = defaultPersonas()
 			}
 			if len(ss.s.Modules) == 0 {
 				ss.s.Modules = defaultModules()
@@ -201,13 +225,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	}
 	// OpenAIKey may be empty; keep as-is (don't normalize)
 	if len(ss.s.Personas) == 0 {
-		ss.s.Personas = []persona{
-			{ID: "persona-default", Name: "Standard", Prompt: ""},
-			{ID: "persona-formal", Name: "Formal", Prompt: "You are a formal assistant. Use a polite, professional tone and concise sentences."},
-			{ID: "persona-friendly", Name: "Friendly", Prompt: "You are friendly and approachable. Use an informal tone and give helpful examples where useful."},
-			{ID: "persona-expert", Name: "Expert", Prompt: "You are an expert in the relevant field. Provide detailed, technical answers and cite assumptions when needed."},
-			{ID: "persona-concise", Name: "Concise", Prompt: "Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity."},
-		}
+		ss.s.Personas = defaultPersonas()
 	}
 	ss.s.Modules = normalizeModules(ss.s.Modules)
 	_ = ss.save() // best-effort normalize on disk
@@ -571,6 +589,7 @@ type lmProvider interface {
 	embed(texts []string) ([][]float64, error)
 	embedSingle(text string) ([]float64, error)
 	chatStream(ctx context.Context, system string, msgs []chatMsg, w io.Writer) error
+	chatStreamDetailed(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error
 }
 
 // compositeLM allows routing embeddings and chat to different backends.
@@ -587,6 +606,9 @@ func (c *compositeLM) embedSingle(text string) ([]float64, error) {
 }
 func (c *compositeLM) chatStream(ctx context.Context, system string, msgs []chatMsg, w io.Writer) error {
 	return c.chatClient.chatStream(ctx, system, msgs, w)
+}
+func (c *compositeLM) chatStreamDetailed(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error {
+	return c.chatClient.chatStreamDetailed(ctx, system, msgs, w, thinkW)
 }
 
 // newLMClient constructs an `lmClient` configured for the given
@@ -745,9 +767,112 @@ type chatMsg struct {
 	Content string `json:"content"`
 }
 
+func writeStreamChunk(w io.Writer, s string) error {
+	if w == nil || s == "" {
+		return nil
+	}
+	_, err := io.WriteString(w, s)
+	return err
+}
+
+func partialMarkerPrefixLen(s string, markers []string) int {
+	maxLen := 0
+	for _, marker := range markers {
+		limit := len(marker) - 1
+		if limit > len(s) {
+			limit = len(s)
+		}
+		for n := limit; n > 0; n-- {
+			if strings.HasSuffix(s, marker[:n]) {
+				if n > maxLen {
+					maxLen = n
+				}
+				break
+			}
+		}
+	}
+	return maxLen
+}
+
+func streamSplitThinkingChunk(tok string, pending *string, inThink *bool, visibleW io.Writer, thinkW io.Writer) error {
+	const (
+		startXML = "<think>"
+		endXML   = "</think>"
+		startBB  = "[THINK]"
+		endBB    = "[/THINK]"
+	)
+	startMarkers := []string{startXML, startBB}
+	endMarkers := []string{endXML, endBB}
+
+	*pending += tok
+	for len(*pending) > 0 {
+		if !*inThink {
+			nextIdx := -1
+			nextMarker := ""
+			for _, marker := range startMarkers {
+				if idx := strings.Index(*pending, marker); idx != -1 && (nextIdx == -1 || idx < nextIdx) {
+					nextIdx = idx
+					nextMarker = marker
+				}
+			}
+			if nextIdx == -1 {
+				keep := partialMarkerPrefixLen(*pending, startMarkers)
+				emitLen := len(*pending) - keep
+				if emitLen > 0 {
+					if err := writeStreamChunk(visibleW, (*pending)[:emitLen]); err != nil {
+						return err
+					}
+					*pending = (*pending)[emitLen:]
+				}
+				break
+			}
+			if nextIdx > 0 {
+				if err := writeStreamChunk(visibleW, (*pending)[:nextIdx]); err != nil {
+					return err
+				}
+			}
+			*pending = (*pending)[nextIdx+len(nextMarker):]
+			*inThink = true
+			continue
+		}
+
+		nextIdx := -1
+		nextMarker := ""
+		for _, marker := range endMarkers {
+			if idx := strings.Index(*pending, marker); idx != -1 && (nextIdx == -1 || idx < nextIdx) {
+				nextIdx = idx
+				nextMarker = marker
+			}
+		}
+		if nextIdx == -1 {
+			keep := partialMarkerPrefixLen(*pending, endMarkers)
+			emitLen := len(*pending) - keep
+			if emitLen > 0 {
+				if err := writeStreamChunk(thinkW, (*pending)[:emitLen]); err != nil {
+					return err
+				}
+				*pending = (*pending)[emitLen:]
+			}
+			break
+		}
+		if nextIdx > 0 {
+			if err := writeStreamChunk(thinkW, (*pending)[:nextIdx]); err != nil {
+				return err
+			}
+		}
+		*pending = (*pending)[nextIdx+len(nextMarker):]
+		*inThink = false
+	}
+	return nil
+}
+
 // chatStream streams tokens from the chat completion endpoint and
 // writes them to `w` as they arrive.
 func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg, w io.Writer) error {
+	return c.chatStreamDetailed(ctx, system, msgs, w, nil)
+}
+
+func (c *lmClient) chatStreamDetailed(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error {
 	all := make([]chatMsg, 0, len(msgs)+1)
 	all = append(all, chatMsg{Role: "system", Content: system})
 	all = append(all, msgs...)
@@ -777,9 +902,10 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 		return fmt.Errorf("chat HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 
-	inThink := false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	var pending string
+	inThink := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -799,17 +925,21 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 		}
 		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
 			tok := chunk.Choices[0].Delta.Content
-			// Some local models wrap "thinking" in markers; strip them from the UI
-			if strings.Contains(tok, "[THINK]") {
-				inThink = true
-				tok = strings.ReplaceAll(tok, "[THINK]", "")
+			if tok != "" {
+				if err := streamSplitThinkingChunk(tok, &pending, &inThink, w, thinkW); err != nil {
+					return err
+				}
 			}
-			if strings.Contains(tok, "[/THINK]") {
-				inThink = false
-				tok = strings.ReplaceAll(tok, "[/THINK]", "")
+		}
+	}
+	if pending != "" {
+		if inThink {
+			if err := writeStreamChunk(thinkW, pending); err != nil {
+				return err
 			}
-			if !inThink && tok != "" {
-				fmt.Fprint(w, tok)
+		} else {
+			if err := writeStreamChunk(w, pending); err != nil {
+				return err
 			}
 		}
 	}
@@ -1821,10 +1951,12 @@ func extractToolRequest(text string) (toolRequest, bool) {
 		return toolRequest{}, false
 	}
 	end := strings.Index(text[start:], "[/TOOL_REQUEST]")
+	var body string
 	if end == -1 {
-		return toolRequest{}, false
+		body = strings.TrimSpace(text[start+len("[TOOL_REQUEST]"):])
+	} else {
+		body = strings.TrimSpace(text[start+len("[TOOL_REQUEST]") : start+end])
 	}
-	body := strings.TrimSpace(text[start+len("[TOOL_REQUEST]") : start+end])
 	var tr toolRequest
 	if err := json.Unmarshal([]byte(body), &tr); err != nil {
 		return toolRequest{}, false
@@ -1844,52 +1976,92 @@ func stripToolRequest(text string) string {
 	}
 	end := strings.Index(text[start:], "[/TOOL_REQUEST]")
 	if end == -1 {
-		return strings.TrimSpace(text)
+		return strings.TrimSpace(text[:start])
 	}
 	end += start + len("[/TOOL_REQUEST]")
 	return strings.TrimSpace(text[:start] + text[end:])
 }
 
-// buildToolSystemPrompt constructs the system prompt describing
-// available tools and how the assistant should emit tool requests.
-func buildToolSystemPrompt(ctxText string, tools []toolDef) string {
-	var sb strings.Builder
-	sb.WriteString("Du bist ein hochkompetenter KI-Assistent. Dir stehen eine Wissensbasis (RAG) und verschiedene externe Tools zur Verfügung.\n\n")
+var (
+	completeThinkBlockRE = regexp.MustCompile(`(?is)<think>.*?</think>|\[THINK\].*?\[/THINK\]`)
+	openThinkTailRE      = regexp.MustCompile(`(?is)(<think>|\[THINK\]).*$`)
+)
 
+func stripInternalThinking(text string) string {
+	cleaned := completeThinkBlockRE.ReplaceAllString(text, "")
+	cleaned = openThinkTailRE.ReplaceAllString(cleaned, "")
+	return strings.TrimSpace(cleaned)
+}
+
+func buildAssistantPolicyPrompt() string {
+	var sb strings.Builder
+	sb.WriteString("Du bist ein praeziser deutschsprachiger RAG- und Research-Assistent.\n")
+	sb.WriteString("Deine Prioritaeten sind: 1) Korrektheit, 2) klare Trennung von Fakten und Unsicherheit, 3) knappe, nuetzliche Antworten.\n")
+	sb.WriteString("Erfinde nichts. Wenn Informationen fehlen oder duenn belegt sind, sage das klar.\n")
+	sb.WriteString("Vermeide Marketing-Sprache, Wiederholungen, Halluzinationen und unnoetige Ausschmueckungen.\n")
+	sb.WriteString("Nutze interne Denkschritte nur implizit und zeige sie nicht.\n\n")
+	return sb.String()
+}
+
+func buildContextPrompt(ctxText string) string {
+	var sb strings.Builder
 	if ctxText != "" {
 		sb.WriteString("### RAG-Kontext\n")
-		sb.WriteString("Hier sind relevante Informationen aus deiner lokalen Wissensbasis:\n")
+		sb.WriteString("Hier sind relevante Informationen aus der lokalen Wissensbasis:\n")
 		sb.WriteString(ctxText)
 		sb.WriteString("\n\n")
-		sb.WriteString("Nutze diesen Kontext primär zur Beantwortung der Frage. Falls die Informationen unvollständig oder veraltet sind, nutze ein Tool.\n\n")
+		sb.WriteString("Behandle diesen Kontext als primaere Quelle. Wenn er nicht ausreicht oder zeitlich fraglich ist, nutze ein Tool.\n\n")
 	} else {
-		sb.WriteString("Deine lokale Wissensbasis enthält momentan keine relevanten Informationen für diese Anfrage. Nutze Tools, um die Antwort zu finden.\n\n")
+		sb.WriteString("Es liegt kein hinreichender lokaler Kontext fuer diese Anfrage vor. Nutze bei Bedarf Tools.\n\n")
 	}
+	return sb.String()
+}
 
+func buildToolingPrompt(tools []toolDef) string {
+	var sb strings.Builder
 	sb.WriteString("### Tool-Nutzung\n")
-	sb.WriteString("Wenn du externe Informationen benötigst oder Berechnungen/Code ausführen musst, fordere ein Tool an. ")
-	sb.WriteString("Schreibe dazu am ENDE deiner Antwort genau EINEN Tool-Request in exakt diesem Format und in genau einer Zeile:\n\n")
+	sb.WriteString("Wenn externe Informationen, Berechnungen oder Codeausfuehrung noetig sind, fordere genau ein Tool an.\n")
+	sb.WriteString("Der Tool-Request muss die LETZTE Zeile deiner Antwort sein, exakt in diesem Format und in genau einer Zeile:\n\n")
 	sb.WriteString("[TOOL_REQUEST]{\"tool\":\"websearch\",\"query\":\"Query\"}[/TOOL_REQUEST]\n\n")
-	sb.WriteString("Ersetze nur die Werte fuer `tool` und `query`. Kein Markdown-Block, keine Zusatzzeichen, keine zweite JSON-Struktur.\n\n")
-	sb.WriteString("Der Nutzer wird den Request sehen und kann die Ausführung bestätigen. ")
-	sb.WriteString("Bei Tools wie 'nanogo' oder 'calculate' kannst du direkt Logik/Code übergeben, um komplexe Probleme zu lösen.\n\n")
+	sb.WriteString("Ersetze nur `tool` und `query`. Keine Backticks, kein Markdown-Block, keine zweite JSON-Struktur, keine Zusatzzeichen.\n")
+	sb.WriteString("Wenn kein Tool noetig ist, schreibe keinen Tool-Request.\n\n")
 
 	sb.WriteString("### Verfügbare Tools:\n")
 	for _, t := range tools {
 		sb.WriteString(fmt.Sprintf("- **%s**: %s (Parameter: %s)\n", t.Name, t.Description, t.ParamHint))
 	}
-
-	sb.WriteString("\n### Instruktionen:\n")
-	sb.WriteString("- Analysiere zuerst den RAG-Kontext.\n")
-	sb.WriteString("- Wenn der Kontext ausreicht, antworte direkt.\n")
-	sb.WriteString("- Wenn Informationen fehlen, schlage EXAKT EIN Tool vor.\n")
-	sb.WriteString("- Sei proaktiv: Nutze Tools lieber einmal zu viel als einmal zu wenig, insbesondere News/Websearch für tagesaktuelle Themen.\n")
-	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`.\n")
-	sb.WriteString("- Wenn du Code ausführen musst (Datenanalyse, Berechnungen), nutze 'nanogo'.\n")
-	sb.WriteString("- Gib IMMER eine kurze Zwischenantwort oder Einschätzung, bevor du den Tool-Request anfügst.\n")
-	sb.WriteString("- Der Tool-Request muss die LETZTE Zeile deiner Antwort sein.\n")
-
+	sb.WriteString("\n")
 	return sb.String()
+}
+
+func buildResponseInstructionsPrompt(deep bool) string {
+	var sb strings.Builder
+	sb.WriteString("\n### Instruktionen:\n")
+	sb.WriteString("- Beginne mit der Frage: Reicht der lokale Kontext aus, ist er unsicher oder fehlt er?\n")
+	sb.WriteString("- Wenn der lokale Kontext ausreicht, antworte direkt und sage knapp, dass die Antwort auf der Wissensbasis beruht.\n")
+	sb.WriteString("- Wenn Informationen fehlen oder potenziell veraltet sind, nutze genau ein passendes Tool.\n")
+	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`; fuer aktuelle Ereignisse `news`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
+	sb.WriteString("- Behaupte nie mehr Sicherheit, als der Kontext hergibt.\n")
+	sb.WriteString("- Erfinde keine Kontaktinformationen, URLs, APIs, Produktdetails, Roadmaps oder technische Interna.\n")
+	sb.WriteString("- Wenn ein Tool benutzt wurde, liefere danach genau eine ueberarbeitete finale Antwort, nicht zwei Versionen.\n")
+	sb.WriteString("- Trenne lokale Wissensbasis und externe Recherche explizit, wenn beide verwendet wurden.\n")
+	sb.WriteString("- Wenn externe Recherche wenig hergibt, sage das offen statt Luecken zu fuellen.\n")
+	if deep {
+		sb.WriteString("- Im Deep-Research-Modus strukturiere die Antwort in: Kurzfazit, Befunde, Unsicherheiten, Schlussfolgerung.\n")
+		sb.WriteString("- Priorisiere Genauigkeit und Einordnung vor Vollstaendigkeit.\n")
+	} else {
+		sb.WriteString("- Standardmodus: antworte kompakt, konkret und mit hoher Informationsdichte.\n")
+	}
+	return sb.String()
+}
+
+// buildToolSystemPrompt constructs the system prompt describing
+// available tools and how the assistant should emit tool requests.
+func buildToolSystemPrompt(ctxText string, tools []toolDef, deep bool) string {
+	return buildAssistantPolicyPrompt() +
+		buildContextPrompt(ctxText) +
+		buildToolingPrompt(tools) +
+		buildResponseInstructionsPrompt(deep)
 }
 
 // ── Debug / Search models ─────────────────────────────────────────
@@ -2217,18 +2389,26 @@ func refineSearchQuery(q string) string {
 // least an "action" key (ANSWER_DIRECT or RETRIEVE_MORE) and optional
 // parameters (k, threshold, query).
 func (r *ragSystem) analyzeQuestion(question, summary string) (map[string]any, error) {
-	system := `You are an analysis agent. Given a user question and a short summary of retrieval candidates, decide whether the assistant can answer directly or needs more retrieval.
+	system := `You are a retrieval-planning agent for a RAG assistant.
 
-Return ONLY a single JSON object and nothing else (no explanation, no extra text). Examples:
-	{"action":"ANSWER_DIRECT"}
-	{"action":"RETRIEVE_MORE","k":10,"threshold":0.6,"query":"Ettling"}
+Task:
+- Decide whether the current retrieval candidates are already sufficient.
+- Prefer ANSWER_DIRECT only if the likely answer can be grounded with good confidence from the shown candidates.
+- Prefer RETRIEVE_MORE if the question is broad, ambiguous, entity-specific but under-supported, or likely needs fresher/more precise context.
+- If useful, suggest a shorter and more retrieval-friendly query.
 
-Deutsch:
-Du bist ein Analyse-Agent. Gegeben eine Nutzerfrage und eine kurze Zusammenfassung der Retrieval-Kandidaten entscheide, ob der Assistent direkt antworten soll oder zusätzliche Kontextsuche benötigt.
+Rules:
+- Return ONLY one JSON object.
+- No markdown, no prose, no code fences.
+- Allowed actions: "ANSWER_DIRECT", "RETRIEVE_MORE".
+- Use conservative judgment. If uncertain, choose RETRIEVE_MORE.
+- Keep k between 4 and 24.
+- Keep threshold between 0.45 and 0.9.
 
-Gib AUSSCHLIESSLICH ein einzelnes JSON-Objekt zurück (keine Erklärungen oder zusätzlichen Text). Beispiele:
-	{"action":"ANSWER_DIRECT"}
-	{"action":"RETRIEVE_MORE","k":10,"threshold":0.6,"query":"Ettling"}
+Examples:
+{"action":"ANSWER_DIRECT"}
+{"action":"RETRIEVE_MORE","k":8,"threshold":0.6,"query":"Karte.Bayern"}
+{"action":"RETRIEVE_MORE","k":12,"threshold":0.55}
 `
 	user := fmt.Sprintf("Question: %s\n\nCandidates: %s", question, summary)
 	msgs := []chatMsg{{Role: "user", Content: user}}
@@ -2331,9 +2511,10 @@ func (r *ragSystem) deleteSource(article string) error {
 
 // chatMessage represents a single message in a conversation timeline.
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Time    string `json:"time"`
+	Role     string `json:"role"`
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"`
+	Time     string `json:"time"`
 	// Model records which model was used to produce this message (assistant-only).
 	Model     string            `json:"model,omitempty"`
 	ModelMeta map[string]string `json:"model_meta,omitempty"`
@@ -2412,7 +2593,7 @@ func (cs *chatStore) addMessage(id, role, content string) {
 }
 
 // addMessageWithMeta appends a message and also records model metadata for assistant messages.
-func (cs *chatStore) addMessageWithMeta(id, role, content, model string, modelMeta map[string]string) {
+func (cs *chatStore) addMessageWithMeta(id, role, content, thinking, model string, modelMeta map[string]string) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	c, ok := cs.chats[id]
@@ -2420,7 +2601,7 @@ func (cs *chatStore) addMessageWithMeta(id, role, content, model string, modelMe
 		return
 	}
 	now := time.Now().Format(time.RFC3339)
-	msg := chatMessage{Role: role, Content: content, Time: now}
+	msg := chatMessage{Role: role, Content: content, Thinking: thinking, Time: now}
 	if model != "" {
 		msg.Model = model
 	}
@@ -3305,7 +3486,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			flusher.Flush()
 			s = settings.get()
 			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
-			chats.addMessageWithMeta(conv.ID, "assistant", answer.String(), s.ChatModel, modelMeta)
+			chats.addMessageWithMeta(conv.ID, "assistant", answer.String(), "", s.ChatModel, modelMeta)
 			return
 		}
 
@@ -3315,12 +3496,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		allTools := append(customAPIs.allTools(), modules.enabledTools()...)
 		// build system prompt; in deep mode add research instructions
 		var systemPrompt string
-		if req.Deep {
-			base := buildToolSystemPrompt(ctxText, allTools)
-			systemPrompt = base + "\n--- DEEP-RESEARCH MODE ---\nGib eine strukturierte, gut durchdachte Antwort basierend auf dem Kontext:\n1) Kurze Zusammenfassung der Erkenntnisse\n2) Quellenangaben: relevante Chunks und Artikel\n3) Konfidenzlevel und alternative Interpretationen\n4) Finale prägnante Antwort\nZeige keine interne Logik; nur Analyse und Ergebnis.\n"
-		} else {
-			systemPrompt = buildToolSystemPrompt(ctxText, allTools)
-		}
+		systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep)
 		if personaPrompt != "" {
 			systemPrompt = personaPrompt + "\n\n" + systemPrompt
 		}
@@ -3331,7 +3507,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			// Truncate context to first 5000 chars as fallback
 			if len(ctxText) > 5000 {
 				ctxText = ctxText[:5000] + "\n[... Kontext gekürzt ...]"
-				systemPrompt = buildToolSystemPrompt(ctxText, allTools)
+				systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep)
 			}
 		}
 		debugBase.SystemPromptChars = len(systemPrompt)
@@ -3356,9 +3532,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			flusher.Flush()
 		}
 
+		var thinkBuf bytes.Buffer
 		streamErr := make(chan error, 1)
 		go func() {
-			err := rag.getLM().chatStream(context.Background(), systemPrompt, msgs, pw)
+			err := rag.getLM().chatStreamDetailed(context.Background(), systemPrompt, msgs, pw, &thinkBuf)
 			streamErr <- err
 			if err != nil {
 				pw.CloseWithError(err)
@@ -3388,7 +3565,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			flusher.Flush()
 			s = settings.get()
 			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
-			chats.addMessageWithMeta(conv.ID, "assistant", "Fehler im LLM-Stream: "+serr.Error(), s.ChatModel, modelMeta)
+			chats.addMessageWithMeta(conv.ID, "assistant", "Fehler im LLM-Stream: "+serr.Error(), "", s.ChatModel, modelMeta)
 			return
 		}
 
@@ -3404,16 +3581,21 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			s = settings.get()
 			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
 			if answer.Len() == 0 {
-				chats.addMessageWithMeta(conv.ID, "assistant", "LLM-Fehler: "+err.Error(), s.ChatModel, modelMeta)
+				chats.addMessageWithMeta(conv.ID, "assistant", "LLM-Fehler: "+err.Error(), "", s.ChatModel, modelMeta)
 			} else {
-				answerStr := answer.String()
+				answerStr := stripInternalThinking(answer.String())
+				thinkingStr := strings.TrimSpace(thinkBuf.String())
 				if tr, ok := extractToolRequest(answerStr); ok {
 					trJSON, _ := json.Marshal(tr)
 					fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
 					flusher.Flush()
 					answerStr = stripToolRequest(answerStr)
 				}
-				chats.addMessageWithMeta(conv.ID, "assistant", answerStr, s.ChatModel, modelMeta)
+				if thinkingStr != "" {
+					fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", mustJSON(thinkingStr))
+					flusher.Flush()
+				}
+				chats.addMessageWithMeta(conv.ID, "assistant", answerStr, thinkingStr, s.ChatModel, modelMeta)
 			}
 			return
 		}
@@ -3423,7 +3605,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		// Tool request marker handling
-		answerStr := answer.String()
+		answerStr := stripInternalThinking(answer.String())
+		thinkingStr := strings.TrimSpace(thinkBuf.String())
 		if tr, ok := extractToolRequest(answerStr); ok {
 			trJSON, _ := json.Marshal(tr)
 			// Notify frontend that a tool was requested
@@ -3458,18 +3641,18 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 						log.Printf("REQ %s: tool result added to RAG: %s (%d chunks)", reqID, source, len(chunks))
 					}
 
-					// Continue the assistant answer by asking the LM to incorporate the tool result
-					// Build continuation messages: include previous assistant partial answer and the tool output as a user hint
+					// Ask the model to rewrite the full answer from the tool result instead of appending a duplicate continuation.
+					cleanAnswer := stripToolRequest(answerStr)
 					contMsgs := make([]chatMsg, 0, len(msgs)+2)
 					contMsgs = append(contMsgs, msgs...)
-					// previous assistant partial
-					contMsgs = append(contMsgs, chatMsg{Role: "assistant", Content: answerStr})
-					contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Tool %s returned:\n%s\n\nPlease continue the answer using this information.", tr.Tool, text)})
+					contMsgs = append(contMsgs, chatMsg{Role: "assistant", Content: cleanAnswer})
+					contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Ich habe das Tool %s ausgefuehrt.\n\nTool-Ergebnis:\n%s\n\nErstelle jetzt eine einzige ueberarbeitete finale Antwort auf Deutsch.\n\nZiel:\n- Beste moegliche Endfassung fuer den Nutzer.\n\nRegeln:\n- Nicht wiederholen oder anhaengen, sondern komplett ueberarbeiten.\n- Nutze lokale Wissensbasis und Tool-Ergebnis nur in dem Mass, wie sie belastbar sind.\n- Trenne klar zwischen lokalem Wissen und externer Recherche, wenn beides vorkommt.\n- Markiere unsichere, duenn belegte oder moeglicherweise veraltete Aussagen vorsichtig.\n- Wenn die Recherche wenig hergibt, sage das offen.\n- Schreibe kompakt, konkret und ohne Marketing-Sprache.\n- Keine TOOL_REQUEST-Marker und keine Meta-Erklaerungen ueber den internen Ablauf.\n", tr.Tool, text)})
 
 					// Stream continuation
 					pr2, pw2 := io.Pipe()
+					var thinkBuf2 bytes.Buffer
 					go func() {
-						err := rag.getLM().chatStream(context.Background(), systemPrompt, contMsgs, pw2)
+						err := rag.getLM().chatStreamDetailed(context.Background(), systemPrompt, contMsgs, pw2, &thinkBuf2)
 						if err != nil {
 							pw2.CloseWithError(err)
 							log.Printf("REQ %s: LM continuation failed: %v", reqID, err)
@@ -3489,7 +3672,17 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 					if scErr := sc2.Err(); scErr != nil {
 						log.Printf("REQ %s: continuation scanner error: %v", reqID, scErr)
 					}
-					answerStr = strings.TrimSpace(strings.TrimSpace(answerStr) + "\n" + strings.TrimSpace(contAnswer.String()))
+					if rewritten := stripInternalThinking(contAnswer.String()); rewritten != "" {
+						answerStr = rewritten
+					} else {
+						answerStr = cleanAnswer
+					}
+					if strings.TrimSpace(thinkBuf2.String()) != "" {
+						if thinkingStr != "" {
+							thinkingStr += "\n\n"
+						}
+						thinkingStr += strings.TrimSpace(thinkBuf2.String())
+					}
 					// finished continuation
 					log.Printf("REQ %s: tool-driven continuation complete", reqID)
 				}
@@ -3509,7 +3702,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		log.Printf("REQ %s: Chat response complete: %d chars, tokens_streamed=%d", reqID, len(answerStr), tokenCount)
 		s = settings.get()
 		modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
-		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, s.ChatModel, modelMeta)
+		if thinkingStr != "" {
+			fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", mustJSON(thinkingStr))
+			flusher.Flush()
+		}
+		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, thinkingStr, s.ChatModel, modelMeta)
 	})
 
 	// GET /api/tools — list available tools
