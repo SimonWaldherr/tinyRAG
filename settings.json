@@ -1,20 +1,101 @@
 {
   "version": 1,
   "base_url": "http://localhost:1234",
+  "chat_base": "http://localhost:1234",
+  "embed_base": "http://localhost:1234",
   "chat_model": "mistralai/ministral-3-14b-reasoning",
   "embed_model": "text-embedding-nomic-embed-text-v1.5",
+  "openai_api_key": "sk-proj-...",
   "lang": "de",
-  "theme": "monokai",
+  "theme": "light",
   "chunk_size": 800,
   "k": 5,
   "custom_apis": [],
+  "modules": [
+    {
+      "id": "module-sql",
+      "name": "SQL Connector",
+      "kind": "sql",
+      "description": "Fragt SQLite, MariaDB oder MSSQL ueber deren CLI-Clients ab und kann Resultate als RAG-Quelle ingestieren.",
+      "enabled": false,
+      "config": {
+        "backend": "sqlite",
+        "mariadb_bin": "mysql",
+        "mariadb_db": "example",
+        "mariadb_host": "127.0.0.1",
+        "mariadb_pass": "",
+        "mariadb_port": "3306",
+        "mariadb_user": "root",
+        "mssql_bin": "sqlcmd",
+        "mssql_db": "master",
+        "mssql_host": "127.0.0.1",
+        "mssql_pass": "",
+        "mssql_port": "1433",
+        "mssql_user": "sa",
+        "query": "SELECT 'tinyRAG module ready' AS status;",
+        "sqlite_bin": "sqlite3",
+        "sqlite_path": "./example.db"
+      }
+    },
+    {
+      "id": "module-mail",
+      "name": "Mail Server Connector",
+      "kind": "mail",
+      "description": "Liest aktuelle E-Mails ueber POP3/POP3S ein und wandelt Betreff, Header und Text-Body in RAG-faehige Dokumente um.",
+      "enabled": false,
+      "config": {
+        "host": "mail.example.com",
+        "max_messages": "5",
+        "password": "",
+        "port": "995",
+        "protocol": "pop3s",
+        "username": "demo@example.com"
+      }
+    },
+    {
+      "id": "module-http-folder",
+      "name": "HTTP Folder Bridge",
+      "kind": "http-folder",
+      "description": "Ermoeglicht HTTP Upload/Download in einen lokalen Ordner und kann Dateien direkt in die Wissensbasis uebernehmen.",
+      "enabled": true,
+      "config": {
+        "allow_subfolders": "true",
+        "default_list_path": ".",
+        "download_ingest": "false",
+        "ingest_on_upload": "true",
+        "root_dir": "./module-files"
+      }
+    }
+  ],
   "personas": [
     {
       "id": "persona-default",
       "name": "Standard",
       "prompt": ""
+    },
+    {
+      "id": "persona-1771259870893262000",
+      "name": "Formal",
+      "prompt": "You are a formal assistant. Use a polite, professional tone and concise sentences."
+    },
+    {
+      "id": "persona-1771259870898766000",
+      "name": "Friendly",
+      "prompt": "You are friendly and approachable. Use an informal tone and give helpful examples where useful."
+    },
+    {
+      "id": "persona-1771259870902052000",
+      "name": "Expert",
+      "prompt": "You are an expert in the relevant field. Provide detailed, technical answers and cite assumptions when needed."
+    },
+    {
+      "id": "persona-1771259870904138000",
+      "name": "Concise",
+      "prompt": "Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity."
     }
   ],
   "allow_code_exec": false,
-  "allow_nanogo": false
+  "allow_nanogo": false,
+  "allow_shell_exec": false,
+  "allow_tinygo": false
 }

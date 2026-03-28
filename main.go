@@ -33,6 +33,21 @@ import (
 	smallr "simonwaldherr.de/go/smallr"
 )
 
+// --- Optimizations: caches and pools for performance-sensitive subsystems
+var (
+	// smallR context pool to reduce allocations when evaluating many expressions
+	smallRPool sync.Pool
+
+	// nanoGo concurrency limiter: restrict simultaneous interpreter instances
+	// to a small number to avoid CPU/memory spikes from many concurrent runs.
+	nanoGoSem = make(chan struct{}, 1) // allow 1 concurrent nanoGo execution by default
+)
+
+func init() {
+	// smallR pool: create a new context on demand
+	smallRPool.New = func() any { return smallr.NewContext() }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Embedded frontend assets
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,22 +68,35 @@ var appJS string
 // appSettings holds persisted configuration for the application,
 // including model settings, chunking options, custom APIs and personas.
 type appSettings struct {
-	Version    int         `json:"version"`
-	BaseURL    string      `json:"base_url"`    // without trailing /v1
-	ChatModel  string      `json:"chat_model"`  // OpenAI compatible model ID
-	EmbedModel string      `json:"embed_model"` // OpenAI compatible model ID
-	Lang       string      `json:"lang"`
-	Theme      string      `json:"theme"`
-	ChunkSize  int         `json:"chunk_size"`
-	K          int         `json:"k"`
-	CustomAPIs []customAPI `json:"custom_apis"`
-	Personas   []persona   `json:"personas"`
+	Version    int    `json:"version"`
+	BaseURL    string `json:"base_url"`    // without trailing /v1
+	ChatBase   string `json:"chat_base"`   // optional per-model base URL (overrides BaseURL for chat)
+	EmbedBase  string `json:"embed_base"`  // optional per-model base URL (overrides BaseURL for embeddings)
+	ChatModel  string `json:"chat_model"`  // OpenAI compatible model ID
+	EmbedModel string `json:"embed_model"` // OpenAI compatible model ID
+	// OpenAIKey stores an OpenAI API key if the user set one in the UI.
+	// This is persisted to settings.json. It will not be returned verbatim
+	// over the HTTP API; only presence is exposed to the frontend.
+	OpenAIKey  string         `json:"openai_api_key"`
+	Lang       string         `json:"lang"`
+	Theme      string         `json:"theme"`
+	ChunkSize  int            `json:"chunk_size"`
+	K          int            `json:"k"`
+	CustomAPIs []customAPI    `json:"custom_apis"`
+	Modules    []moduleConfig `json:"modules"`
+	Personas   []persona      `json:"personas"`
 	// AllowCodeExec must be explicitly enabled to allow running user
 	// provided code. Defaults to false for safety.
 	AllowCodeExec bool `json:"allow_code_exec"`
 	// AllowNanoGo enables execution of untrusted Go source via the
 	// embedded nanoGo interpreter. Default: false.
 	AllowNanoGo bool `json:"allow_nanogo"`
+	// AllowShellExec enables execution of shell commands on the server.
+	// Default: false for security reasons.
+	AllowShellExec bool `json:"allow_shell_exec"`
+	// AllowTinyGo enables compilation and execution of TinyGo programs.
+	// Default: false for security reasons.
+	AllowTinyGo bool `json:"allow_tinygo"`
 }
 
 // settingsStore provides a thread-safe wrapper around persisted
@@ -78,6 +106,9 @@ type settingsStore struct {
 	path string
 	s    appSettings
 }
+
+// package-level settings store (initialized in main)
+var settings *settingsStore
 
 // normalizeBaseURL trims and normalizes an LLM base URL, removing
 // trailing slashes and an optional "/v1" suffix.
@@ -95,16 +126,22 @@ func normalizeBaseURL(raw string) string {
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
 	return appSettings{
-		Version:       1,
-		BaseURL:       normalizeBaseURL(urlFlag),
-		ChatModel:     chatModelFlag,
-		EmbedModel:    embedModelFlag,
-		Lang:          lang,
-		ChunkSize:     chunkSize,
-		K:             k,
-		CustomAPIs:    []customAPI{},
-		AllowCodeExec: false,
-		AllowNanoGo:   false,
+		Version:        1,
+		BaseURL:        normalizeBaseURL(urlFlag),
+		ChatBase:       normalizeBaseURL(urlFlag),
+		EmbedBase:      normalizeBaseURL(urlFlag),
+		ChatModel:      chatModelFlag,
+		EmbedModel:     embedModelFlag,
+		OpenAIKey:      "",
+		Lang:           lang,
+		ChunkSize:      chunkSize,
+		K:              k,
+		CustomAPIs:     []customAPI{},
+		Modules:        defaultModules(),
+		AllowCodeExec:  false,
+		AllowNanoGo:    false,
+		AllowShellExec: false,
+		AllowTinyGo:    false,
 	}
 }
 
@@ -117,7 +154,16 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 		if os.IsNotExist(err) {
 			ss.s = defaults
 			if len(ss.s.Personas) == 0 {
-				ss.s.Personas = []persona{{ID: "persona-default", Name: "Standard", Prompt: ""}}
+				ss.s.Personas = []persona{
+					{ID: "persona-default", Name: "Standard", Prompt: ""},
+					{ID: "persona-formal", Name: "Formal", Prompt: "You are a formal assistant. Use a polite, professional tone and concise sentences."},
+					{ID: "persona-friendly", Name: "Friendly", Prompt: "You are friendly and approachable. Use an informal tone and give helpful examples where useful."},
+					{ID: "persona-expert", Name: "Expert", Prompt: "You are an expert in the relevant field. Provide detailed, technical answers and cite assumptions when needed."},
+					{ID: "persona-concise", Name: "Concise", Prompt: "Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity."},
+				}
+			}
+			if len(ss.s.Modules) == 0 {
+				ss.s.Modules = defaultModules()
 			}
 			if err := ss.saveLocked(); err != nil {
 				return nil, err
@@ -143,9 +189,27 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 		ss.s.K = defaults.K
 	}
 	ss.s.BaseURL = normalizeBaseURL(ss.s.BaseURL)
-	if len(ss.s.Personas) == 0 {
-		ss.s.Personas = []persona{{ID: "persona-default", Name: "Standard", Prompt: ""}}
+	if ss.s.ChatBase == "" {
+		ss.s.ChatBase = ss.s.BaseURL
+	} else {
+		ss.s.ChatBase = normalizeBaseURL(ss.s.ChatBase)
 	}
+	if ss.s.EmbedBase == "" {
+		ss.s.EmbedBase = ss.s.BaseURL
+	} else {
+		ss.s.EmbedBase = normalizeBaseURL(ss.s.EmbedBase)
+	}
+	// OpenAIKey may be empty; keep as-is (don't normalize)
+	if len(ss.s.Personas) == 0 {
+		ss.s.Personas = []persona{
+			{ID: "persona-default", Name: "Standard", Prompt: ""},
+			{ID: "persona-formal", Name: "Formal", Prompt: "You are a formal assistant. Use a polite, professional tone and concise sentences."},
+			{ID: "persona-friendly", Name: "Friendly", Prompt: "You are friendly and approachable. Use an informal tone and give helpful examples where useful."},
+			{ID: "persona-expert", Name: "Expert", Prompt: "You are an expert in the relevant field. Provide detailed, technical answers and cite assumptions when needed."},
+			{ID: "persona-concise", Name: "Concise", Prompt: "Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity."},
+		}
+	}
+	ss.s.Modules = normalizeModules(ss.s.Modules)
 	_ = ss.save() // best-effort normalize on disk
 	return ss, nil
 }
@@ -498,16 +562,41 @@ type lmClient struct {
 	base       string
 	embedModel string
 	chatModel  string
+	apiKey     string
 	http       *http.Client
+}
+
+// lmProvider abstracts an LLM client used for embeddings and chat.
+type lmProvider interface {
+	embed(texts []string) ([][]float64, error)
+	embedSingle(text string) ([]float64, error)
+	chatStream(ctx context.Context, system string, msgs []chatMsg, w io.Writer) error
+}
+
+// compositeLM allows routing embeddings and chat to different backends.
+type compositeLM struct {
+	embedClient lmProvider
+	chatClient  lmProvider
+}
+
+func (c *compositeLM) embed(texts []string) ([][]float64, error) {
+	return c.embedClient.embed(texts)
+}
+func (c *compositeLM) embedSingle(text string) ([]float64, error) {
+	return c.embedClient.embedSingle(text)
+}
+func (c *compositeLM) chatStream(ctx context.Context, system string, msgs []chatMsg, w io.Writer) error {
+	return c.chatClient.chatStream(ctx, system, msgs, w)
 }
 
 // newLMClient constructs an `lmClient` configured for the given
 // base URL and model names.
-func newLMClient(base, embedModel, chatModel string) *lmClient {
+func newLMClient(base, embedModel, chatModel, apiKey string) *lmClient {
 	return &lmClient{
 		base:       normalizeBaseURL(base),
 		embedModel: embedModel,
 		chatModel:  chatModel,
+		apiKey:     apiKey,
 		http:       &http.Client{Timeout: 120 * time.Second},
 	}
 }
@@ -515,7 +604,14 @@ func newLMClient(base, embedModel, chatModel string) *lmClient {
 // ping checks the LLM endpoint for reachability by requesting
 // the list of available models.
 func (c *lmClient) ping() error {
-	resp, err := c.http.Get(c.base + "/v1/models")
+	req, err := http.NewRequest("GET", c.base+"/v1/models", nil)
+	if err != nil {
+		return err
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
@@ -543,6 +639,9 @@ func (c *lmClient) listModels(baseOverride string) ([]string, error) {
 	req, err := http.NewRequest("GET", base+"/v1/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create models request: %w", err)
+	}
+	if c.apiKey != "" && strings.Contains(base, "api.openai.com") {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
@@ -590,7 +689,15 @@ func (c *lmClient) embed(texts []string) ([][]float64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
 	}
-	resp, err := c.http.Post(c.base+"/v1/embeddings", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", c.base+"/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" && strings.Contains(c.base, "api.openai.com") {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -654,6 +761,9 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" && strings.Contains(c.base, "api.openai.com") {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("chat request failed: %w", err)
@@ -766,7 +876,7 @@ type ragSystem struct {
 
 	// Settings-sensitive runtime state
 	lmMu sync.RWMutex
-	lm   *lmClient
+	lm   lmProvider
 
 	// DB mutex (tinySQL isn't designed for heavy concurrent writes)
 	dbMu sync.Mutex
@@ -778,7 +888,7 @@ type ragSystem struct {
 
 // newRAG initializes a new `ragSystem` backed by a tinySQL DB using
 // the provided storage mode and memory constraints.
-func newRAG(lm *lmClient, k int, dbPath string, storageMode tinysql.StorageMode, maxMemMB int64) (*ragSystem, error) {
+func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode, maxMemMB int64) (*ragSystem, error) {
 	var db *tinysql.DB
 	var err error
 
@@ -881,17 +991,27 @@ func newRAG(lm *lmClient, k int, dbPath string, storageMode tinysql.StorageMode,
 
 // setLM atomically replaces the runtime `lmClient` used for embeddings
 // and chat requests.
-func (r *ragSystem) setLM(lm *lmClient) {
+func (r *ragSystem) setLM(lm lmProvider) {
 	r.lmMu.Lock()
 	defer r.lmMu.Unlock()
 	r.lm = lm
 }
 
 // getLM returns the currently configured `lmClient`.
-func (r *ragSystem) getLM() *lmClient {
+func (r *ragSystem) getLM() lmProvider {
 	r.lmMu.RLock()
 	defer r.lmMu.RUnlock()
 	return r.lm
+}
+
+// getActiveEmbedModel returns the currently configured embedding model name
+// used for newly created chunks or for retrieval filtering.
+func (r *ragSystem) getActiveEmbedModel() string {
+	s := settings.get()
+	if s.EmbedModel != "" {
+		return s.EmbedModel
+	}
+	return ""
 }
 
 // save flushes the underlying database to disk or performs a sync
@@ -916,7 +1036,7 @@ func (r *ragSystem) save() error {
 
 // init creates required DB tables and initializes runtime counters.
 func (r *ragSystem) init() error {
-	q := "CREATE TABLE IF NOT EXISTS chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embedding VECTOR)"
+	q := "CREATE TABLE IF NOT EXISTS chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embedding VECTOR, embed_model TEXT)"
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return err
@@ -926,6 +1046,10 @@ func (r *ragSystem) init() error {
 	_, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
 	if err != nil {
 		return err
+	}
+	// Attempt to add embed_model column for older DBs (ignore errors)
+	if alterStmt, err := tinysql.ParseSQL("ALTER TABLE chunks ADD COLUMN embed_model TEXT"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
 	}
 	// Initialize nextID from MAX(id)+1
 	r.idMu.Lock()
@@ -972,7 +1096,7 @@ func (r *ragSystem) allocIDs(n int) int {
 
 // addChunks embeds and stores `chunks` for the given `article` into
 // the database, performing batched inserts.
-func (r *ragSystem) addChunks(article string, chunks []string) error {
+func (r *ragSystem) addChunks(article string, chunks []string, embedModel string) error {
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -1022,23 +1146,23 @@ func (r *ragSystem) addChunks(article string, chunks []string) error {
 		// Allocate IDs for this batch
 		startID := r.allocIDs(len(batch))
 
-		// Insert
-		r.dbMu.Lock()
+		// Bulk insert: construct a single multi-row INSERT statement for the batch
+		var vals []string
 		for j, v := range vecs {
 			idx := i + j
-			q := fmt.Sprintf(
-				"INSERT INTO chunks VALUES (%d, '%s', %d, '%s', VEC_FROM_JSON('%s'))",
-				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), vecJSON(v),
-			)
-			stmt, err := tinysql.ParseSQL(q)
-			if err != nil {
-				r.dbMu.Unlock()
-				return fmt.Errorf("parse insert %d: %w", idx, err)
-			}
-			if _, err := tinysql.Execute(context.Background(), r.db, "default", stmt); err != nil {
-				r.dbMu.Unlock()
-				return fmt.Errorf("exec insert %d: %w", idx, err)
-			}
+			tup := fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s')",
+				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), vecJSON(v), escapeSQ(embedModel))
+			vals = append(vals, tup)
+		}
+		q := "INSERT INTO chunks VALUES " + strings.Join(vals, ",")
+		stmt, err := tinysql.ParseSQL(q)
+		if err != nil {
+			return fmt.Errorf("parse bulk insert: %w", err)
+		}
+		r.dbMu.Lock()
+		if _, err := tinysql.Execute(context.Background(), r.db, "default", stmt); err != nil {
+			r.dbMu.Unlock()
+			return fmt.Errorf("exec bulk insert: %w", err)
 		}
 		r.dbMu.Unlock()
 
@@ -1084,57 +1208,117 @@ type searchResult struct {
 	Content string  `json:"content"`
 }
 
+type retrievalHit struct {
+	Article  string
+	ChunkIdx int
+	Content  string
+	Score    float64
+}
+
+type chunkKey struct {
+	article  string
+	chunkIdx int
+}
+
 // searchJSON performs an embedding-based vector search for `query`,
 // returning up to `k` primary hits along with neighbor chunks.
 func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
-	qvec, err := r.getLM().embedSingle(query)
+	candidates, _, _, err := r.searchCandidates(query, k)
 	if err != nil {
 		return nil, err
 	}
-	// fetch a larger candidate set, we'll filter by score>0.6 and pick up to k primary hits
+
+	results := make([]searchResult, 0, k*3)
+	seen := make(map[chunkKey]bool)
+	primaryCount := 0
+	for _, h := range candidates {
+		if primaryCount >= k {
+			break
+		}
+		if h.Score <= 0.6 {
+			// skip low-score primary candidates
+			continue
+		}
+		key := chunkKey{article: h.Article, chunkIdx: h.ChunkIdx}
+		if seen[key] {
+			continue
+		}
+		// add previous neighbor if exists and not seen
+		if h.ChunkIdx > 0 {
+			pkey := chunkKey{article: h.Article, chunkIdx: h.ChunkIdx - 1}
+			if !seen[pkey] {
+				if prevContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx-1); ok {
+					results = append(results, searchResult{Score: -1, Content: prevContent})
+					seen[pkey] = true
+				}
+			}
+		}
+
+		// add primary hit
+		results = append(results, searchResult{Score: h.Score, Content: h.Content})
+		seen[key] = true
+		primaryCount++
+
+		// add next neighbor
+		nkey := chunkKey{article: h.Article, chunkIdx: h.ChunkIdx + 1}
+		if !seen[nkey] {
+			if nextContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx+1); ok {
+				results = append(results, searchResult{Score: -1, Content: nextContent})
+				seen[nkey] = true
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func candidateLimitForK(k int) int {
 	limit := 100
 	if k*3 > limit {
 		limit = k * 3
 	}
-	// Defensive cap to avoid excessively large queries
 	const maxLimit = 1000
 	if limit > maxLimit {
 		limit = maxLimit
 	}
+	return limit
+}
+
+func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64, int64, error) {
+	t0 := time.Now()
+	qvec, err := r.getLM().embedSingle(query)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	embedMs := time.Since(t0).Milliseconds()
+
 	q := fmt.Sprintf(
-		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks ORDER BY score DESC LIMIT %d",
-		vecJSON(qvec), limit,
+		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' ORDER BY score DESC LIMIT %d",
+		vecJSON(qvec), escapeSQ(r.getActiveEmbedModel()), candidateLimitForK(k),
 	)
+
+	t1 := time.Now()
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
-		return nil, err
+		return nil, embedMs, 0, err
 	}
-
 	r.dbMu.Lock()
 	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
 	r.dbMu.Unlock()
-
 	if err != nil {
-		return nil, err
+		return nil, embedMs, 0, err
 	}
-	// We'll collect primary hits (score>0.6) up to k, and include immediate neighbors (prev/next)
-	type hit struct {
-		article  string
-		chunkIdx int
-		content  string
-		score    float64
-	}
-	var candidates = make([]hit, 0, len(rs.Rows))
+	searchMs := time.Since(t1).Milliseconds()
+
+	hits := make([]retrievalHit, 0, len(rs.Rows))
 	for _, row := range rs.Rows {
-		c, ok1 := tinysql.GetVal(row, "content")
+		c, ok := tinysql.GetVal(row, "content")
 		art, _ := tinysql.GetVal(row, "article")
 		idxVal, _ := tinysql.GetVal(row, "chunk_idx")
 		scoreVal, _ := tinysql.GetVal(row, "score")
-		if !ok1 || art == nil || idxVal == nil || scoreVal == nil {
+		if !ok || art == nil || idxVal == nil || scoreVal == nil {
 			continue
 		}
-		artStr := fmt.Sprint(art)
-		cStr := fmt.Sprint(c)
 		idx := 0
 		switch iv := idxVal.(type) {
 		case int:
@@ -1144,63 +1328,105 @@ func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
 		case float64:
 			idx = int(iv)
 		}
-		s := 0.0
+		score := 0.0
 		switch sv := scoreVal.(type) {
 		case float64:
-			s = sv
+			score = sv
 		case int:
-			s = float64(sv)
+			score = float64(sv)
+		case int64:
+			score = float64(sv)
 		}
-		candidates = append(candidates, hit{article: artStr, chunkIdx: idx, content: cStr, score: s})
+		hits = append(hits, retrievalHit{
+			Article:  fmt.Sprint(art),
+			ChunkIdx: idx,
+			Content:  fmt.Sprint(c),
+			Score:    score,
+		})
+	}
+	return hits, embedMs, searchMs, nil
+}
+
+func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64) (string, *debugInfo, bool) {
+	q := fmt.Sprintf("SELECT article, chunk_idx, content FROM chunks WHERE LOWER(article) = LOWER('%s') ORDER BY chunk_idx", escapeSQ(article))
+	stmt, err := tinysql.ParseSQL(q)
+	if err != nil {
+		return "", nil, false
+	}
+	r.dbMu.Lock()
+	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
+	r.dbMu.Unlock()
+	if err != nil || rs == nil || len(rs.Rows) == 0 {
+		return "", nil, false
 	}
 
-	// preallocate expected result size (primary + neighbors)
-	results := make([]searchResult, 0, k*3)
-	type seenKey struct {
-		article string
-		idx     int
-	}
-	seen := make(map[seenKey]bool)
-	primaryCount := 0
-	for _, h := range candidates {
-		if primaryCount >= k {
-			break
-		}
-		if h.score <= 0.6 {
-			// skip low-score primary candidates
+	var parts []string
+	var dbgChunks []debugChunk
+	resolvedArticle := article
+	for _, row := range rs.Rows {
+		c, ok := tinysql.GetVal(row, "content")
+		if !ok {
 			continue
 		}
-		key := seenKey{article: h.article, idx: h.chunkIdx}
+		if artVal, ok := tinysql.GetVal(row, "article"); ok && fmt.Sprint(artVal) != "" {
+			resolvedArticle = fmt.Sprint(artVal)
+		}
+		idx := 0
+		if idxVal, ok := tinysql.GetVal(row, "chunk_idx"); ok {
+			switch iv := idxVal.(type) {
+			case int:
+				idx = iv
+			case int64:
+				idx = int(iv)
+			case float64:
+				idx = int(iv)
+			}
+		}
+		content := fmt.Sprint(c)
+		parts = append(parts, content)
+		if debug {
+			dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: content, Article: resolvedArticle, ChunkIdx: idx, IsNeighbor: false})
+		}
+	}
+	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: 0, TotalChunks: r.docCount(), UsedK: r.k, Decision: "article_specific"}
+	return strings.Join(parts, "\n---\n"), di, true
+}
+
+func (r *ragSystem) assembleContext(hits []retrievalHit, usedK int, decision string, embedMs, searchMs int64) (string, *debugInfo, error) {
+	seen := make(map[chunkKey]bool)
+	var contextParts []string
+	var dbgChunks []debugChunk
+
+	appendChunk := func(article string, idx int, content string, score float64, isNeighbor bool) {
+		key := chunkKey{article: article, chunkIdx: idx}
 		if seen[key] {
-			continue
+			return
 		}
-		// add previous neighbor if exists and not seen
-		if h.chunkIdx > 0 {
-			pkey := seenKey{article: h.article, idx: h.chunkIdx - 1}
-			if !seen[pkey] {
-				if prevContent, ok := r.fetchNeighborContent(h.article, h.chunkIdx-1); ok {
-					results = append(results, searchResult{Score: -1, Content: prevContent})
-					seen[pkey] = true
-				}
-			}
-		}
-
-		// add primary hit
-		results = append(results, searchResult{Score: h.score, Content: h.content})
 		seen[key] = true
-		primaryCount++
+		contextParts = append(contextParts, content)
+		dbgChunks = append(dbgChunks, debugChunk{
+			Score:      score,
+			Content:    content,
+			Article:    article,
+			ChunkIdx:   idx,
+			IsNeighbor: isNeighbor,
+		})
+	}
 
-		// add next neighbor
-		nkey := seenKey{article: h.article, idx: h.chunkIdx + 1}
-		if !seen[nkey] {
-			if nextContent, ok := r.fetchNeighborContent(h.article, h.chunkIdx+1); ok {
-				results = append(results, searchResult{Score: -1, Content: nextContent})
-				seen[nkey] = true
+	for _, h := range hits {
+		if h.ChunkIdx > 0 {
+			if prevContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx-1); ok {
+				appendChunk(h.Article, h.ChunkIdx-1, prevContent, -1, true)
 			}
+		}
+		appendChunk(h.Article, h.ChunkIdx, h.Content, h.Score, false)
+		if nextContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx+1); ok {
+			appendChunk(h.Article, h.ChunkIdx+1, nextContent, -1, true)
 		}
 	}
 
-	return results, nil
+	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCount(), UsedK: usedK, Decision: decision}
+	return strings.Join(contextParts, "\n---\n"), di, nil
 }
 
 // ── Tool / API definitions ─────────────────────────────────────────
@@ -1212,21 +1438,7 @@ type toolDef struct {
 	ParamHint   string `json:"param_hint"`
 }
 
-// persona represents a user-selectable assistant persona with a
-// pre-prompt that influences system behavior.
-type persona struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Prompt string `json:"prompt"`
-}
-
-// toolRequest is the structured marker the assistant can emit to
-// request that the frontend run a specific tool with a query.
-type toolRequest struct {
-	Tool  string `json:"tool"`
-	Query string `json:"query"`
-}
-
+// builtinTools defines the available built-in tools for the LLM assistant.
 var builtinTools = []toolDef{
 	{
 		Name:        "wikipedia",
@@ -1254,25 +1466,182 @@ var builtinTools = []toolDef{
 		ParamHint:   "Suchbegriff (z.B. 'Wetter Berlin heute')",
 	},
 	{
+		Name:        "news",
+		Description: "Sucht nach aktuellen Nachrichten zu einem Thema.",
+		ParamHint:   "Thema (z.B. 'Künstliche Intelligenz')",
+	},
+	{
 		Name:        "nanogo",
-		Description: "Führt sicheren, interpretierten Go-Code (nanoGo) aus. Muss in den Einstellungen aktiviert werden.",
+		Description: "Führt sicheren, interpretierten Go-Code (nanoGo) aus. Verwende dies für Logik, Datenverarbeitung oder wenn du Berechnungen brauchst, die über einfache Arithmetik hinausgehen.",
 		ParamHint:   "Go-Quelltext (kurze Snippets)",
 	},
 	{
-		Name:        "llm",
-		Description: "Führe einen direkten Prompt gegen das konfigurierte LLM aus (für kreative Antworten oder kurze Analysen).",
-		ParamHint:   "Prompt / Frage",
-	},
-	{
 		Name:        "calculate",
-		Description: "Führt eine sichere Berechnung aus (arithmetische Ausdrücke). Nutzt das eingebundene smallR für Evaluation.",
+		Description: "Führt eine sichere Berechnung aus (arithmetische Ausdrücke). Nutzt smallR für schnelle Evaluation.",
 		ParamHint:   "Expression (z.B. '3*2+(2^3)')",
 	},
 	{
-		Name:        "exec_code",
-		Description: "Führt (sichere) Code-Analysen oder -Ausführungen durch. Standardmäßig nur statische Prüfungen; Ausführung muss in den Einstellungen aktiviert werden.",
-		ParamHint:   "Quelltext (z.B. Go code)",
+		Name:        "shell",
+		Description: "Führt häufig verwendete Shell-Befehle auf dem Server aus (z.B. 'ls', 'cat', 'curl'). Muss explizit in den Einstellungen aktiviert werden. WARNUNG: Sicherheitsrisiko!",
+		ParamHint:   "Shell-Befehl (z.B. 'ls -la')",
 	},
+	{
+		Name:        "tinygo",
+		Description: "Alias für nanogo - interpretiert Go-Code direkt ohne Kompilierung. Sichere Sandbox-Umgebung für Go-Programme.",
+		ParamHint:   "Go-Quelltext (z.B. 'package main; func main() { ... }')",
+	},
+}
+
+// persona represents a user-selectable assistant persona with a
+// pre-prompt that influences system behavior.
+type persona struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Prompt string `json:"prompt"`
+}
+
+// toolRequest is the structured marker the assistant can emit to
+// request that the frontend run a specific tool with a query.
+type toolRequest struct {
+	Tool  string `json:"tool"`
+	Query string `json:"query"`
+}
+
+func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool {
+	switch tr.Tool {
+	case "calculate":
+		return true
+	case "nanogo", "exec_code":
+		return s.AllowNanoGo || s.AllowCodeExec
+	case "shell":
+		return s.AllowShellExec
+	case "tinygo":
+		return s.AllowTinyGo
+	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news":
+		return autoSearch
+	default:
+		if strings.HasPrefix(tr.Tool, "module:") {
+			return autoSearch
+		}
+		return autoSearch
+	}
+}
+
+func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore) (string, string, error) {
+	var text string
+	var source string
+	var fetchErr error
+
+	switch tr.Tool {
+	case "wikipedia":
+		source = "wiki:" + tr.Query
+		text, fetchErr = fetchWikipedia(tr.Query, s.Lang)
+	case "duckduckgo":
+		source = "ddg:" + tr.Query
+		text, fetchErr = fetchDuckDuckGo(tr.Query)
+	case "wiktionary":
+		source = "wikt:" + tr.Query
+		text, fetchErr = fetchWiktionary(tr.Query, s.Lang)
+	case "stackoverflow":
+		source = "so:" + tr.Query
+		text, fetchErr = fetchDuckDuckGo("site:stackoverflow.com " + tr.Query)
+	case "websearch":
+		source = "web:" + tr.Query
+		text, fetchErr = fetchDuckDuckGo(tr.Query)
+	case "news":
+		source = "news:" + tr.Query
+		text, fetchErr = fetchDuckDuckGo("news " + tr.Query)
+	case "llm":
+		var buf bytes.Buffer
+		msgs := []chatMsg{{Role: "user", Content: tr.Query}}
+		if err := rag.getLM().chatStream(context.Background(), "", msgs, &buf); err != nil {
+			return "", "", fmt.Errorf("LLM error: %w", err)
+		}
+		text = buf.String()
+		source = "llm:prompt"
+	case "calculate":
+		out, err := execSmallR(tr.Query)
+		if err != nil {
+			fetchErr = err
+		} else {
+			text = out
+			source = "calc:" + tr.Query
+		}
+	case "nanogo", "exec_code":
+		timeout := 5 * time.Second
+		out, err := RunSafe(tr.Query, timeout)
+		if err != nil {
+			fetchErr = err
+		} else {
+			text = out
+			if tr.Tool == "exec_code" {
+				source = "code:exec"
+			} else {
+				source = "nanogo:exec"
+			}
+		}
+	case "shell":
+		if !s.AllowShellExec {
+			fetchErr = fmt.Errorf("shell execution disabled in settings")
+		} else {
+			text, fetchErr = execShellCommand(tr.Query)
+			if fetchErr == nil {
+				source = "shell:exec"
+			}
+		}
+	case "tinygo":
+		if !s.AllowTinyGo {
+			fetchErr = fmt.Errorf("tinygo execution disabled in settings")
+		} else {
+			text, fetchErr = execTinyGoProgram(tr.Query)
+			if fetchErr == nil {
+				source = "tinygo:exec"
+			}
+		}
+	default:
+		if strings.HasPrefix(tr.Tool, "module:") && modules != nil {
+			modID := strings.TrimPrefix(tr.Tool, "module:")
+			mod, ok := modules.get(modID)
+			if !ok {
+				fetchErr = fmt.Errorf("unknown module: %s", modID)
+				break
+			}
+			if !mod.Enabled {
+				fetchErr = fmt.Errorf("module %s is disabled", modID)
+				break
+			}
+			action := "query"
+			limit := 0
+			arg := tr.Query
+			if mod.Kind == "mail" {
+				action = "query"
+				limit = parseIntString(tr.Query, 0)
+				arg = ""
+			} else if mod.Kind == "http-folder" {
+				action = "ingest"
+			}
+			res, err := executeModuleRun(mod, rag, settings.get().EmbedModel, action, arg, limit, true)
+			if err != nil {
+				fetchErr = err
+				break
+			}
+			text = res.Text
+			source = res.Source
+			if source == "" {
+				source = "module:" + mod.ID
+			}
+			break
+		}
+		if api, ok := customAPIs.get(tr.Tool); ok {
+			finalURL := strings.ReplaceAll(api.Template, "$q", url.QueryEscape(tr.Query))
+			source = "api:" + api.Name + ":" + tr.Query
+			text, fetchErr = fetchURL(finalURL)
+		} else {
+			fetchErr = fmt.Errorf("unknown tool: %s", tr.Tool)
+		}
+	}
+
+	return text, source, fetchErr
 }
 
 // ── Custom API store (persisted through settingsStore) ──────────────
@@ -1446,29 +1815,80 @@ func (s *apiStore) allTools() []toolDef {
 	return all
 }
 
-var toolRequestRe = regexp.MustCompile(`\[TOOL_REQUEST\]\s*(\{[^}]+\})\s*\[/TOOL_REQUEST\]`)
+func extractToolRequest(text string) (toolRequest, bool) {
+	start := strings.Index(text, "[TOOL_REQUEST]")
+	if start == -1 {
+		return toolRequest{}, false
+	}
+	end := strings.Index(text[start:], "[/TOOL_REQUEST]")
+	if end == -1 {
+		return toolRequest{}, false
+	}
+	body := strings.TrimSpace(text[start+len("[TOOL_REQUEST]") : start+end])
+	var tr toolRequest
+	if err := json.Unmarshal([]byte(body), &tr); err != nil {
+		return toolRequest{}, false
+	}
+	if strings.TrimSpace(tr.Tool) == "" || strings.TrimSpace(tr.Query) == "" {
+		return toolRequest{}, false
+	}
+	tr.Tool = strings.TrimSpace(tr.Tool)
+	tr.Query = strings.TrimSpace(tr.Query)
+	return tr, true
+}
+
+func stripToolRequest(text string) string {
+	start := strings.Index(text, "[TOOL_REQUEST]")
+	if start == -1 {
+		return strings.TrimSpace(text)
+	}
+	end := strings.Index(text[start:], "[/TOOL_REQUEST]")
+	if end == -1 {
+		return strings.TrimSpace(text)
+	}
+	end += start + len("[/TOOL_REQUEST]")
+	return strings.TrimSpace(text[:start] + text[end:])
+}
 
 // buildToolSystemPrompt constructs the system prompt describing
 // available tools and how the assistant should emit tool requests.
 func buildToolSystemPrompt(ctxText string, tools []toolDef) string {
 	var sb strings.Builder
-	sb.WriteString("Du bist ein hilfreicher Assistent. Beantworte Fragen basierend auf dem bereitgestellten Kontext.\n\n")
-	sb.WriteString("## Verfügbare Such-APIs\n")
-	sb.WriteString("Wenn der Kontext NICHT genügend Informationen enthält, um die Frage zuverlässig zu beantworten, ")
-	sb.WriteString("kannst du dem Nutzer vorschlagen, eine der folgenden Suchfunktionen zu verwenden. ")
-	sb.WriteString("Schreibe dazu am ENDE deiner Antwort einen Tool-Request in exakt diesem Format:\n\n")
-	sb.WriteString("[TOOL_REQUEST]{\"tool\":\"<name>\",\"query\":\"<suchbegriff>\"}[/TOOL_REQUEST]\n\n")
-	sb.WriteString("Verfügbare Tools:\n")
+	sb.WriteString("Du bist ein hochkompetenter KI-Assistent. Dir stehen eine Wissensbasis (RAG) und verschiedene externe Tools zur Verfügung.\n\n")
+
+	if ctxText != "" {
+		sb.WriteString("### RAG-Kontext\n")
+		sb.WriteString("Hier sind relevante Informationen aus deiner lokalen Wissensbasis:\n")
+		sb.WriteString(ctxText)
+		sb.WriteString("\n\n")
+		sb.WriteString("Nutze diesen Kontext primär zur Beantwortung der Frage. Falls die Informationen unvollständig oder veraltet sind, nutze ein Tool.\n\n")
+	} else {
+		sb.WriteString("Deine lokale Wissensbasis enthält momentan keine relevanten Informationen für diese Anfrage. Nutze Tools, um die Antwort zu finden.\n\n")
+	}
+
+	sb.WriteString("### Tool-Nutzung\n")
+	sb.WriteString("Wenn du externe Informationen benötigst oder Berechnungen/Code ausführen musst, fordere ein Tool an. ")
+	sb.WriteString("Schreibe dazu am ENDE deiner Antwort genau EINEN Tool-Request in exakt diesem Format und in genau einer Zeile:\n\n")
+	sb.WriteString("[TOOL_REQUEST]{\"tool\":\"websearch\",\"query\":\"Query\"}[/TOOL_REQUEST]\n\n")
+	sb.WriteString("Ersetze nur die Werte fuer `tool` und `query`. Kein Markdown-Block, keine Zusatzzeichen, keine zweite JSON-Struktur.\n\n")
+	sb.WriteString("Der Nutzer wird den Request sehen und kann die Ausführung bestätigen. ")
+	sb.WriteString("Bei Tools wie 'nanogo' oder 'calculate' kannst du direkt Logik/Code übergeben, um komplexe Probleme zu lösen.\n\n")
+
+	sb.WriteString("### Verfügbare Tools:\n")
 	for _, t := range tools {
 		sb.WriteString(fmt.Sprintf("- **%s**: %s (Parameter: %s)\n", t.Name, t.Description, t.ParamHint))
 	}
-	sb.WriteString("\nWichtig:\n")
-	sb.WriteString("- Schlage nur EIN Tool pro Antwort vor.\n")
-	sb.WriteString("- Gib trotzdem eine kurze Antwort mit dem was du weißt, bevor du den Tool-Request anfügst.\n")
-	sb.WriteString("- Wenn der Kontext ausreicht, antworte normal OHNE Tool-Request.\n")
-	sb.WriteString("- Der Tool-Request muss EXAKT das Format [TOOL_REQUEST]{...}[/TOOL_REQUEST] haben.\n\n")
-	sb.WriteString("Kontext:\n")
-	sb.WriteString(ctxText)
+
+	sb.WriteString("\n### Instruktionen:\n")
+	sb.WriteString("- Analysiere zuerst den RAG-Kontext.\n")
+	sb.WriteString("- Wenn der Kontext ausreicht, antworte direkt.\n")
+	sb.WriteString("- Wenn Informationen fehlen, schlage EXAKT EIN Tool vor.\n")
+	sb.WriteString("- Sei proaktiv: Nutze Tools lieber einmal zu viel als einmal zu wenig, insbesondere News/Websearch für tagesaktuelle Themen.\n")
+	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`.\n")
+	sb.WriteString("- Wenn du Code ausführen musst (Datenanalyse, Berechnungen), nutze 'nanogo'.\n")
+	sb.WriteString("- Gib IMMER eine kurze Zwischenantwort oder Einschätzung, bevor du den Tool-Request anfügst.\n")
+	sb.WriteString("- Der Tool-Request muss die LETZTE Zeile deiner Antwort sein.\n")
+
 	return sb.String()
 }
 
@@ -1531,202 +1951,36 @@ type debugPayload struct {
 // search against the DB and returns the assembled context text and
 // optional debug information.
 func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugInfo, error) {
-	// First, try a refined search query for entity-like questions.
 	searchQuery := refineSearchQuery(question)
-
-	t0 := time.Now()
-	qvec, err := r.getLM().embedSingle(searchQuery)
+	hits, embedMs, searchMs, err := r.searchCandidates(searchQuery, r.k)
 	if err != nil {
 		return "", nil, err
 	}
-	embedMs := time.Since(t0).Milliseconds()
-
-	// Special-case: if the refined searchQuery matches an article we have
-	// stored, return that article's chunks (including neighbors implicitly
-	// by returning adjacent content).
-	acheck := fmt.Sprintf("SELECT COUNT(*) AS cnt FROM chunks WHERE article = '%s'", escapeSQ(searchQuery))
-	ast, aerr := tinysql.ParseSQL(acheck)
-	if aerr == nil {
-		r.dbMu.Lock()
-		ars, aerr2 := tinysql.Execute(context.Background(), r.db, "default", ast)
-		r.dbMu.Unlock()
-		if aerr2 == nil && ars != nil && len(ars.Rows) > 0 {
-			v, _ := tinysql.GetVal(ars.Rows[0], "cnt")
-			cnt := 0
-			switch nv := v.(type) {
-			case int:
-				cnt = nv
-			case int64:
-				cnt = int(nv)
-			case float64:
-				cnt = int(nv)
-			}
-			if cnt > 0 {
-				// fetch all chunks for the article
-				fq := fmt.Sprintf("SELECT chunk_idx, content FROM chunks WHERE article = '%s' ORDER BY chunk_idx", escapeSQ(searchQuery))
-				fst, _ := tinysql.ParseSQL(fq)
-				r.dbMu.Lock()
-				frs, _ := tinysql.Execute(context.Background(), r.db, "default", fst)
-				r.dbMu.Unlock()
-				var parts []string
-				var dbgChunks []debugChunk
-				if frs != nil {
-					for _, row := range frs.Rows {
-						c, ok := tinysql.GetVal(row, "content")
-						if !ok {
-							continue
-						}
-						idxVal, _ := tinysql.GetVal(row, "chunk_idx")
-						idx := 0
-						switch iv := idxVal.(type) {
-						case int:
-							idx = iv
-						case int64:
-							idx = int(iv)
-						case float64:
-							idx = int(iv)
-						}
-						s := fmt.Sprintf("%v", c)
-						parts = append(parts, s)
-						if debug {
-							dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: s, Article: searchQuery, ChunkIdx: idx, IsNeighbor: false})
-						}
-					}
-				}
-				di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: 0, TotalChunks: r.docCount(), UsedK: r.k, Decision: "article_specific"}
-				return strings.Join(parts, "\n---\n"), di, nil
-			}
-		}
-	}
-
-	t1 := time.Now()
-	// Initial quick retrieval: fetch a larger candidate set to allow
-	// filtering by high-confidence threshold.
-	limit := 100
-	if r.k*3 > limit {
-		limit = r.k * 3
-	}
-	const maxLimit = 1000
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-	q := fmt.Sprintf(
-		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks ORDER BY score DESC LIMIT %d",
-		vecJSON(qvec), limit,
-	)
-
-	r.dbMu.Lock()
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		r.dbMu.Unlock()
-		return "", nil, err
-	}
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-
-	if err != nil {
-		return "", nil, err
-	}
-	searchMs := time.Since(t1).Milliseconds()
-
-	rows := rs.Rows
-
-	type chunkHit struct {
-		article  string
-		chunkIdx int
-		content  string
-		score    float64
-	}
-	var hits []chunkHit
-	for _, row := range rows {
-		c, ok := tinysql.GetVal(row, "content")
-		if !ok {
-			continue
-		}
-		cStr := fmt.Sprintf("%v", c)
-		art, _ := tinysql.GetVal(row, "article")
-		artStr := fmt.Sprintf("%v", art)
-		idxVal, _ := tinysql.GetVal(row, "chunk_idx")
-		idx := 0
-		switch iv := idxVal.(type) {
-		case int:
-			idx = iv
-		case int64:
-			idx = int(iv)
-		case float64:
-			idx = int(iv)
-		}
-		scoreVal, _ := tinysql.GetVal(row, "score")
-		s := 0.0
-		switch sv := scoreVal.(type) {
-		case float64:
-			s = sv
-		case int:
-			s = float64(sv)
-		}
-		hits = append(hits, chunkHit{article: artStr, chunkIdx: idx, content: cStr, score: s})
+	if ctx, di, ok := r.loadArticleContext(searchQuery, debug, embedMs); ok {
+		return ctx, di, nil
 	}
 
 	// If we have a clear high-confidence hit, return context immediately.
 	const highThreshold = 0.90
 	var primaryCount int
 	for _, h := range hits {
-		if h.score > highThreshold {
+		if h.Score > highThreshold {
 			primaryCount++
 		}
 	}
 
-	type chunkKey struct {
-		article  string
-		chunkIdx int
-	}
-
-	// Helper to assemble context from selected hits (and neighbors)
-	assemble := func(sel []chunkHit, usedK int, decision string) (string, *debugInfo, error) {
-		seen := make(map[chunkKey]bool)
-		for _, h := range hits {
-			seen[chunkKey{h.article, h.chunkIdx}] = true
-		}
-		var contextParts []string
-		var dbgChunks []debugChunk
-		for _, h := range sel {
-			prevKey := chunkKey{h.article, h.chunkIdx - 1}
-			if h.chunkIdx > 0 && !seen[prevKey] {
-				seen[prevKey] = true
-				if prevContent, ok := r.fetchNeighborContent(h.article, h.chunkIdx-1); ok {
-					contextParts = append(contextParts, prevContent)
-					dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: prevContent, Article: h.article, ChunkIdx: h.chunkIdx - 1, IsNeighbor: true})
-				}
-			}
-
-			contextParts = append(contextParts, h.content)
-			dbgChunks = append(dbgChunks, debugChunk{Score: h.score, Content: h.content, Article: h.article, ChunkIdx: h.chunkIdx, IsNeighbor: false})
-
-			nextKey := chunkKey{h.article, h.chunkIdx + 1}
-			if !seen[nextKey] {
-				seen[nextKey] = true
-				if nextContent, ok := r.fetchNeighborContent(h.article, h.chunkIdx+1); ok {
-					contextParts = append(contextParts, nextContent)
-					dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: nextContent, Article: h.article, ChunkIdx: h.chunkIdx + 1, IsNeighbor: true})
-				}
-			}
-		}
-		di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCount(), UsedK: usedK, Decision: decision}
-		return strings.Join(contextParts, "\n---\n"), di, nil
-	}
-
 	// If high-confidence primary found, use those hits (top k by score)
 	if primaryCount > 0 {
-		var sel []chunkHit
+		var sel []retrievalHit
 		for _, h := range hits {
-			if h.score > highThreshold {
+			if h.Score > highThreshold {
 				sel = append(sel, h)
 				if len(sel) >= r.k {
 					break
 				}
 			}
 		}
-		return assemble(sel, r.k, "high_confidence")
+		return r.assembleContext(sel, r.k, "high_confidence", embedMs, searchMs)
 	}
 
 	// Prepare a concise summary of top candidates to let the LM decide
@@ -1738,25 +1992,24 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 	}
 	for i := 0; i < topN; i++ {
 		h := hits[i]
-		summaryParts = append(summaryParts, fmt.Sprintf("%s (score=%.4f)", h.article, h.score))
+		summaryParts = append(summaryParts, fmt.Sprintf("%s (score=%.4f)", h.Article, h.Score))
 	}
 	summary := strings.Join(summaryParts, "; ")
 
 	// Ask LM whether to answer directly or retrieve more context.
 	decisionMap, derr := r.analyzeQuestion(question, summary)
 	if derr != nil {
-		// Fallback: perform relaxed retrieval
-		var sel []chunkHit
+		var sel []retrievalHit
 		thresh := 0.60
 		for _, h := range hits {
-			if h.score >= thresh {
+			if h.Score >= thresh {
 				sel = append(sel, h)
 				if len(sel) >= r.k {
 					break
 				}
 			}
 		}
-		return assemble(sel, r.k, "relaxed_fallback")
+		return r.assembleContext(sel, r.k, "relaxed_fallback", embedMs, searchMs)
 	}
 
 	action, _ := decisionMap["action"].(string)
@@ -1786,9 +2039,21 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 		}
 	}
 
-	var sel []chunkHit
+	if searchQuery != refineSearchQuery(question) {
+		hits, _, searchMs, err = r.searchCandidates(searchQuery, desiredK)
+		if err != nil {
+			return "", nil, err
+		}
+		if ctx, di, ok := r.loadArticleContext(searchQuery, debug, embedMs); ok {
+			di.UsedK = desiredK
+			di.Decision = "article_specific_refined"
+			return ctx, di, nil
+		}
+	}
+
+	var sel []retrievalHit
 	for _, h := range hits {
-		if h.score >= thresh {
+		if h.Score >= thresh {
 			sel = append(sel, h)
 			if len(sel) >= desiredK {
 				break
@@ -1801,147 +2066,42 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 			sel = append(sel, hits[i])
 		}
 	}
-	return assemble(sel, desiredK, "lm_requested_retrieval")
+	return r.assembleContext(sel, desiredK, "lm_requested_retrieval", embedMs, searchMs)
 }
 
 // prepareContextWithK does the same as prepareContext but allows specifying k (number of primary hits)
 // prepareContextWithK behaves like prepareContext but allows specifying
 // the number `k` of primary retrieval hits to consider.
 func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (string, *debugInfo, error) {
-	// refine query for entity-like questions
 	searchQuery := refineSearchQuery(question)
-
-	t0 := time.Now()
-	qvec, err := r.getLM().embedSingle(searchQuery)
+	hits, embedMs, searchMs, err := r.searchCandidates(searchQuery, k)
 	if err != nil {
 		return "", nil, err
 	}
-	embedMs := time.Since(t0).Milliseconds()
-
-	t1 := time.Now()
-	// initial candidate limit
-	limit := 100
-	if k*3 > limit {
-		limit = k * 3
-	}
-	const maxLimit = 1000
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-	q := fmt.Sprintf(
-		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks ORDER BY score DESC LIMIT %d",
-		vecJSON(qvec), limit,
-	)
-
-	r.dbMu.Lock()
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		r.dbMu.Unlock()
-		return "", nil, err
-	}
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-
-	if err != nil {
-		return "", nil, err
-	}
-	searchMs := time.Since(t1).Milliseconds()
-
-	rows := rs.Rows
-
-	type chunkHit struct {
-		article  string
-		chunkIdx int
-		content  string
-		score    float64
-	}
-	var hits []chunkHit
-	for _, row := range rows {
-		c, ok := tinysql.GetVal(row, "content")
-		if !ok {
-			continue
-		}
-		cStr := fmt.Sprintf("%v", c)
-		art, _ := tinysql.GetVal(row, "article")
-		artStr := fmt.Sprintf("%v", art)
-		idxVal, _ := tinysql.GetVal(row, "chunk_idx")
-		idx := 0
-		switch iv := idxVal.(type) {
-		case int:
-			idx = iv
-		case int64:
-			idx = int(iv)
-		case float64:
-			idx = int(iv)
-		}
-		scoreVal, _ := tinysql.GetVal(row, "score")
-		s := 0.0
-		switch sv := scoreVal.(type) {
-		case float64:
-			s = sv
-		case int:
-			s = float64(sv)
-		}
-		hits = append(hits, chunkHit{article: artStr, chunkIdx: idx, content: cStr, score: s})
+	if ctx, di, ok := r.loadArticleContext(searchQuery, debug, embedMs); ok {
+		di.UsedK = k
+		return ctx, di, nil
 	}
 
 	const highThreshold = 0.90
 	var primaryCount int
 	for _, h := range hits {
-		if h.score > highThreshold {
+		if h.Score > highThreshold {
 			primaryCount++
 		}
 	}
 
-	type chunkKey struct {
-		article  string
-		chunkIdx int
-	}
-
-	assemble := func(sel []chunkHit, usedK int, decision string) (string, *debugInfo, error) {
-		seen := make(map[chunkKey]bool)
-		for _, h := range hits {
-			seen[chunkKey{h.article, h.chunkIdx}] = true
-		}
-		var contextParts []string
-		var dbgChunks []debugChunk
-		for _, h := range sel {
-			prevKey := chunkKey{h.article, h.chunkIdx - 1}
-			if h.chunkIdx > 0 && !seen[prevKey] {
-				seen[prevKey] = true
-				if prevContent, ok := r.fetchNeighborContent(h.article, h.chunkIdx-1); ok {
-					contextParts = append(contextParts, prevContent)
-					dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: prevContent, Article: h.article, ChunkIdx: h.chunkIdx - 1, IsNeighbor: true})
-				}
-			}
-
-			contextParts = append(contextParts, h.content)
-			dbgChunks = append(dbgChunks, debugChunk{Score: h.score, Content: h.content, Article: h.article, ChunkIdx: h.chunkIdx, IsNeighbor: false})
-
-			nextKey := chunkKey{h.article, h.chunkIdx + 1}
-			if !seen[nextKey] {
-				seen[nextKey] = true
-				if nextContent, ok := r.fetchNeighborContent(h.article, h.chunkIdx+1); ok {
-					contextParts = append(contextParts, nextContent)
-					dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: nextContent, Article: h.article, ChunkIdx: h.chunkIdx + 1, IsNeighbor: true})
-				}
-			}
-		}
-		di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCount(), UsedK: usedK, Decision: decision}
-		return strings.Join(contextParts, "\n---\n"), di, nil
-	}
-
 	if primaryCount > 0 {
-		var sel []chunkHit
+		var sel []retrievalHit
 		for _, h := range hits {
-			if h.score > highThreshold {
+			if h.Score > highThreshold {
 				sel = append(sel, h)
 				if len(sel) >= k {
 					break
 				}
 			}
 		}
-		return assemble(sel, k, "high_confidence")
+		return r.assembleContext(sel, k, "high_confidence", embedMs, searchMs)
 	}
 
 	// Summarize top candidates
@@ -1952,23 +2112,23 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 	}
 	for i := 0; i < topN; i++ {
 		h := hits[i]
-		summaryParts = append(summaryParts, fmt.Sprintf("%s (score=%.4f)", h.article, h.score))
+		summaryParts = append(summaryParts, fmt.Sprintf("%s (score=%.4f)", h.Article, h.Score))
 	}
 	summary := strings.Join(summaryParts, "; ")
 
 	decisionMap, derr := r.analyzeQuestion(question, summary)
 	if derr != nil {
-		var sel []chunkHit
+		var sel []retrievalHit
 		thresh := 0.60
 		for _, h := range hits {
-			if h.score >= thresh {
+			if h.Score >= thresh {
 				sel = append(sel, h)
 				if len(sel) >= k {
 					break
 				}
 			}
 		}
-		return assemble(sel, k, "relaxed_fallback")
+		return r.assembleContext(sel, k, "relaxed_fallback", embedMs, searchMs)
 	}
 
 	action, _ := decisionMap["action"].(string)
@@ -1995,9 +2155,21 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 		}
 	}
 
-	var sel []chunkHit
+	if searchQuery != refineSearchQuery(question) {
+		hits, _, searchMs, err = r.searchCandidates(searchQuery, desiredK)
+		if err != nil {
+			return "", nil, err
+		}
+		if ctx, di, ok := r.loadArticleContext(searchQuery, debug, embedMs); ok {
+			di.UsedK = desiredK
+			di.Decision = "article_specific_refined"
+			return ctx, di, nil
+		}
+	}
+
+	var sel []retrievalHit
 	for _, h := range hits {
-		if h.score >= thresh {
+		if h.Score >= thresh {
 			sel = append(sel, h)
 			if len(sel) >= desiredK {
 				break
@@ -2009,7 +2181,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 			sel = append(sel, hits[i])
 		}
 	}
-	return assemble(sel, desiredK, "lm_requested_retrieval")
+	return r.assembleContext(sel, desiredK, "lm_requested_retrieval", embedMs, searchMs)
 }
 
 // refineSearchQuery attempts to extract an entity-like phrase from the
@@ -2162,6 +2334,9 @@ type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	Time    string `json:"time"`
+	// Model records which model was used to produce this message (assistant-only).
+	Model     string            `json:"model,omitempty"`
+	ModelMeta map[string]string `json:"model_meta,omitempty"`
 }
 
 // conversation stores metadata and the message history for a chat.
@@ -2226,9 +2401,39 @@ func (cs *chatStore) addMessage(id, role, content string) {
 	c.Messages = append(c.Messages, chatMessage{Role: role, Content: content, Time: now})
 	c.Updated = now
 	if c.Title == "" && role == "user" {
-		t := content
-		if len(t) > 60 {
-			t = t[:60] + "…"
+		t := strings.TrimSpace(content)
+		t = strings.ReplaceAll(t, "\n", " ")
+		if len(t) > 50 {
+			t = t[:47] + "..."
+		}
+		c.Title = t
+	}
+	_ = cs.saveLocked()
+}
+
+// addMessageWithMeta appends a message and also records model metadata for assistant messages.
+func (cs *chatStore) addMessageWithMeta(id, role, content, model string, modelMeta map[string]string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	c, ok := cs.chats[id]
+	if !ok {
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	msg := chatMessage{Role: role, Content: content, Time: now}
+	if model != "" {
+		msg.Model = model
+	}
+	if modelMeta != nil {
+		msg.ModelMeta = modelMeta
+	}
+	c.Messages = append(c.Messages, msg)
+	c.Updated = now
+	if c.Title == "" && role == "user" {
+		t := strings.TrimSpace(content)
+		t = strings.ReplaceAll(t, "\n", " ")
+		if len(t) > 50 {
+			t = t[:47] + "..."
 		}
 		c.Title = t
 	}
@@ -2343,7 +2548,8 @@ func mustJSON(v any) string {
 
 // llmCheckReq is the request structure for model/endpoint validation.
 type llmCheckReq struct {
-	BaseURL string `json:"base_url"`
+	BaseURL   string `json:"base_url"`
+	OpenAIKey string `json:"openai_api_key"`
 }
 
 // llmCheckResp is the response structure returned when validating an LLM endpoint.
@@ -2415,8 +2621,102 @@ type discoverResp struct {
 	Candidates []discoverCandidate `json:"candidates"`
 }
 
+func isLocalLLMBase(base string) bool {
+	u := strings.ToLower(strings.TrimSpace(base))
+	return strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")
+}
+
+func localLLMCandidates() []string {
+	return []string{
+		"http://localhost:1234",
+		"http://localhost:11434",
+	}
+}
+
+func probeLLMCandidate(base, apiKey string) (discoverCandidate, error) {
+	c := discoverCandidate{BaseURL: base, ProviderHint: providerHintFromURL(base)}
+	tmp := newLMClient(base, "x", "x", apiKey)
+	models, err := tmp.listModels(base)
+	if err != nil {
+		c.OK = false
+		c.Error = err.Error()
+		return c, err
+	}
+	c.OK = true
+	c.Models = models
+	c.RecommendChat, c.RecommendEmbed = recommendModels(models)
+	return c, nil
+}
+
+func firstModelOr(current string, models []string) string {
+	if current != "" {
+		for _, m := range models {
+			if m == current {
+				return current
+			}
+		}
+	}
+	if len(models) > 0 {
+		return models[0]
+	}
+	return current
+}
+
+func maybePreferOfflineLLM(settings *settingsStore) appSettings {
+	s := settings.get()
+	apiKey := s.OpenAIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+
+	currentBase := s.ChatBase
+	if currentBase == "" {
+		currentBase = s.BaseURL
+	}
+	if isLocalLLMBase(currentBase) {
+		if _, err := probeLLMCandidate(currentBase, apiKey); err == nil {
+			return s
+		}
+	}
+
+	var preferred discoverCandidate
+	found := false
+	for _, base := range localLLMCandidates() {
+		c, err := probeLLMCandidate(base, apiKey)
+		if err == nil && c.OK {
+			preferred = c
+			found = true
+			break
+		}
+	}
+	if !found {
+		return s
+	}
+
+	chatModel := firstModelOr(s.ChatModel, preferred.RecommendChat)
+	if chatModel == "" {
+		chatModel = firstModelOr(s.ChatModel, preferred.Models)
+	}
+	embedModel := firstModelOr(s.EmbedModel, preferred.RecommendEmbed)
+	if embedModel == "" {
+		embedModel = firstModelOr(s.EmbedModel, preferred.Models)
+	}
+
+	settings.mu.Lock()
+	settings.s.BaseURL = preferred.BaseURL
+	settings.s.ChatBase = preferred.BaseURL
+	settings.s.EmbedBase = preferred.BaseURL
+	settings.s.ChatModel = chatModel
+	settings.s.EmbedModel = embedModel
+	_ = settings.saveLocked()
+	settings.mu.Unlock()
+
+	log.Printf("LLM preference: switched to local provider %s (%s)", preferred.ProviderHint, preferred.BaseURL)
+	return settings.get()
+}
+
 // runWebServer registers HTTP handlers and starts the web interface.
-func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *chatStore, customAPIs *apiStore, personas *personaStore) {
+func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *chatStore, customAPIs *apiStore, personas *personaStore, modules *moduleStore, llmAvailable bool, llmPingErr error) {
 	mux := http.NewServeMux()
 
 	// Static assets
@@ -2440,38 +2740,54 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			s := settings.get()
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"base_url":    s.BaseURL,
-				"chat_model":  s.ChatModel,
-				"embed_model": s.EmbedModel,
-				"lang":        s.Lang,
-				"theme":       s.Theme,
-				"chunk_size":  s.ChunkSize,
-				"k":           s.K,
+				"base_url":     s.BaseURL,
+				"chat_base":    s.ChatBase,
+				"embed_base":   s.EmbedBase,
+				"chat_model":   s.ChatModel,
+				"embed_model":  s.EmbedModel,
+				"lang":         s.Lang,
+				"theme":        s.Theme,
+				"chunk_size":   s.ChunkSize,
+				"k":            s.K,
+				"allow_nanogo": s.AllowNanoGo,
+				// Do not return the API key itself; only expose whether one is configured
+				"openai_key_present": s.OpenAIKey != "",
 			})
 			return
 
 		case "POST":
+			// Accept chat_base/embed_base and optional OpenAI key for mixed backends
 			var req struct {
-				BaseURL    string `json:"base_url"`
-				ChatModel  string `json:"chat_model"`
-				EmbedModel string `json:"embed_model"`
-				Theme      string `json:"theme"`
-				Force      bool   `json:"force"`
+				BaseURL        string `json:"base_url"`
+				ChatBase       string `json:"chat_base"`
+				EmbedBase      string `json:"embed_base"`
+				ChatModel      string `json:"chat_model"`
+				EmbedModel     string `json:"embed_model"`
+				OpenAIKey      string `json:"openai_api_key"`
+				OpenAIKeyClear bool   `json:"openai_api_key_clear"`
+				Theme          string `json:"theme"`
+				Force          bool   `json:"force"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid JSON", 400)
 				return
 			}
-			req.BaseURL = normalizeBaseURL(req.BaseURL)
-			if req.BaseURL == "" || req.ChatModel == "" || req.EmbedModel == "" {
-				http.Error(w, "base_url, chat_model and embed_model are required", 400)
-				return
+			// Normalize and fall back
+			if req.BaseURL != "" {
+				req.BaseURL = normalizeBaseURL(req.BaseURL)
 			}
-
-			// Validate endpoint quickly
-			tmp := newLMClient(req.BaseURL, req.EmbedModel, req.ChatModel)
-			if err := tmp.ping(); err != nil {
-				http.Error(w, "LLM endpoint not reachable: "+err.Error(), 400)
+			if req.ChatBase == "" {
+				req.ChatBase = req.BaseURL
+			} else {
+				req.ChatBase = normalizeBaseURL(req.ChatBase)
+			}
+			if req.EmbedBase == "" {
+				req.EmbedBase = req.BaseURL
+			} else {
+				req.EmbedBase = normalizeBaseURL(req.EmbedBase)
+			}
+			if req.ChatBase == "" || req.ChatModel == "" || req.EmbedModel == "" {
+				http.Error(w, "chat_base, embed_base, chat_model and embed_model are required", 400)
 				return
 			}
 
@@ -2490,16 +2806,40 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 			// Persist + apply
 			settings.mu.Lock()
-			settings.s.BaseURL = req.BaseURL
+			if req.BaseURL != "" {
+				settings.s.BaseURL = req.BaseURL
+			}
+			settings.s.ChatBase = req.ChatBase
+			settings.s.EmbedBase = req.EmbedBase
 			settings.s.ChatModel = req.ChatModel
 			settings.s.EmbedModel = req.EmbedModel
+			// Persist provided OpenAI API key. If OpenAIKeyClear is true, clear stored key.
+			if req.OpenAIKey != "" {
+				settings.s.OpenAIKey = req.OpenAIKey
+			} else if req.OpenAIKeyClear {
+				settings.s.OpenAIKey = ""
+			}
 			if req.Theme != "" {
 				settings.s.Theme = req.Theme
 			}
 			_ = settings.saveLocked()
 			settings.mu.Unlock()
 
-			rag.setLM(tmp)
+			// Apply runtime LM clients (may be composite)
+			// Prefer persisted OpenAI key from settings; fallback to env var if none present
+			key := settings.s.OpenAIKey
+			if key == "" {
+				key = os.Getenv("OPENAI_API_KEY")
+			}
+			chatLM := newLMClient(settings.s.ChatBase, settings.s.EmbedModel, settings.s.ChatModel, key)
+			embedLM := newLMClient(settings.s.EmbedBase, settings.s.EmbedModel, settings.s.ChatModel, key)
+			var provider lmProvider
+			if settings.s.ChatBase == settings.s.EmbedBase {
+				provider = chatLM
+			} else {
+				provider = &compositeLM{embedClient: embedLM, chatClient: chatLM}
+			}
+			rag.setLM(provider)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"ok": true})
@@ -2532,6 +2872,160 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "theme": req.Theme})
 	})
 
+	// GET /api/modules — list configured modules
+	mux.HandleFunc("/api/modules", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(modules.list())
+	})
+
+	// POST /api/modules/save — update one module configuration
+	mux.HandleFunc("/api/modules/save", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req moduleConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		mod, err := modules.upsert(req)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(mod)
+	})
+
+	// POST /api/modules/run — preview or ingest a module result into RAG
+	mux.HandleFunc("/api/modules/run", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID     string `json:"id"`
+			Action string `json:"action"`
+			Arg    string `json:"arg"`
+			Limit  int    `json:"limit"`
+			Ingest bool   `json:"ingest"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "missing module id", 400)
+			return
+		}
+		mod, ok := modules.get(req.ID)
+		if !ok {
+			http.Error(w, "module not found", 404)
+			return
+		}
+		if !mod.Enabled {
+			http.Error(w, "module disabled", 403)
+			return
+		}
+		res, err := executeModuleRun(mod, rag, settings.get().EmbedModel, req.Action, req.Arg, req.Limit, req.Ingest)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+	})
+
+	// POST /api/modules/upload?id=<module>&target=<relative-path>
+	mux.HandleFunc("/api/modules/upload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		target := r.URL.Query().Get("target")
+		if id == "" {
+			http.Error(w, "missing module id", 400)
+			return
+		}
+		mod, ok := modules.get(id)
+		if !ok || mod.Kind != "http-folder" {
+			http.Error(w, "http-folder module not found", 404)
+			return
+		}
+		if !mod.Enabled {
+			http.Error(w, "module disabled", 403)
+			return
+		}
+		if err := r.ParseMultipartForm(20 << 20); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing file", 400)
+			return
+		}
+		defer file.Close()
+		savedPath, err := saveUploadedModuleFile(mod, file, header, target)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		resp := map[string]any{
+			"module_id": mod.ID,
+			"path":      savedPath,
+			"file":      header.Filename,
+		}
+		if parseBoolString(mod.Config["ingest_on_upload"]) {
+			text, err := readFileForRAG(savedPath, 5*1024*1024)
+			if err == nil && strings.TrimSpace(text) != "" {
+				source := "module:" + mod.ID + ":upload:" + filepath.Base(savedPath)
+				chunks := chunkText(text, settings.get().ChunkSize)
+				if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err == nil {
+					resp["chunks"] = len(chunks)
+					resp["source"] = source
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	// GET /api/modules/download?id=<module>&path=<relative-path>
+	mux.HandleFunc("/api/modules/download", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		pathArg := r.URL.Query().Get("path")
+		if id == "" || pathArg == "" {
+			http.Error(w, "missing id or path", 400)
+			return
+		}
+		mod, ok := modules.get(id)
+		if !ok || mod.Kind != "http-folder" {
+			http.Error(w, "http-folder module not found", 404)
+			return
+		}
+		target, err := resolveModulePath(mod.Config["root_dir"], pathArg, parseBoolString(mod.Config["allow_subfolders"]))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if parseBoolString(mod.Config["download_ingest"]) {
+			if text, err := readFileForRAG(target, 5*1024*1024); err == nil && strings.TrimSpace(text) != "" {
+				source := "module:" + mod.ID + ":download:" + filepath.Base(target)
+				chunks := chunkText(text, settings.get().ChunkSize)
+				_ = rag.addChunks(source, chunks, settings.get().EmbedModel)
+			}
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(target)))
+		http.ServeFile(w, r, target)
+	})
+
 	// GET /api/discover — auto-discover common local endpoints
 	mux.HandleFunc("/api/discover", func(w http.ResponseWriter, r *http.Request) {
 		candidates := []string{
@@ -2541,7 +3035,12 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		var out []discoverCandidate
 		for _, base := range candidates {
 			c := discoverCandidate{BaseURL: base, ProviderHint: providerHintFromURL(base)}
-			tmp := newLMClient(base, "x", "x")
+			// Use persisted OpenAI key if present, else env var
+			key := settings.get().OpenAIKey
+			if key == "" {
+				key = os.Getenv("OPENAI_API_KEY")
+			}
+			tmp := newLMClient(base, "x", "x", key)
 			models, err := tmp.listModels(base)
 			if err != nil {
 				c.OK = false
@@ -2555,6 +3054,24 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(discoverResp{Candidates: out})
+	})
+
+	// GET /api/llm/status — report whether initial LLM ping succeeded
+	mux.HandleFunc("/api/llm/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		msg := ""
+		ok := true
+		if !llmAvailable {
+			ok = false
+			if llmPingErr != nil {
+				msg = llmPingErr.Error()
+			} else {
+				msg = "LLM endpoint not available"
+			}
+		}
+		// Use live settings snapshot for base URL
+		cur := settings.get()
+		json.NewEncoder(w).Encode(map[string]any{"ok": ok, "base_url": cur.BaseURL, "message": msg})
 	})
 
 	// POST /api/llm/list-models — validate an endpoint and list models
@@ -2573,7 +3090,15 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, "missing base_url", 400)
 			return
 		}
-		tmp := newLMClient(req.BaseURL, "x", "x")
+		// Prefer key provided in request (for quick tests), else stored or env var
+		key := req.OpenAIKey
+		if key == "" {
+			key = settings.get().OpenAIKey
+		}
+		if key == "" {
+			key = os.Getenv("OPENAI_API_KEY")
+		}
+		tmp := newLMClient(req.BaseURL, "x", "x", key)
 		models, err := tmp.listModels(req.BaseURL)
 		resp := llmCheckResp{BaseURL: req.BaseURL, ProviderHint: providerHintFromURL(req.BaseURL)}
 		if err != nil {
@@ -2778,14 +3303,16 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
-			chats.addMessage(conv.ID, "assistant", answer.String())
+			s = settings.get()
+			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
+			chats.addMessageWithMeta(conv.ID, "assistant", answer.String(), s.ChatModel, modelMeta)
 			return
 		}
 
 		// Normal mode: call LM with SSE streaming
 		pr, pw := io.Pipe()
 
-		allTools := customAPIs.allTools()
+		allTools := append(customAPIs.allTools(), modules.enabledTools()...)
 		// build system prompt; in deep mode add research instructions
 		var systemPrompt string
 		if req.Deep {
@@ -2859,7 +3386,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			fmt.Fprintf(w, "data: %s\n\n", mustJSON("Fehler im LLM-Stream: "+serr.Error()))
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
-			chats.addMessage(conv.ID, "assistant", "Fehler im LLM-Stream: "+serr.Error())
+			s = settings.get()
+			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
+			chats.addMessageWithMeta(conv.ID, "assistant", "Fehler im LLM-Stream: "+serr.Error(), s.ChatModel, modelMeta)
 			return
 		}
 
@@ -2872,20 +3401,19 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			}
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
+			s = settings.get()
+			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
 			if answer.Len() == 0 {
-				chats.addMessage(conv.ID, "assistant", "LLM-Fehler: "+err.Error())
+				chats.addMessageWithMeta(conv.ID, "assistant", "LLM-Fehler: "+err.Error(), s.ChatModel, modelMeta)
 			} else {
 				answerStr := answer.String()
-				if m := toolRequestRe.FindStringSubmatch(answerStr); len(m) >= 2 {
-					var tr toolRequest
-					if json.Unmarshal([]byte(m[1]), &tr) == nil && tr.Tool != "" {
-						trJSON, _ := json.Marshal(tr)
-						fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
-						flusher.Flush()
-					}
-					answerStr = strings.TrimSpace(toolRequestRe.ReplaceAllString(answerStr, ""))
+				if tr, ok := extractToolRequest(answerStr); ok {
+					trJSON, _ := json.Marshal(tr)
+					fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
+					flusher.Flush()
+					answerStr = stripToolRequest(answerStr)
 				}
-				chats.addMessage(conv.ID, "assistant", answerStr)
+				chats.addMessageWithMeta(conv.ID, "assistant", answerStr, s.ChatModel, modelMeta)
 			}
 			return
 		}
@@ -2896,198 +3424,98 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		// Tool request marker handling
 		answerStr := answer.String()
-		if m := toolRequestRe.FindStringSubmatch(answerStr); len(m) >= 2 {
-			var tr toolRequest
-			if json.Unmarshal([]byte(m[1]), &tr) == nil && tr.Tool != "" {
-				trJSON, _ := json.Marshal(tr)
-				// Notify frontend that a tool was requested
-				fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
-				flusher.Flush()
+		if tr, ok := extractToolRequest(answerStr); ok {
+			trJSON, _ := json.Marshal(tr)
+			// Notify frontend that a tool was requested
+			fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
+			flusher.Flush()
 
-				// Decide whether to execute automatically based on policy
-				s := settings.get()
-				execAllowed := false
-				switch tr.Tool {
-				case "calculate":
-					execAllowed = true
-				case "nanogo":
-					execAllowed = s.AllowNanoGo
-				case "exec_code":
-					execAllowed = s.AllowCodeExec
-				default:
-					// allow some builtin lookups by default (wiki, websearch etc.)
-					execAllowed = true
-				}
+			// Decide whether to execute automatically based on policy
+			s = settings.get()
+			execAllowed := shouldAutoExecuteTool(s, tr, req.AutoSearch)
 
-				if execAllowed {
-					// Execute the tool similarly to /api/tool/execute handler
-					var text string
-					var source string
-					var fetchErr error
+			if execAllowed {
+				text, source, fetchErr := executeToolRequest(tr, s, rag, customAPIs, modules)
 
-					switch tr.Tool {
-					case "wikipedia":
-						source = "wiki:" + tr.Query
-						text, fetchErr = fetchWikipedia(tr.Query, s.Lang)
-					case "duckduckgo":
-						source = "ddg:" + tr.Query
-						text, fetchErr = fetchDuckDuckGo(tr.Query)
-					case "wiktionary":
-						source = "wikt:" + tr.Query
-						text, fetchErr = fetchWiktionary(tr.Query, s.Lang)
-					case "stackoverflow":
-						source = "so:" + tr.Query
-						text, fetchErr = fetchDuckDuckGo("site:stackoverflow.com " + tr.Query)
-					case "websearch":
-						source = "web:" + tr.Query
-						text, fetchErr = fetchDuckDuckGo(tr.Query)
-					case "llm":
-						var buf bytes.Buffer
-						msgs2 := []chatMsg{{Role: "user", Content: tr.Query}}
-						if err := rag.getLM().chatStream(context.Background(), "", msgs2, &buf); err != nil {
-							fetchErr = err
-						} else {
-							text = buf.String()
-							source = "llm:prompt"
-						}
-					case "calculate":
-						out, err := execSmallR(tr.Query)
-						if err != nil {
-							fetchErr = err
-						} else {
-							text = out
-							source = "calc:" + tr.Query
-						}
-					case "exec_code":
-						// For exec_code we run static checks or full exec depending on setting
-						if !s.AllowCodeExec {
-							// run gofmt/govet static checks
-							tmpDir, err := os.MkdirTemp("", "codeexec-")
-							if err != nil {
-								fetchErr = err
-								break
-							}
-							defer os.RemoveAll(tmpDir)
-							filePath := filepath.Join(tmpDir, "code.go")
-							if err := os.WriteFile(filePath, []byte(tr.Query), 0o644); err != nil {
-								fetchErr = err
-								break
-							}
-							var outBuf bytes.Buffer
-							cmdFmt := exec.Command("gofmt", "-l", filePath)
-							cmdFmt.Stdout = &outBuf
-							cmdFmt.Stderr = &outBuf
-							_ = cmdFmt.Run()
-							cmdVet := exec.Command("go", "vet", "./...")
-							cmdVet.Dir = tmpDir
-							var vetOut bytes.Buffer
-							cmdVet.Stdout = &vetOut
-							cmdVet.Stderr = &vetOut
-							_ = cmdVet.Run()
-							text = fmt.Sprintf("gofmt output:\n%s\n\ngo vet output:\n%s", outBuf.String(), vetOut.String())
-							source = "code:go"
-						} else {
-							// Full execution via nanogo RunSafe
-							timeout := 5 * time.Second
-							out, err := RunSafe(tr.Query, timeout)
-							if err != nil {
-								fetchErr = err
-							} else {
-								text = out
-								source = "nanogo:exec"
-							}
-						}
-					case "nanogo":
-						timeout := 5 * time.Second
-						out, err := RunSafe(tr.Query, timeout)
-						if err != nil {
-							fetchErr = err
-						} else {
-							text = out
-							source = "nanogo:exec"
-						}
-					default:
-						if api, ok := customAPIs.get(tr.Tool); ok {
-							finalURL := strings.ReplaceAll(api.Template, "$q", url.QueryEscape(tr.Query))
-							source = "api:" + api.Name + ":" + tr.Query
-							text, fetchErr = fetchURL(finalURL)
-						} else {
-							fetchErr = fmt.Errorf("unknown tool: %s", tr.Tool)
-						}
-					}
-
-					// Send tool result event and add to RAG if successful
-					if fetchErr != nil {
-						res := map[string]any{"tool": tr.Tool, "query": tr.Query, "error": fetchErr.Error()}
-						d, _ := json.Marshal(res)
-						fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
-						flusher.Flush()
-						log.Printf("REQ %s: tool %s failed: %v", reqID, tr.Tool, fetchErr)
-					} else {
-						res := map[string]any{"tool": tr.Tool, "query": tr.Query, "source": source, "output": text}
-						d, _ := json.Marshal(res)
-						fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
-						flusher.Flush()
-
-						// add to RAG as chunks so subsequent retrieval can use it
-						chunks := chunkText(text, s.ChunkSize)
-						if err := rag.addChunks(source, chunks); err != nil {
-							log.Printf("REQ %s: failed to add tool result to RAG: %v", reqID, err)
-						} else {
-							log.Printf("REQ %s: tool result added to RAG: %s (%d chunks)", reqID, source, len(chunks))
-						}
-
-						// Continue the assistant answer by asking the LM to incorporate the tool result
-						// Build continuation messages: include previous assistant partial answer and the tool output as a user hint
-						contMsgs := make([]chatMsg, 0, len(msgs)+2)
-						contMsgs = append(contMsgs, msgs...)
-						// previous assistant partial
-						contMsgs = append(contMsgs, chatMsg{Role: "assistant", Content: answerStr})
-						contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Tool %s returned:\n%s\n\nPlease continue the answer using this information.", tr.Tool, text)})
-
-						// Stream continuation
-						pr2, pw2 := io.Pipe()
-						go func() {
-							err := rag.getLM().chatStream(context.Background(), systemPrompt, contMsgs, pw2)
-							if err != nil {
-								pw2.CloseWithError(err)
-								log.Printf("REQ %s: LM continuation failed: %v", reqID, err)
-							} else {
-								pw2.Close()
-							}
-						}()
-						sc2 := bufio.NewScanner(pr2)
-						sc2.Split(bufio.ScanRunes)
-						for sc2.Scan() {
-							tok := sc2.Text()
-							fmt.Fprintf(w, "data: %s\n\n", mustJSON(tok))
-							flusher.Flush()
-						}
-						// finished continuation
-						log.Printf("REQ %s: tool-driven continuation complete", reqID)
-					}
-				} else {
-					// Execution not allowed; inform frontend
-					res := map[string]any{"tool": tr.Tool, "query": tr.Query, "allowed": false}
+				// Send tool result event and add to RAG if successful
+				if fetchErr != nil {
+					res := map[string]any{"tool": tr.Tool, "query": tr.Query, "error": fetchErr.Error()}
 					d, _ := json.Marshal(res)
 					fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
 					flusher.Flush()
+					log.Printf("REQ %s: tool %s failed: %v", reqID, tr.Tool, fetchErr)
+				} else {
+					res := map[string]any{"tool": tr.Tool, "query": tr.Query, "source": source, "output": text}
+					d, _ := json.Marshal(res)
+					fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
+					flusher.Flush()
+
+					// add to RAG as chunks so subsequent retrieval can use it
+					chunks := chunkText(text, s.ChunkSize)
+					if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
+						log.Printf("REQ %s: failed to add tool result to RAG: %v", reqID, err)
+					} else {
+						log.Printf("REQ %s: tool result added to RAG: %s (%d chunks)", reqID, source, len(chunks))
+					}
+
+					// Continue the assistant answer by asking the LM to incorporate the tool result
+					// Build continuation messages: include previous assistant partial answer and the tool output as a user hint
+					contMsgs := make([]chatMsg, 0, len(msgs)+2)
+					contMsgs = append(contMsgs, msgs...)
+					// previous assistant partial
+					contMsgs = append(contMsgs, chatMsg{Role: "assistant", Content: answerStr})
+					contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Tool %s returned:\n%s\n\nPlease continue the answer using this information.", tr.Tool, text)})
+
+					// Stream continuation
+					pr2, pw2 := io.Pipe()
+					go func() {
+						err := rag.getLM().chatStream(context.Background(), systemPrompt, contMsgs, pw2)
+						if err != nil {
+							pw2.CloseWithError(err)
+							log.Printf("REQ %s: LM continuation failed: %v", reqID, err)
+						} else {
+							pw2.Close()
+						}
+					}()
+					sc2 := bufio.NewScanner(pr2)
+					sc2.Split(bufio.ScanRunes)
+					var contAnswer strings.Builder
+					for sc2.Scan() {
+						tok := sc2.Text()
+						contAnswer.WriteString(tok)
+						fmt.Fprintf(w, "data: %s\n\n", mustJSON(tok))
+						flusher.Flush()
+					}
+					if scErr := sc2.Err(); scErr != nil {
+						log.Printf("REQ %s: continuation scanner error: %v", reqID, scErr)
+					}
+					answerStr = strings.TrimSpace(strings.TrimSpace(answerStr) + "\n" + strings.TrimSpace(contAnswer.String()))
+					// finished continuation
+					log.Printf("REQ %s: tool-driven continuation complete", reqID)
 				}
+			} else {
+				// Execution not allowed; inform frontend
+				res := map[string]any{"tool": tr.Tool, "query": tr.Query, "allowed": false}
+				d, _ := json.Marshal(res)
+				fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
+				flusher.Flush()
 			}
-			answerStr = strings.TrimSpace(toolRequestRe.ReplaceAllString(answerStr, ""))
+			answerStr = stripToolRequest(answerStr)
 		}
 
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 
 		log.Printf("REQ %s: Chat response complete: %d chars, tokens_streamed=%d", reqID, len(answerStr), tokenCount)
-		chats.addMessage(conv.ID, "assistant", answerStr)
+		s = settings.get()
+		modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
+		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, s.ChatModel, modelMeta)
 	})
 
 	// GET /api/tools — list available tools
 	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(customAPIs.allTools())
+		json.NewEncoder(w).Encode(append(customAPIs.allTools(), modules.enabledTools()...))
 	})
 
 	// POST /api/tool/execute — execute a tool and add results to RAG
@@ -3107,92 +3535,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		var text string
 		var source string
 		var fetchErr error
-
-		switch req.Tool {
-		case "wikipedia":
-			source = "wiki:" + req.Query
-			text, fetchErr = fetchWikipedia(req.Query, s.Lang)
-		case "duckduckgo":
-			source = "ddg:" + req.Query
-			text, fetchErr = fetchDuckDuckGo(req.Query)
-		case "wiktionary":
-			source = "wikt:" + req.Query
-			text, fetchErr = fetchWiktionary(req.Query, s.Lang)
-		case "stackoverflow":
-			// Search StackOverflow via DuckDuckGo site-restrict
-			source = "so:" + req.Query
-			text, fetchErr = fetchDuckDuckGo("site:stackoverflow.com " + req.Query)
-		case "websearch":
-			source = "web:" + req.Query
-			text, fetchErr = fetchDuckDuckGo(req.Query)
-
-		case "llm":
-			// Run a direct prompt against the configured LLM and return result
-			var buf bytes.Buffer
-			msgs := []chatMsg{{Role: "user", Content: req.Query}}
-			if err := rag.getLM().chatStream(context.Background(), "", msgs, &buf); err != nil {
-				http.Error(w, fmt.Sprintf("LLM error: %v", err), 500)
-				return
-			}
-			text = buf.String()
-			source = "llm:prompt"
-
-		case "calculate":
-			// Evaluate arithmetic expression via smallR and add to RAG as a small document
-			out, err := execSmallR(req.Query)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("calculation failed: %v", err), 500)
-				return
-			}
-			text = out
-			source = "calc:" + req.Query
-
-		case "exec_code":
-			// Secure code execution: by default perform only static analysis (format + vet for Go).
-			scfg := s.AllowCodeExec
-			if !scfg {
-				// Perform static checks only (gofmt/govet) but do not execute arbitrary code
-			}
-			// Create temp dir and write the provided code to a file
-			tmpDir, err := os.MkdirTemp("", "codeexec-")
-			if err != nil {
-				http.Error(w, fmt.Sprintf("internal: %v", err), 500)
-				return
-			}
-			defer os.RemoveAll(tmpDir)
-			filePath := filepath.Join(tmpDir, "code.go")
-			if err := os.WriteFile(filePath, []byte(req.Query), 0o644); err != nil {
-				http.Error(w, fmt.Sprintf("write failed: %v", err), 500)
-				return
-			}
-			var outBuf bytes.Buffer
-			// Check formatting
-			cmdFmt := exec.Command("gofmt", "-l", filePath)
-			cmdFmt.Stdout = &outBuf
-			cmdFmt.Stderr = &outBuf
-			if err := cmdFmt.Run(); err != nil {
-				// gofmt failing is non-fatal; capture output
-			}
-			// Try go vet (best-effort)
-			cmdVet := exec.Command("go", "vet", "./...")
-			cmdVet.Dir = tmpDir
-			var vetOut bytes.Buffer
-			cmdVet.Stdout = &vetOut
-			cmdVet.Stderr = &vetOut
-			_ = cmdVet.Run()
-			// Collate results
-			text = fmt.Sprintf("gofmt output:\n%s\n\ngo vet output:\n%s", outBuf.String(), vetOut.String())
-			source = "code:go"
-		default:
-			if api, ok := customAPIs.get(req.Tool); ok {
-				finalURL := strings.ReplaceAll(api.Template, "$q", url.QueryEscape(req.Query))
-				source = "api:" + api.Name + ":" + req.Query
-				text, fetchErr = fetchURL(finalURL)
-			} else {
-				http.Error(w, "unknown tool: "+req.Tool, 400)
-				return
-			}
-		}
+		text, source, fetchErr = executeToolRequest(req, s, rag, customAPIs, modules)
 
 		if fetchErr != nil {
 			http.Error(w, fmt.Sprintf("Tool %q fehlgeschlagen: %v", req.Tool, fetchErr), 500)
@@ -3200,7 +3543,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		chunks := chunkText(text, s.ChunkSize)
-		if err := rag.addChunks(source, chunks); err != nil {
+		if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -3303,8 +3646,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Article string `json:"article"`
-			Lang    string `json:"lang"`
+			Article    string `json:"article"`
+			Lang       string `json:"lang"`
+			EmbedModel string `json:"embed_model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Article == "" {
 			http.Error(w, "missing article", 400)
@@ -3326,7 +3670,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		chunks := chunkText(text, s.ChunkSize)
-		if err := rag.addChunks(req.Article, chunks); err != nil {
+		em := settings.get().EmbedModel
+		if req.EmbedModel != "" {
+			em = req.EmbedModel
+		}
+		if err := rag.addChunks(req.Article, chunks, em); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -3346,7 +3694,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			URL string `json:"url"`
+			URL        string `json:"url"`
+			EmbedModel string `json:"embed_model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
 			http.Error(w, "missing url", 400)
@@ -3363,7 +3712,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		s := settings.get()
 		chunks := chunkText(text, s.ChunkSize)
-		if err := rag.addChunks(req.URL, chunks); err != nil {
+		em := settings.get().EmbedModel
+		if req.EmbedModel != "" {
+			em = req.EmbedModel
+		}
+		if err := rag.addChunks(req.URL, chunks, em); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -3383,8 +3736,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Path      string `json:"path"`
-			Recursive bool   `json:"recursive"`
+			Path       string `json:"path"`
+			Recursive  bool   `json:"recursive"`
+			EmbedModel string `json:"embed_model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
 			http.Error(w, "missing path", 400)
@@ -3410,6 +3764,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		s := settings.get()
+		em := s.EmbedModel
+		if req.EmbedModel != "" {
+			em = req.EmbedModel
+		}
 		var totalFiles, totalChars, totalChunksN int
 		var errors []string
 
@@ -3446,7 +3804,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			}
 			source := "folder:" + relPath
 			chunks := chunkText(text, s.ChunkSize)
-			if err := rag.addChunks(source, chunks); err != nil {
+			if err := rag.addChunks(source, chunks, em); err != nil {
 				errors = append(errors, relPath+": "+err.Error())
 				return nil
 			}
@@ -3475,8 +3833,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Title string `json:"title"`
-			Text  string `json:"text"`
+			Title      string `json:"title"`
+			Text       string `json:"text"`
+			EmbedModel string `json:"embed_model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
 			http.Error(w, "missing text", 400)
@@ -3487,7 +3846,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			req.Title = "manual-" + strconv.FormatInt(time.Now().Unix(), 10)
 		}
 		chunks := chunkText(req.Text, s.ChunkSize)
-		if err := rag.addChunks(req.Title, chunks); err != nil {
+		em := settings.get().EmbedModel
+		if req.EmbedModel != "" {
+			em = req.EmbedModel
+		}
+		if err := rag.addChunks(req.Title, chunks, em); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -3519,6 +3882,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		filename := header.Filename
+		// optional embed_model from form
+		em := r.FormValue("embed_model")
+		if em == "" {
+			em = settings.get().EmbedModel
+		}
 		lower := strings.ToLower(filename)
 		s := settings.get()
 		allowedExts := map[string]bool{
@@ -3583,7 +3951,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 					}
 					src := "upload:" + filename + ":" + f.Name
 					chunks := chunkText(string(content), s.ChunkSize)
-					if err := rag.addChunks(src, chunks); err != nil {
+					if err := rag.addChunks(src, chunks, em); err != nil {
 						errorsList = append(errorsList, f.Name+": "+err.Error())
 						continue
 					}
@@ -3633,7 +4001,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 					}
 					src := "upload:" + filename + ":" + hdr.Name
 					chunks := chunkText(string(content), s.ChunkSize)
-					if err := rag.addChunks(src, chunks); err != nil {
+					if err := rag.addChunks(src, chunks, em); err != nil {
 						errorsList = append(errorsList, hdr.Name+": "+err.Error())
 						continue
 					}
@@ -3658,7 +4026,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		text := string(data)
 		title := filepath.Base(header.Filename)
 		chunks := chunkText(text, s.ChunkSize)
-		if err := rag.addChunks(title, chunks); err != nil {
+		if err := rag.addChunks(title, chunks, em); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -3711,6 +4079,40 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	mux.HandleFunc("/api/chats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(chats.list())
+	})
+
+	// POST /api/chunks/clear — delete all stored chunks (requires explicit confirm flag)
+	mux.HandleFunc("/api/chunks/clear", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if !req.Confirm {
+			http.Error(w, "confirm required", 400)
+			return
+		}
+
+		// Delete all chunks and reset counters
+		delQ := "DELETE FROM chunks"
+		if st, err := tinysql.ParseSQL(delQ); err == nil {
+			rag.dbMu.Lock()
+			_, _ = tinysql.Execute(context.Background(), rag.db, "default", st)
+			rag.dbMu.Unlock()
+		}
+		rag.idMu.Lock()
+		rag.nextID = rag.maxChunkIDLocked() + 1
+		rag.idMu.Unlock()
+		_ = rag.save()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "total": rag.docCount()})
 	})
 
 	// GET /api/chat/<id> and DELETE /api/chat/<id>
@@ -3867,7 +4269,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 // It prefers a local `./smallr` binary if present, otherwise falls back to
 // `go run smallr.go -e` which requires the Go toolchain at runtime.
 func execSmallR(expr string) (string, error) {
-	ctx := smallr.NewContext()
+	// Acquire a smallR context from the pool to avoid repeated allocations
+	v := smallRPool.Get()
+	ctx := v.(*smallr.Context)
+	defer smallRPool.Put(ctx)
+
 	res, err := ctx.EvalString(expr)
 	if err != nil {
 		return "", fmt.Errorf("smallr eval failed: %w", err)
@@ -3876,6 +4282,45 @@ func execSmallR(expr string) (string, error) {
 		return res.Output, nil
 	}
 	return res.Value.String(), nil
+}
+
+// execShellCommand executes a safe set of shell commands on the server.
+// Allowed commands are restricted for security reasons.
+func execShellCommand(cmd string) (string, error) {
+	cmd = strings.TrimSpace(cmd)
+
+	// Whitelist of safe commands that can be executed
+	allowedCommands := map[string]bool{
+		"ls": true, "cat": true, "head": true, "tail": true,
+		"echo": true, "curl": true, "wget": true, "date": true,
+		"pwd": true, "whoami": true, "uname": true, "df": true,
+	}
+
+	// Extract the base command (first word)
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+
+	baseCmd := filepath.Base(parts[0]) // Use basename to avoid path traversal
+	if !allowedCommands[baseCmd] {
+		return "", fmt.Errorf("command %q is not allowed", baseCmd)
+	}
+
+	// For security, use subprocess without shell interpretation
+	// This prevents shell injection attacks
+	out, err := exec.Command(baseCmd, parts[1:]...).CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("shell command failed: %w", err)
+	}
+	return string(out), nil
+}
+
+// execTinyGoProgram interprets Go code directly in a sandboxed environment.
+// Similar to nanoGo, it doesn't compile but rather interprets the code.
+func execTinyGoProgram(source string) (string, error) {
+	timeout := 10 * time.Second // Slightly longer timeout for interpreted programs
+	return RunSafe(source, timeout)
 }
 
 // RunSafe executes untrusted Go source inside the nanoGo interpreter
@@ -3909,6 +4354,10 @@ func RunSafe(source string, timeout time.Duration) (string, error) {
 // runInterpreted creates a sandboxed interpreter, registers only the
 // host functions we choose to expose, and executes the source.
 func runInterpreted(source string, out *bytes.Buffer) error {
+	// Limit concurrent interpreter instances to avoid spikes.
+	nanoGoSem <- struct{}{}
+	defer func() { <-nanoGoSem }()
+
 	vm := nanogo.NewInterpreter()
 	registerSafeNatives(vm, out)
 	nanogo.RegisterBuiltinPackages(vm)
@@ -3986,22 +4435,58 @@ func main() {
 
 	// Load settings (or create on first run)
 	defaults := defaultSettingsFromFlags(*urlFlag, *chatModel, *embedModel, *lang, *chunkSize, *k)
-	settings, err := loadOrCreateSettings(*settingsPath, defaults)
+	settings, err = loadOrCreateSettings(*settingsPath, defaults)
 	if err != nil {
 		log.Fatalf("Failed to load settings: %v", err)
 	}
-	s := settings.get()
-
-	// Connect to LLM endpoint
-	lm := newLMClient(s.BaseURL, s.EmbedModel, s.ChatModel)
-	fmt.Printf("Connecting to LLM endpoint (%s)… ", s.BaseURL)
-	if err := lm.ping(); err != nil {
-		fmt.Println("FAILED")
-		log.Fatalf("Cannot reach LLM endpoint at %s: %v\nTip: open Settings in the UI and pick LM Studio (:1234) or Ollama (:11434).", s.BaseURL, err)
+	s := maybePreferOfflineLLM(settings)
+	// Prefer persisted OpenAI key from settings; fallback to env var if none present
+	openaiKey := s.OpenAIKey
+	if openaiKey == "" {
+		openaiKey = os.Getenv("OPENAI_API_KEY")
 	}
-	fmt.Println("OK")
 
-	rag, err := newRAG(lm, s.K, *dbPath, storageMode, *maxMemMB)
+	// Connect to LLM endpoints (chat vs embed). Support mixed backends.
+	chatBase := s.ChatBase
+	embedBase := s.EmbedBase
+	if chatBase == "" {
+		chatBase = s.BaseURL
+	}
+	if embedBase == "" {
+		embedBase = s.BaseURL
+	}
+
+	chatLM := newLMClient(chatBase, s.EmbedModel, s.ChatModel, openaiKey)
+	embedLM := newLMClient(embedBase, s.EmbedModel, s.ChatModel, openaiKey)
+
+	fmt.Printf("Connecting to chat endpoint (%s) and embed endpoint (%s)… ", chatBase, embedBase)
+	var llmAvailable = false
+	var llmPingErr error
+	if err := chatLM.ping(); err == nil {
+		llmAvailable = true
+	} else {
+		llmPingErr = err
+	}
+	if err := embedLM.ping(); err == nil {
+		llmAvailable = true
+	} else if llmPingErr == nil {
+		llmPingErr = err
+	}
+	if llmAvailable {
+		fmt.Println("OK")
+	} else {
+		fmt.Println("FAILED")
+		log.Printf("Cannot reach any LLM endpoint (chat: %s, embed: %s). %v\nTip: open Settings in the UI and pick LM Studio (:1234) or Ollama (:11434), or set OPENAI_API_KEY for OpenAI.", chatBase, embedBase, llmPingErr)
+	}
+
+	var provider lmProvider
+	if chatBase == embedBase {
+		provider = chatLM
+	} else {
+		provider = &compositeLM{embedClient: embedLM, chatClient: chatLM}
+	}
+
+	rag, err := newRAG(provider, s.K, *dbPath, storageMode, *maxMemMB)
 	if err != nil {
 		log.Fatalf("Failed to create RAG: %v", err)
 	}
@@ -4022,11 +4507,12 @@ func main() {
 	}
 
 	customAPIs := newAPIStore(settings)
+	modules := newModuleStore(settings)
 	personas := newPersonaStore(settings)
 	chats := newChatStore(*chatsPath)
 
 	if *web {
-		runWebServer(rag, *addr, settings, chats, customAPIs, personas)
+		runWebServer(rag, *addr, settings, chats, customAPIs, personas, modules, llmAvailable, llmPingErr)
 		return
 	}
 
@@ -4064,7 +4550,7 @@ func main() {
 			}
 			chunks := chunkText(text, s.ChunkSize)
 			fmt.Printf("  %d chars -> %d chunks\n", len(text), len(chunks))
-			if err := rag.addChunks(art, chunks); err != nil {
+			if err := rag.addChunks(art, chunks, settings.get().EmbedModel); err != nil {
 				fmt.Printf("Error: %v\n", err)
 			}
 			fmt.Printf("Total: %d chunks\n", rag.docCount())

@@ -1,10 +1,28 @@
+// Small DOM helpers: query single / multiple elements
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+// ---------------------------------------------------------------------------
+// Utility helpers
+// - Keep small, well-tested helpers near the top for quick inspection.
+// - These are intentionally simple and synchronous to avoid side-effects.
+// ---------------------------------------------------------------------------
+
+/**
+ * Escape text for safe insertion into HTML.
+ * Prevents simple XSS when rendering user-provided content.
+ * This function intentionally only handles a small set of characters.
+ */
 function escHtml(s){
   return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+/**
+ * Render Markdown to HTML using marked if available.
+ * - When `marked` is present we sanitize any raw HTML tokens.
+ * - On parsing errors or if `marked` is absent we fall back to a safe
+ *   plain-text rendering with newlines converted to <br>.
+ */
 function renderMarkdown(md){
   if(!md) return '';
   if(window.marked){
@@ -16,7 +34,18 @@ function renderMarkdown(md){
         const raw = (typeof token === 'string') ? token : (token && token.raw ? token.raw : String(token));
         return escHtml(raw);
       };
-      return marked.parse(md, {renderer, breaks:true});
+
+      // Set options for syntax highlighting if highlight.js is present
+      const options = { renderer, breaks: true, gfm: true };
+      if(window.hljs){
+        options.highlight = (code, lang) => {
+          if(lang && hljs.getLanguage(lang)){
+            return hljs.highlight(code, { language: lang }).value;
+          }
+          return hljs.highlightAuto(code).value;
+        };
+      }
+      return marked.parse(md, options);
     }catch(e){
       // fallback on parse error
       return escHtml(md).replace(/\n/g, '<br>');
@@ -25,6 +54,11 @@ function renderMarkdown(md){
   return escHtml(md).replace(/\n/g, '<br>');
 }
 
+/**
+ * Render any Mermaid diagrams found inside a container element.
+ * This is async because Mermaid's render API is async; errors are shown
+ * inline so the rest of the page still loads.
+ */
 async function renderMermaidIn(el){
   if(!window.mermaid) return;
   const nodes = el.querySelectorAll('code.language-mermaid, code.lang-mermaid, code.mermaid');
@@ -44,6 +78,11 @@ async function renderMermaidIn(el){
   }
 }
 
+/**
+ * Populate a chat bubble element with rendered content.
+ * - Stores the raw content on `data-raw` for debugging/inspection.
+ * - Uses Markdown rendering and attempts to render Mermaid diagrams.
+ */
 function renderBubbleContent(el, content){
   el.dataset.raw = content;
   const html = renderMarkdown(content);
@@ -51,8 +90,51 @@ function renderBubbleContent(el, content){
   // If marked.js isn't loaded, use pre-wrap for plain text fallback
   el.classList.toggle('plain', !window.marked);
   renderMermaidIn(el);
+  
+  // Syntax highlighting for code blocks if highlight.js is present
+  if(window.hljs){
+    el.querySelectorAll('pre code').forEach((block) => {
+      hljs.highlightElement(block);
+    });
+    // Add copy buttons to code blocks
+    el.querySelectorAll('pre').forEach(pre => {
+      if(pre.querySelector('.code-copy-btn')) return;
+      const btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.innerHTML = '📋';
+      btn.title = 'Code kopieren';
+      btn.onclick = () => {
+        const code = pre.querySelector('code')?.innerText || pre.innerText;
+        copyToClipboard(code, btn);
+      };
+      pre.appendChild(btn);
+    });
+  }
 }
 
+/**
+ * Copy text to clipboard using the modern API.
+ * Shows a temporary success state on the triggering element if provided.
+ */
+async function copyToClipboard(text, el){
+  try{
+    if(!text) return;
+    await navigator.clipboard.writeText(text);
+    if(el){
+      const old = el.innerHTML;
+      el.innerHTML = '✓';
+      el.classList.add('success');
+      setTimeout(() => { 
+        el.innerHTML = old; 
+        el.classList.remove('success');
+      }, 2000);
+    }
+  }catch(e){
+    console.error('Copy failed', e);
+  }
+}
+
+// Short human-friendly timestamp for compact chat headers
 function timeShort(iso){
   try{
     const d = new Date(iso);
@@ -60,6 +142,13 @@ function timeShort(iso){
   }catch(e){ return ''; }
 }
 
+/**
+ * Simple API helpers for GET/POST
+ * - `apiGet` expects a JSON response and throws on non-2xx.
+ * - `apiPost` returns parsed JSON or text payload; on non-2xx it throws
+ *   an Error object with `.status` and `.payload` for richer handling
+ *   (useful for detecting `409` server responses with JSON bodies).
+ */
 async function apiGet(path){
   const r = await fetch(path);
   if(!r.ok) throw new Error(await r.text());
@@ -85,11 +174,15 @@ async function apiPost(path, body){
   return payload;
 }
 
+// Set a short status message into an element.
+// `cls` can be 'ok' or 'err' to apply simple coloring via CSS.
 function setStatus(el, msg, cls){
   el.textContent = msg;
   el.className = 'tool-status' + (cls ? ' '+cls : '');
 }
 
+// Toggle a loading state on a button or element.
+// Accepts either a selector string or an element reference.
 function setLoading(selectorOrEl, on){
   let el = (typeof selectorOrEl === 'string') ? document.querySelector(selectorOrEl) : selectorOrEl;
   if(!el) return;
@@ -100,6 +193,30 @@ function setLoading(selectorOrEl, on){
     el.disabled = false;
     el.classList.remove('loading');
   }
+}
+
+/**
+ * Helper for quick-start suggestions in empty chat state.
+ * Fills the chat input and triggers the request.
+ */
+window.fillChat = function(txt){
+  const q = $('#chatQ');
+  if(q){
+    q.value = txt;
+    autosize(q);
+    askChat();
+  }
+};
+
+// Read the ingest embed-model selector UI and return the effective model string.
+// Priority: select value -> custom input when 'custom' selected -> empty string
+function getIngestEmbedModel(){
+  const sel = document.querySelector('#ingestEmbedSelect');
+  const custom = document.querySelector('#ingestEmbedCustom');
+  if(!sel) return custom ? custom.value.trim() : '';
+  const v = sel.value;
+  if(v === 'custom') return custom ? custom.value.trim() : '';
+  return v || '';
 }
 
 // --- i18n simple helper
@@ -126,6 +243,10 @@ const _translations = {
     persona: 'Persona',
     debug: 'Debug',
     debug_description: 'Zeigt die RAG-Kontextdaten an, die das System für die Antwort verwendet',
+    auto_search: 'Auto-Search',
+    deep_research: 'Deep Research',
+    offline_mode: 'Offline',
+    chat_disclaimer: 'tinyRAG kann Fehler machen. Wichtige Informationen prüfen.',
     settings: 'Einstellungen',
     chat_empty_state: 'Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.',
     chat_input_label: 'Ihre Frage eingeben',
@@ -162,6 +283,8 @@ const _translations = {
     general: 'Allgemein',
     llm_backend: 'LLM Backend',
     custom_apis: 'Custom APIs',
+    modules: 'Module',
+    modules_hint: 'Module verbinden externe Quellen mit tinyRAG. Testen zeigt Rohdaten, Ingest uebernimmt normalisierten Text in die Wissensbasis.',
     personas: 'Personas',
     appearance: 'Erscheinungsbild',
     language: 'Sprache / Language',
@@ -187,7 +310,19 @@ const _translations = {
     persona_name: 'Name',
     persona_name_placeholder: 'z.B. Sachlicher Modus',
     persona_prompt: 'Pre-Prompt',
-    persona_prompt_placeholder: 'Instruktionen, Tonalität, Stil…'
+    persona_prompt_placeholder: 'Instruktionen, Tonalität, Stil…',
+    maintenance: 'Wartung',
+    clear_chunks: 'Wissensbasis leeren',
+    clear_chunks_info: 'Lösche alle Chunks in der Wissensbasis. Diese Aktion kann nicht rückgängig gemacht werden.',
+    clear_confirm: 'Wirklich ALLES löschen? Das kann nicht rückgängig gemacht werden.',
+    cleared: 'Alle Chunks gelöscht.',
+    copy: 'Kopieren',
+    sugg_summarize: 'Zusammenfassen',
+    sugg_summarize_val: 'Fasse die wichtigsten Infos aus meiner Wissensbasis zusammen.',
+    sugg_newest: 'Was ist neu?',
+    sugg_newest_val: 'Welche Dokumente wurden zuletzt hinzugefügt und was ist deren Inhalt?',
+    sugg_analyze: 'Analyse',
+    sugg_analyze_val: 'Hilf mir bei der Analyse der vorhandenen Daten.'
   },
   en: {
     loading: 'Loading…',
@@ -211,6 +346,10 @@ const _translations = {
     persona: 'Persona',
     debug: 'Debug',
     debug_description: 'Shows RAG context data that the system uses for the response',
+    auto_search: 'Auto-Search',
+    deep_research: 'Deep Research',
+    offline_mode: 'Offline',
+    chat_disclaimer: 'tinyRAG can make mistakes. Check important info.',
     settings: 'Settings',
     chat_empty_state: 'Ask a question about your knowledge base.<br>The answer is based on stored documents.',
     chat_input_label: 'Enter your question',
@@ -247,6 +386,8 @@ const _translations = {
     general: 'General',
     llm_backend: 'LLM Backend',
     custom_apis: 'Custom APIs',
+    modules: 'Modules',
+    modules_hint: 'Modules connect external sources to tinyRAG. Test previews raw data, ingest writes normalized text into the knowledge base.',
     personas: 'Personas',
     appearance: 'Appearance',
     language: 'Language',
@@ -272,7 +413,19 @@ const _translations = {
     persona_name: 'Name',
     persona_name_placeholder: 'e.g., Formal Mode',
     persona_prompt: 'Pre-Prompt',
-    persona_prompt_placeholder: 'Instructions, tone, style…'
+    persona_prompt_placeholder: 'Instructions, tone, style…',
+    maintenance: 'Maintenance',
+    clear_chunks: 'Clear Knowledge Base',
+    clear_chunks_info: 'Delete all chunks in the knowledge base. This action cannot be undone.',
+    clear_confirm: 'Really delete EVERYTHING? This cannot be undone.',
+    cleared: 'All chunks cleared.',
+    copy: 'Copy',
+    sugg_summarize: 'Summarize',
+    sugg_summarize_val: 'Summarize the most important info from my knowledge base.',
+    sugg_newest: 'What\'s new?',
+    sugg_newest_val: 'What documents were added recently and what is their content?',
+    sugg_analyze: 'Analyze',
+    sugg_analyze_val: 'Help me analyze the existing data.'
   }
 };
 
@@ -434,6 +587,9 @@ function handleTabKeydown(e, selector, group){
 let currentChatId = '';
 let currentPersonaId = '';
 let debugMode = false;
+let deepMode = false;
+let offlineMode = false;
+let autoSearchMode = true;
 let typingBubble = null;
 let lastDebugData = null;
 
@@ -543,24 +699,58 @@ function renderDebugPanel(data){
   return panel;
 }
 
-function msgElement(role, content, timeIso){
+function msgElement(role, content, timeIso, model, modelMeta){
   const msg = document.createElement('div');
   msg.className = `msg ${role}`;
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   renderBubbleContent(bubble, content);
+
+  // If model info is present, add it to the bubble as a title or badge
+  if(role === 'assistant' && model){
+    let title = 'Model: ' + model;
+    if(modelMeta){
+      if(modelMeta.base_url) title += '\nEndpoint: ' + modelMeta.base_url;
+      // Add other meta if present
+      for(const [k,v] of Object.entries(modelMeta)){
+        if(k !== 'base_url' && k !== 'chat_model') title += `\n${k}: ${v}`;
+      }
+    }
+    bubble.title = title;
+  }
+
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.textContent = `${role === 'user' ? 'Du' : 'Assistant'} · ${timeShort(timeIso)}`;
+  let metaText = `${role === 'user' ? 'Du' : 'Assistant'} · ${timeShort(timeIso)}`;
+  if(role === 'assistant' && model){
+    metaText += ` · ${model}`;
+  }
+  meta.textContent = metaText;
   msg.appendChild(bubble);
   msg.appendChild(meta);
+
+  if(role === 'assistant'){
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'icon-btn copy-btn';
+    copyBtn.innerHTML = '📋';
+    copyBtn.title = t('copy') || 'Kopieren';
+    copyBtn.addEventListener('click', () => {
+      const raw = bubble.dataset.raw || content;
+      copyToClipboard(raw, copyBtn);
+    });
+    actions.appendChild(copyBtn);
+    msg.appendChild(actions);
+  }
+
   return msg;
 }
 
-function addMessage(role, content, timeIso){
+function addMessage(role, content, timeIso, model, modelMeta){
   const wrap = $('#chatMessages');
   $('#chatEmpty').style.display = 'none';
-  wrap.appendChild(msgElement(role, content, timeIso || new Date().toISOString()));
+  wrap.appendChild(msgElement(role, content, timeIso || new Date().toISOString(), model, modelMeta));
   wrap.scrollTop = wrap.scrollHeight;
 }
 
@@ -581,6 +771,23 @@ async function refreshStats(){
     // Also refresh sources list when open
     await refreshSources(stats.sources || []);
   }catch(e){}
+}
+
+async function clearChunks(){
+  const status = $('#clearStatus');
+  if(!confirm(t('clear_confirm'))) return;
+  setLoading('#clearChunksBtn', true);
+  setStatus(status, t('loading'));
+  try{
+    await fetch('/api/chunks/clear', {method:'POST'});
+    setStatus(status, t('cleared'), 'ok');
+    setTimeout(()=>setStatus(status,''), 3000);
+    await refreshStats();
+  }catch(e){
+    setStatus(status, t('error_prefix')+(e.message||String(e)), 'err');
+  }finally{
+    setLoading('#clearChunksBtn', false);
+  }
 }
 
 async function refreshChats(){
@@ -628,11 +835,24 @@ async function loadChat(id){
     currentPersonaId = c.persona_id;
     const sel = $('#personaSelect'); if(sel) sel.value = currentPersonaId;
   }
-  $('#chatMessages').innerHTML = `<div class="empty-state" id="chatEmpty" style="display:none"></div>`;
+  
+  const emptyHtml = `
+    <div class="empty-state" id="chatEmpty">
+      <div class="icon" aria-hidden="true">💬</div>
+      <p data-i18n="chat_empty_state">${t('chat_empty_state')}</p>
+      <div class="chat-suggestions">
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_summarize_val')}')">📝 <span>${t('sugg_summarize')}</span></button>
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_newest_val')}')">🆕 <span>${t('sugg_newest')}</span></button>
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_analyze_val')}')">🔍 <span>${t('sugg_analyze')}</span></button>
+      </div>
+    </div>`;
+
+  $('#chatMessages').innerHTML = emptyHtml;
   if(!c.messages || !c.messages.length){
     $('#chatEmpty').style.display = '';
   }else{
-    c.messages.forEach(m => addMessage(m.role, m.content, m.time));
+    $('#chatEmpty').style.display = 'none';
+    c.messages.forEach(m => addMessage(m.role, m.content, m.time, m.model, m.model_meta));
   }
   await refreshChats();
   showTab('sidebar','chats');
@@ -642,7 +862,16 @@ async function loadChat(id){
 async function newChat(){
   const c = await apiPost('/api/chats/new', {persona_id: currentPersonaId});
   currentChatId = c.id;
-  $('#chatMessages').innerHTML = `<div class="empty-state" id="chatEmpty"><div class="icon">💬</div><p>Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p></div>`;
+  $('#chatMessages').innerHTML = `
+    <div class="empty-state" id="chatEmpty">
+      <div class="icon" aria-hidden="true">💬</div>
+      <p data-i18n="chat_empty_state">${t('chat_empty_state')}</p>
+      <div class="chat-suggestions">
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_summarize_val')}')">📝 <span>${t('sugg_summarize')}</span></button>
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_newest_val')}')">🆕 <span>${t('sugg_newest')}</span></button>
+        <button class="suggestion-btn" onclick="fillChat('${t('sugg_analyze_val')}')">🔍 <span>${t('sugg_analyze')}</span></button>
+      </div>
+    </div>`;
   await refreshChats();
   showTab('main','chat');
 }
@@ -682,6 +911,19 @@ async function initSettingsUI(){
   const s = await apiGet('/api/settings');
   $('#wikiLang').value = s.lang || 'de';
   $('#setBaseUrl').value = s.base_url || 'http://localhost:1234';
+  // Support separate chat/embed bases
+  $('#setChatBase').value = s.chat_base || s.base_url || 'http://localhost:1234';
+  $('#setEmbedBase').value = s.embed_base || s.base_url || 'http://localhost:1234';
+  // Show/hide advanced endpoints toggle
+  const useSep = $('#useSeparateEndpoints');
+  const adv = $('#advancedEndpoints');
+  if(useSep && adv){
+    // If chat_base/embed_base differ from base_url, enable advanced view
+    const isAdvanced = (s.chat_base && s.chat_base !== s.base_url) || (s.embed_base && s.embed_base !== s.base_url);
+    useSep.checked = !!isAdvanced;
+    adv.style.display = isAdvanced ? '' : 'none';
+    useSep.addEventListener('change', ()=>{ adv.style.display = useSep.checked ? '' : 'none'; });
+  }
   // nanoGo toggle
   const nanoChk = $('#allowNanoGo');
   if(nanoChk) nanoChk.checked = !!s.allow_nanogo;
@@ -698,8 +940,217 @@ async function initSettingsUI(){
   $('#embedHint').textContent = '';
   $('#endpointStatus').textContent = '';
 
+  // OpenAI key presence (do not expose actual key)
+  const keyInp = $('#setOpenAIKey');
+  if(keyInp){
+    if(s.openai_key_present){
+      keyInp.placeholder = 'Configured (hidden)';
+      keyInp.value = '';
+    } else {
+      keyInp.placeholder = 'sk-...';
+      keyInp.value = '';
+    }
+  }
+
+  // Wire quick "Use OpenAI" button: fill base URL and enable simple setup
+  const btnUse = $('#btnUseOpenAI');
+  const hint = $('#openaiHint');
+  if(btnUse){
+    btnUse.addEventListener('click', ()=>{
+      // Set base URL to OpenAI host
+      $('#setBaseUrl').value = 'https://api.openai.com';
+      // Disable advanced endpoints (simple mode)
+      if($('#useSeparateEndpoints')){ $('#useSeparateEndpoints').checked = false; const adv = $('#advancedEndpoints'); if(adv) adv.style.display='none'; }
+      if(keyInp && keyInp.value.trim() === '' && s.openai_key_present){
+        // If key already present, inform user
+        if(hint) hint.textContent = 'OpenAI-Key ist gespeichert. Nach Speichern wird OpenAI verwendet.';
+      } else if(keyInp && keyInp.value.trim() !== ''){
+        if(hint) hint.textContent = 'OpenAI-Key eingefügt. Klick auf Speichern, um OpenAI zu aktivieren.';
+      } else {
+        if(hint) hint.textContent = 'Trage deinen OpenAI-Key ein und klicke auf Speichern.';
+      }
+    });
+  }
+
   await loadCustomApis();
+  await loadModules();
   await loadPersonas();
+
+  // Update OpenAI badge visibility in main UI
+  updateOpenAIBadge(s);
+  // Initialize LLM provider switcher in the header
+  initLLMSwitcher(s);
+
+  // Initialize ingest embed-model input with current setting
+  const ingestSelect = $('#ingestEmbedSelect');
+  const ingestCustom = $('#ingestEmbedCustom');
+  if(ingestSelect){
+    // Ensure default option present
+    ingestSelect.innerHTML = '<option value="">(Default / use settings)</option><option value="custom">-- Custom --</option>';
+    if(s.embed_model){
+      // if a configured embed model exists, add and select it
+      const opt = document.createElement('option'); opt.value = s.embed_model; opt.textContent = s.embed_model;
+      ingestSelect.appendChild(opt);
+      ingestSelect.value = s.embed_model;
+    }
+    ingestSelect.addEventListener('change', ()=>{ if(ingestCustom) ingestCustom.style.display = ingestSelect.value==='custom' ? '' : 'none'; });
+  }
+  if(ingestCustom){ ingestCustom.style.display = 'none'; ingestCustom.value = ''; }
+
+  // ingest model helper is global (defined above)
+
+  // Wire clear-all-chunks button
+  const btnClearAll = $('#btnClearAllChunks');
+  if(btnClearAll){
+    btnClearAll.addEventListener('click', async ()=>{
+      if(!confirm('Alle Chunks löschen? Dieser Vorgang kann nicht rückgängig gemacht werden.')) return;
+      setStatus($('#saveStatus'), 'Lösche alle Chunks…', '');
+      try{
+        const r = await apiPost('/api/chunks/clear', {confirm: true});
+        setStatus($('#saveStatus'), 'Alle Chunks gelöscht. Total: '+(r.total||0), 'ok');
+        await refreshStats();
+      }catch(e){
+        setStatus($('#saveStatus'), 'Fehler beim Löschen: '+(e.message||String(e)), 'err');
+      }
+    });
+  }
+}
+
+function updateOpenAIBadge(s){
+  const badge = $('#openaiBadge');
+  if(!badge) return;
+  const chatBase = (s && (s.chat_base || s.base_url)) ? (s.chat_base || s.base_url) : '';
+  const embedBase = (s && (s.embed_base || s.base_url)) ? (s.embed_base || s.base_url) : '';
+
+  function resolveName(url){
+    if(!url) return '';
+    const u = url.toLowerCase();
+    if(u.includes('openai.com')) return 'OpenAI';
+    if(u.includes('ollama')) return 'Ollama';
+    if(u.includes('lmstudio') || u.includes('lm-studio') || u.includes('lmstudio.ai')) return 'LM Studio';
+    if(u.includes('localhost') || u.includes('127.0.0.1')) return 'Local LLM';
+    return 'Remote LLM';
+  }
+
+  const chatName = resolveName(chatBase);
+  const embedName = resolveName(embedBase);
+  const anyBase = (chatBase || embedBase || '').toLowerCase();
+  const usingOpenAI = !!(s && s.openai_key_present && anyBase && anyBase.includes('openai.com'));
+
+  if(usingOpenAI){
+    badge.style.display = '';
+    badge.innerHTML = '<span>Using</span><strong>OpenAI</strong>';
+    badge.title = 'OpenAI';
+    return;
+  }
+
+  // If we have local/remote providers, show a badge with primary name and hover with both
+  if(chatName || embedName){
+    const primary = chatName || embedName || 'LLM';
+    badge.style.display = '';
+    badge.innerHTML = '<span>Using</span><strong>' + escHtml(primary) + '</strong>';
+    const parts = [];
+    if(chatName) parts.push('Chat: ' + chatName);
+    if(embedName) parts.push('Embed: ' + embedName);
+    badge.title = parts.join('\n');
+    return;
+  }
+
+  badge.style.display = 'none';
+}
+
+// Initialize the LLM provider switcher UI and wire selection actions.
+async function initLLMSwitcher(s){
+  const sel = $('#llmSwitcher');
+  if(!sel) return;
+  // Determine active base (chat preferred)
+  const base = (s && (s.chat_base || s.embed_base || s.base_url)) ? (s.chat_base || s.embed_base || s.base_url) : '';
+  if(base.includes('openai.com')) sel.value = 'openai';
+  else if(base.includes('localhost:1234')) sel.value = 'lmstudio';
+  else if(base.includes('localhost:11434')) sel.value = 'ollama';
+  else sel.value = 'custom';
+
+  if(sel.dataset.bound === 'true') return;
+  sel.dataset.bound = 'true';
+
+  sel.addEventListener('change', async (e)=>{
+    const v = e.target.value;
+    if(v === 'custom'){
+      // Open settings for custom entry
+      openModal();
+      return;
+    }
+    // Map selection to base URL
+    const map = {openai: 'https://api.openai.com', lmstudio: 'http://localhost:1234', ollama: 'http://localhost:11434'};
+    const baseUrl = map[v];
+    if(!baseUrl) return;
+    // Probe and populate a compact model selector so the user can pick a chat model before applying
+    const modelSel = $('#llmModelSelect');
+    const applyBtn = $('#llmApplyBtn');
+    setLoading(sel, true);
+    try{
+      const resp = await apiPost('/api/llm/list-models', {base_url: baseUrl});
+      // Build option list: prefer recommend_chat first, then unique models
+      const opts = [];
+      const seen = {};
+      if(resp.recommend_chat && resp.recommend_chat.length){
+        resp.recommend_chat.forEach(m=>{ if(!seen[m]){ opts.push({label: m+' (recommended)', value: m}); seen[m]=true } });
+      }
+      if(resp.models && resp.models.length){
+        resp.models.forEach(m=>{ if(!seen[m]){ opts.push({label: m, value: m}); seen[m]=true } });
+      }
+      if(opts.length === 0){
+        alert('Keine Modelle gefunden für '+baseUrl+'. Öffne Einstellungen, um manuell zu konfigurieren.');
+        openModal();
+        return;
+      }
+      // Populate select
+      modelSel.innerHTML = '';
+      const defOpt = document.createElement('option'); defOpt.value = ''; defOpt.textContent = '(Use recommended)'; modelSel.appendChild(defOpt);
+      opts.forEach(o=>{ const op = document.createElement('option'); op.value = o.value; op.textContent = o.label; modelSel.appendChild(op); });
+      // Choose first recommended if present
+      if(resp.recommend_chat && resp.recommend_chat.length){ modelSel.value = resp.recommend_chat[0]; }
+      else { modelSel.value = opts[0].value; }
+      modelSel.style.display = '';
+      applyBtn.style.display = '';
+
+      // Wire apply button: uses selected model (or recommended if empty)
+      applyBtn.onclick = async ()=>{
+        setLoading(applyBtn, true);
+        try{
+          const selected = modelSel.value || ((resp.recommend_chat && resp.recommend_chat.length)?resp.recommend_chat[0]:opts[0].value);
+          const embedModel = (resp.recommend_embed && resp.recommend_embed.length) ? resp.recommend_embed[0] : selected;
+          await apiPost('/api/settings', {chat_base: baseUrl, embed_base: baseUrl, chat_model: selected, embed_model: embedModel});
+          const s2 = await apiGet('/api/settings');
+          updateOpenAIBadge(s2);
+          await loadPersonas();
+          await refreshStats();
+          alert('LLM gewechselt und Modell angewendet: '+selected);
+          // Auto-hide selector after success
+          modelSel.style.display = 'none';
+          applyBtn.style.display = 'none';
+        }catch(err){
+          alert('Fehler beim Anwenden des Modells: '+(err.message||String(err)));
+        }finally{
+          setLoading(applyBtn, false);
+        }
+      };
+
+    }catch(err){
+      alert('Fehler beim Wechseln des LLM: '+(err.message||String(err)));
+    }finally{
+      setLoading(sel, false);
+    }
+  });
+
+  // Hide model selector if user clicks elsewhere or re-opens settings
+  document.addEventListener('click', (e)=>{
+    const modelSel = $('#llmModelSelect');
+    const applyBtn = $('#llmApplyBtn');
+    if(!modelSel || !applyBtn) return;
+    // keep visible as long as user interacts with switcher or selector
+    // No-op: selector visibility is managed by change handler and apply button
+  });
 }
 
 let modalFocusTrap = null;
@@ -737,6 +1188,33 @@ function closeModal(){
     modalFocusTrap.focus();
     modalFocusTrap = null;
   }
+}
+
+function showLLMMissingModal(msg){
+  // Avoid duplicate
+  if($('#llmMissingModal')) return;
+  const modal = document.createElement('div');
+  modal.id = 'llmMissingModal';
+  modal.className = 'overlay-modal';
+  modal.innerHTML = `
+    <div class="overlay-box">
+      <h2>LLM API nicht erreichbar</h2>
+      <p>${escHtml(msg || 'Keine LLM-API konfiguriert oder erreichbar. Bitte Einstellungen öffnen und einen Endpoint/API-Key hinterlegen.')}</p>
+      <div class="actions">
+        <button id="llmOpenSettings" class="tool-btn">Einstellungen öffnen</button>
+        <button id="llmDismiss" class="tool-btn">Schließen</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  $('#llmOpenSettings').addEventListener('click', async ()=>{
+    closeLLMMissingModal();
+    openModal();
+    await initSettingsUI();
+  });
+  $('#llmDismiss').addEventListener('click', ()=>closeLLMMissingModal());
+}
+function closeLLMMissingModal(){
+  const m = $('#llmMissingModal'); if(m) m.remove();
 }
 
 function trapFocusInModal(e){
@@ -809,7 +1287,8 @@ async function testEndpointAndLoadModels(){
   $('#discoverBox').style.display = 'none';
 
   try{
-    const r = await apiPost('/api/llm/list-models', {base_url: base});
+    const maybeKey = $('#setOpenAIKey') ? $('#setOpenAIKey').value.trim() : '';
+    const r = await apiPost('/api/llm/list-models', {base_url: base, openai_api_key: maybeKey});
     setStatus($('#endpointStatus'), `OK (${r.provider_hint}). ${r.models.length} Modelle gefunden.`, 'ok');
 
     // Fill selects
@@ -847,6 +1326,22 @@ async function testEndpointAndLoadModels(){
     $('#chatHint').textContent = r.recommend_chat?.length ? ('Vorschläge: '+r.recommend_chat.join(', ')) : '';
     $('#embedHint').textContent = r.recommend_embed?.length ? ('Vorschläge: '+r.recommend_embed.join(', ')) : 'Tipp: wähle ein Embedding-Modell (oft mit „embed“ im Namen).';
 
+    // Populate ingest embed select as well
+    const ingestSel = $('#ingestEmbedSelect');
+    const ingestCustom = $('#ingestEmbedCustom');
+    if(ingestSel){
+      // keep the default and custom options; add model options
+      const prev = ingestSel.value;
+      const baseHtml = '<option value="">(Default / use settings)</option><option value="custom">-- Custom --</option>';
+      ingestSel.innerHTML = baseHtml;
+      r.models.forEach(m=>{ const o = document.createElement('option'); o.value = m; o.textContent = m; ingestSel.appendChild(o); });
+      // try to select recommend_embed or previous
+      if(prev && Array.from(ingestSel.options).some(o=>o.value===prev)) ingestSel.value = prev;
+      else if(r.recommend_embed && r.recommend_embed.length && Array.from(ingestSel.options).some(o=>o.value===r.recommend_embed[0])) ingestSel.value = r.recommend_embed[0];
+    }
+    if(ingestCustom) ingestCustom.style.display = (ingestSel && ingestSel.value==='custom') ? '' : 'none';
+    if(ingestSel){ ingestSel.addEventListener('change', ()=>{ if(ingestCustom) ingestCustom.style.display = ingestSel.value==='custom' ? '' : 'none'; }); }
+
   }catch(e){
     setStatus($('#endpointStatus'), 'Fehler: '+(e.message||String(e)), 'err');
   }
@@ -854,23 +1349,46 @@ async function testEndpointAndLoadModels(){
 
 async function saveSettings(force=false){
   const base = $('#setBaseUrl').value.trim();
+  const useSep = $('#useSeparateEndpoints') ? !!$('#useSeparateEndpoints').checked : false;
+  const chatBase = useSep ? $('#setChatBase').value.trim() : '';
+  const embedBase = useSep ? $('#setEmbedBase').value.trim() : '';
   const chat = $('#setChatModel').value;
   const emb = $('#setEmbedModel').value;
+  const openaiKey = $('#setOpenAIKey') ? $('#setOpenAIKey').value.trim() : '';
   const allowNano = $('#allowNanoGo') ? !!$('#allowNanoGo').checked : false;
-  if(!base || !chat || !emb){
-    setStatus($('#saveStatus'), 'Bitte Endpoint und Modelle wählen.', 'err');
+  if(!chat || !emb){
+    setStatus($('#saveStatus'), 'Bitte Chat- und Embedding-Modell wählen.', 'err');
     return;
   }
   setStatus($('#saveStatus'), 'Speichere…', '');
   try{
-    await apiPost('/api/settings', {base_url: base, chat_model: chat, embed_model: emb, force, allow_nanogo: allowNano});
+    // Only send chat_base/embed_base when advanced mode is used; otherwise server will use base_url
+    const payload = {base_url: base, chat_model: chat, embed_model: emb, openai_api_key: openaiKey, force, allow_nanogo: allowNano};
+    if(useSep){ payload.chat_base = chatBase; payload.embed_base = embedBase; }
+    await apiPost('/api/settings', payload);
     setStatus($('#saveStatus'), 'Gespeichert. Einstellungen aktiv.', 'ok');
+    // If an OpenAI key was provided and base points to OpenAI, make it explicit to the user
+    if(openaiKey){
+      const baseHost = (base || '').toLowerCase();
+      if(baseHost.includes('openai.com')){
+        setStatus($('#saveStatus'), 'OpenAI konfiguriert — Chat & Embeddings werden OpenAI verwenden.', 'ok');
+      }
+    }
     closeModal();
   }catch(e){
     if(e.status === 409 && e.payload && e.payload.requires_force){
-      setStatus($('#saveStatus'), e.payload.message + ' (Nochmal klicken zum Bestätigen)', 'warn');
-      // Second click confirms
-      $('#btnSaveSettings').onclick = ()=>saveSettings(true);
+      // Prompt the user explicitly instead of requiring a hidden second click
+      const msg = (e.payload && e.payload.message) ? e.payload.message : 'Änderung erfordert Bestätigung.';
+      const proceed = confirm(msg + '\n\nFortfahren und die Wissensbasis ggf. neu einbetten/DB leeren?');
+      if(proceed){
+        try{
+          await saveSettings(true);
+        }catch(err){
+          // nested call will surface errors into UI
+        }
+      }else{
+        setStatus($('#saveStatus'), 'Abgebrochen.', '');
+      }
       return;
     }
     setStatus($('#saveStatus'), 'Fehler: '+(e.message||String(e)), 'err');
@@ -907,6 +1425,127 @@ async function loadCustomApis(){
       await apiPost('/api/settings/apis/delete', {id: a.id});
       await loadCustomApis();
     });
+    box.appendChild(div);
+  });
+}
+
+async function loadModules(){
+  const list = await apiGet('/api/modules');
+  cachedModules = list || [];
+  const box = $('#moduleList');
+  if(!box) return;
+  if(!cachedModules.length){
+    box.innerHTML = '<p class="muted">Noch keine Module.</p>';
+    return;
+  }
+  box.innerHTML = '';
+  cachedModules.forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'api-item module-item';
+    const actionLabel = m.kind === 'sql' ? 'Query override (optional)' : m.kind === 'mail' ? 'Limit (optional)' : 'Pfad / Unterordner';
+    const actionPlaceholder = m.kind === 'sql' ? 'SELECT * FROM ...' : m.kind === 'mail' ? '5' : '.';
+    const jsonCfg = JSON.stringify(m.config || {}, null, 2);
+    div.innerHTML = `
+      <div style="width:100%">
+        <div class="name" style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+          <span>${escHtml(m.name)}</span>
+          <label class="inline-check" style="margin:0">
+            <input type="checkbox" class="module-enabled" ${m.enabled ? 'checked' : ''}>
+            <span>Enabled</span>
+          </label>
+        </div>
+        <div class="desc">${escHtml(m.kind)} · ${escHtml(m.description || '')}</div>
+        <label style="margin-top:10px">Config JSON</label>
+        <textarea class="module-config" rows="10">${escHtml(jsonCfg)}</textarea>
+        <label style="margin-top:10px">${escHtml(actionLabel)}</label>
+        <input class="module-arg" placeholder="${escHtml(actionPlaceholder)}" value="${m.kind === 'http-folder' ? escHtml((m.config||{}).default_list_path || '.') : ''}">
+        <div class="actions-row" style="margin-top:10px">
+          <button class="tool-btn module-save">Speichern</button>
+          <button class="tool-btn module-test">Testen</button>
+          <button class="tool-btn suggested module-ingest">Ingest</button>
+          ${m.kind === 'http-folder' ? '<button class="tool-btn module-upload">Upload</button><input type="file" class="module-file" style="display:none">' : ''}
+        </div>
+        <div class="tool-status module-status" style="margin-top:8px"></div>
+        <pre class="module-output" style="white-space:pre-wrap;margin-top:8px"></pre>
+      </div>
+    `;
+
+    const cfgEl = div.querySelector('.module-config');
+    const argEl = div.querySelector('.module-arg');
+    const enabledEl = div.querySelector('.module-enabled');
+    const statusEl = div.querySelector('.module-status');
+    const outEl = div.querySelector('.module-output');
+
+    div.querySelector('.module-save').addEventListener('click', async ()=>{
+      try{
+        const config = JSON.parse(cfgEl.value || '{}');
+        await apiPost('/api/modules/save', {
+          id: m.id,
+          name: m.name,
+          kind: m.kind,
+          description: m.description,
+          enabled: enabledEl.checked,
+          config
+        });
+        setStatus(statusEl, 'Gespeichert', 'ok');
+        await loadModules();
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    });
+
+    div.querySelector('.module-test').addEventListener('click', async ()=>{
+      try{
+        setStatus(statusEl, 'Teste…', '');
+        const payload = {id: m.id, action: m.kind === 'http-folder' ? 'list' : 'query', arg: argEl.value.trim()};
+        if(m.kind === 'mail') payload.limit = Number(argEl.value.trim() || 0);
+        const res = await apiPost('/api/modules/run', payload);
+        setStatus(statusEl, res.summary || 'OK', 'ok');
+        outEl.textContent = res.text || JSON.stringify(res.meta || {}, null, 2);
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+        outEl.textContent = '';
+      }
+    });
+
+    div.querySelector('.module-ingest').addEventListener('click', async ()=>{
+      try{
+        setStatus(statusEl, 'Ingest läuft…', '');
+        const payload = {id: m.id, action: m.kind === 'http-folder' ? 'ingest' : 'query', arg: argEl.value.trim(), ingest: true};
+        if(m.kind === 'mail') payload.limit = Number(argEl.value.trim() || 0);
+        const res = await apiPost('/api/modules/run', payload);
+        setStatus(statusEl, res.summary || 'Ingest OK', 'ok');
+        outEl.textContent = res.text || JSON.stringify(res.meta || {}, null, 2);
+        await refreshStats();
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    });
+
+    if(m.kind === 'http-folder'){
+      const fileInput = div.querySelector('.module-file');
+      div.querySelector('.module-upload').addEventListener('click', ()=>fileInput.click());
+      fileInput.addEventListener('change', async ()=>{
+        const file = fileInput.files?.[0];
+        if(!file) return;
+        const form = new FormData();
+        form.append('file', file);
+        setStatus(statusEl, 'Upload…', '');
+        try{
+          const resp = await fetch('/api/modules/upload?id='+encodeURIComponent(m.id)+'&target='+encodeURIComponent(argEl.value.trim() || '.'), {method:'POST', body: form});
+          const payload = await resp.json();
+          if(!resp.ok) throw new Error(payload.error || JSON.stringify(payload));
+          setStatus(statusEl, 'Upload OK', 'ok');
+          outEl.textContent = JSON.stringify(payload, null, 2) + '\n\nDownload URL:\n/api/modules/download?id=' + encodeURIComponent(m.id) + '&path=' + encodeURIComponent(file.name);
+          await refreshStats();
+        }catch(e){
+          setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+        }finally{
+          fileInput.value = '';
+        }
+      });
+    }
+
     box.appendChild(div);
   });
 }
@@ -974,27 +1613,59 @@ async function addPersona(){
     alert('Bitte Namen angeben');
     return;
   }
-  await apiPost('/api/personas', {name, prompt});
-  $('#newPersonaName').value = '';
-  $('#newPersonaPrompt').value = '';
-  await loadPersonas();
+  setLoading('#btnAddPersona', true);
+  try{
+    await apiPost('/api/personas', {name, prompt});
+    $('#newPersonaName').value = '';
+    $('#newPersonaPrompt').value = '';
+    await loadPersonas();
+  }catch(e){
+    alert('Fehler beim Hinzufügen: '+(e.message||String(e)));
+  }finally{
+    setLoading('#btnAddPersona', false);
+  }
+}
+
+// Insert a curated set of sample personas to help new users.
+async function addSamplePersonas(){
+  const samples = [
+    {name: 'Formal', prompt: 'You are a formal assistant. Use a polite, professional tone and concise sentences.'},
+    {name: 'Friendly', prompt: 'You are friendly and approachable. Use an informal tone and give helpful examples where useful.'},
+    {name: 'Expert', prompt: 'You are an expert in the relevant field. Provide detailed, technical answers and cite assumptions when needed.'},
+    {name: 'Concise', prompt: 'Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity.'},
+    {name: 'Developer', prompt: 'You are a coding assistant. Provide code snippets and explanations to help solve programming problems. Use best practices and comment your code.'},
+  ];
+  if(!confirm('Beispiel-Personas hinzufügen?')) return;
+  setLoading('#btnAddSamplePersonas', true);
+  try{
+    for(const p of samples){
+      await apiPost('/api/personas', {name: p.name, prompt: p.prompt});
+    }
+    await loadPersonas();
+    alert('Beispiel-Personas hinzugefügt.');
+  }catch(e){
+    alert('Fehler beim Hinzufügen der Beispiel-Personas: '+(e.message||String(e)));
+  }finally{
+    setLoading('#btnAddSamplePersonas', false);
+  }
 }
 
 // Tool suggestion UI (adapted from original tinyRAG)
-var toolIcons={wikipedia:'\u{1F4D6}',duckduckgo:'\u{1F50E}',wiktionary:'\u{1F4DD}',stackoverflow:'\u{1F4BB}',websearch:'\u{1F50D}'};
-var toolLabels={wikipedia:'Wikipedia-Suche',duckduckgo:'DuckDuckGo Websuche',wiktionary:'Wiktionary (Wörterbuch)',stackoverflow:'StackOverflow-Suche',websearch:'Websuche'};
+var toolIcons={wikipedia:'\u{1F4D6}',duckduckgo:'\u{1F50E}',wiktionary:'\u{1F4DD}',stackoverflow:'\u{1F4BB}',websearch:'\u{1F50D}',news:'\u{1F4F0}',calculate:'\u{1F522}',nanogo:'\u{1F680}'};
+var toolLabels={wikipedia:'Wikipedia',duckduckgo:'DuckDuckGo',wiktionary:'Wiktionary',stackoverflow:'StackOverflow',websearch:'Websuche',news:'News',calculate:'Rechnen',nanogo:'Go-Code'};
 var cachedCustomAPIs=[];
+var cachedModules=[];
 var cachedPersonas=[];
 
 function renderToolSuggestion(tr, chatEl, originalQuestion){
   const div = document.createElement('div');
   div.className = 'tool-suggestion';
-  const builtinTools = ['wikipedia','duckduckgo','wiktionary','stackoverflow','websearch'];
+  const builtinTools = ['wikipedia','duckduckgo','wiktionary','stackoverflow','websearch','news','calculate','nanogo','shell','tinygo'];
   let h = '<div class="tool-header"><span class="tool-icon">\u{1F50D}</span> Zusätzliche Informationen benötigt</div>';
-  h += '<div class="tool-desc">Das Modell hat nicht genügend Kontext. Suchbegriff anpassen und eine Quelle wählen:</div>';
-  h += '<input class="tool-query-edit" type="text" value="'+escHtml(tr.query)+'">';
+  h += '<div class="tool-desc">Das Modell hat nicht genügend Kontext oder möchte Code ausführen:</div>';
+  h += '<textarea class="tool-query-edit" rows="3">'+escHtml(tr.query)+'</textarea>';
   h += '<div class="tool-actions">';
-  h += '<span class="tool-actions-label">Suchen mit:</span>';
+  h += '<span class="tool-actions-label">Aktion:</span>';
   for(let i=0;i<builtinTools.length;i++){
     const t = builtinTools[i];
     const icon = toolIcons[t]||'\u{1F527}';
@@ -1007,6 +1678,13 @@ function renderToolSuggestion(tr, chatEl, originalQuestion){
     const api = cachedCustomAPIs[j];
     const suggested2 = (api.id===tr.tool)?' suggested':'';
     h += '<button class="tool-btn'+suggested2+'" data-tool="'+escHtml(api.id)+'">\u{1F310} '+escHtml(api.name)+'</button>';
+  }
+  for(let j=0;j<cachedModules.length;j++){
+    const mod = cachedModules[j];
+    if(!mod.enabled) continue;
+    const toolName = 'module:'+mod.id;
+    const suggested3 = (toolName===tr.tool)?' suggested':'';
+    h += '<button class="tool-btn'+suggested3+'" data-tool="'+escHtml(toolName)+'">\u{1F9E9} '+escHtml(mod.name)+'</button>';
   }
   h += '<button class="btn-reject">\u274C Ablehnen</button>';
   h += '</div>';
@@ -1132,7 +1810,15 @@ async function askChat(){
     const resp = await fetch('/api/ask', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({question:q, chat_id: currentChatId, debug: debugMode, persona_id: currentPersonaId})
+      body: JSON.stringify({
+        question:q,
+        chat_id: currentChatId,
+        debug: debugMode,
+        deep: deepMode,
+        offline: offlineMode,
+        auto_search: autoSearchMode,
+        persona_id: currentPersonaId
+      })
     });
 
     if(!resp.ok){
@@ -1224,7 +1910,7 @@ async function askChat(){
                 hasError = true;
               }else{
                 // Strip [TOOL_REQUEST] markers, then render final markdown
-                const cleaned = raw.replace(/\[TOOL_REQUEST\]\s*\{[^}]*\}\s*\[\/TOOL_REQUEST\]/g,'').trim();
+                const cleaned = raw.replace(/\[TOOL_REQUEST\][\s\S]*?\[\/TOOL_REQUEST\]/g,'').trim();
                 renderBubbleContent(bubble, cleaned);
               }
             }
@@ -1288,7 +1974,8 @@ async function addWiki(opts={}){
   setLoading('#wikiBtn', true);
   setStatus($('#wikiStatus'), t('loading'), '');
   try{
-    const r = await apiPost('/api/add-wiki', {article, lang});
+    const embedModel = getIngestEmbedModel();
+    const r = await apiPost('/api/add-wiki', {article, lang, embed_model: embedModel});
     if(r.not_found){
       const box = $('#wikiStatus');
       box.className = 'tool-status warn';
@@ -1339,7 +2026,8 @@ async function addURL(){
   setLoading('#urlBtn', true);
   setStatus($('#urlStatus'), t('scrape'), '');
   try{
-    const r = await apiPost('/api/add-url', {url});
+    const embedModel = getIngestEmbedModel();
+    const r = await apiPost('/api/add-url', {url, embed_model: embedModel});
     setStatus($('#urlStatus'), t('ok_chunks', r.chunks, r.total), 'ok');
     $('#scrapeUrl').value = '';
     await refreshStats();
@@ -1357,7 +2045,8 @@ async function addText(){
   setLoading('#textBtn', true);
   setStatus($('#textStatus'), t('saving'), '');
   try{
-    const r = await apiPost('/api/add-text', {title, text});
+    const embedModel = getIngestEmbedModel();
+    const r = await apiPost('/api/add-text', {title, text, embed_model: embedModel});
     setStatus($('#textStatus'), t('ok_chunks', r.chunks, r.total), 'ok');
     $('#textTitle').value = '';
     $('#textContent').value = '';
@@ -1388,6 +2077,8 @@ function initUpload(){
     setStatus($('#uploadStatus'), t('uploading'), '');
     const form = new FormData();
     form.append('file', file);
+    const embedModel = getIngestEmbedModel();
+    if(embedModel) form.append('embed_model', embedModel);
     inp.disabled = true;
     fetch('/api/upload', {method:'POST', body: form})
       .then(async r=>{
@@ -1423,7 +2114,8 @@ async function addFolder(){
   setLoading('#folderBtn', true);
   setStatus($('#folderStatus'), t('importing'), '');
   try{
-    const r = await apiPost('/api/add-folder', {path, recursive});
+    const embedModel = getIngestEmbedModel();
+    const r = await apiPost('/api/add-folder', {path, recursive, embed_model: embedModel});
     let msg = `OK: ${r.files} Dateien · ${r.total_chunks} Chunks · Total: ${r.total}`;
     if(r.errors && r.errors.length){
       msg += ` · Fehler: ${r.errors.length}`;
@@ -1445,6 +2137,8 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     if(s && s.lang) applyTranslations(s.lang);
     else applyTranslations(navigator.language || 'de');
     if(s && s.theme) applyTheme(s.theme);
+    updateOpenAIBadge(s);
+    initLLMSwitcher(s);
   }catch(e){
     applyTranslations(navigator.language || 'de');
   }
@@ -1469,6 +2163,19 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   });
 
   $('#debugMode').addEventListener('change', (e)=>{ debugMode = e.target.checked; });
+  const deepToggle = $('#deepMode');
+  if(deepToggle){
+    deepToggle.addEventListener('change', (e)=>{ deepMode = e.target.checked; });
+  }
+  const offlineToggle = $('#offlineMode');
+  if(offlineToggle){
+    offlineToggle.addEventListener('change', (e)=>{ offlineMode = e.target.checked; });
+  }
+  const autoSearchToggle = $('#autoSearchMode');
+  if(autoSearchToggle){
+    autoSearchMode = autoSearchToggle.checked;
+    autoSearchToggle.addEventListener('change', (e)=>{ autoSearchMode = e.target.checked; });
+  }
 
   // Chat
   $('#chatBtn').addEventListener('click', askChat);
@@ -1501,6 +2208,9 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#urlBtn').addEventListener('click', addURL);
   $('#textBtn').addEventListener('click', addText);
   $('#folderBtn').addEventListener('click', addFolder);
+  if($('#clearChunksBtn')){
+    $('#clearChunksBtn').addEventListener('click', clearChunks);
+  }
   onEnter($('#wikiArticle'), addWiki);
   onEnter($('#wikiLang'), addWiki);
   onEnter($('#scrapeUrl'), addURL);
@@ -1587,7 +2297,17 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#btnSaveSettings').addEventListener('click', ()=>saveSettings(false));
   $('#btnAddCustomApi').addEventListener('click', addCustomApi);
   $('#btnAddPersona').addEventListener('click', addPersona);
+  const btnSamples = $('#btnAddSamplePersonas'); if(btnSamples) btnSamples.addEventListener('click', addSamplePersonas);
 
   await refreshStats();
+  // Check backend LLM status and show popup if not available
+  try{
+    const st = await apiGet('/api/llm/status');
+    if(!st.ok){
+      showLLMMissingModal(st.message || 'LLM endpoint nicht erreichbar');
+    }
+  }catch(e){
+    showLLMMissingModal(e.message||String(e));
+  }
   await refreshChats();
 });

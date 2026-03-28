@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <title>tinyRAG</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </head>
 <body data-theme="dark">
 
@@ -13,7 +14,7 @@
 <a href="#main-content" class="skip-link" data-i18n="skip_to_main">Skip to main content</a>
 
 <!-- Sidebar -->
-<aside class="sidebar" role="complementary" aria-label="Sidebar navigation">
+<aside class="sidebar" id="appSidebar" role="complementary" aria-label="Sidebar navigation">
   <div class="sidebar-header">
     <h1>tinyRAG</h1>
     <div class="sub" aria-live="polite"><span id="chunkCount" aria-label="Number of chunks">-</span> <span data-i18n="chunks_in_knowledge_base">Chunks in der Wissensbasis</span></div>
@@ -32,6 +33,7 @@
 <!-- Main -->
 <main class="main" id="main-content" role="main">
   <div class="main-tabs" role="tablist" aria-label="Main navigation">
+    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="appSidebar">☰</button>
     <button class="main-tab active" data-main-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat" id="tab-chat"><span data-i18n="chat">Chat</span></button>
     <button class="main-tab" data-main-tab="search" role="tab" aria-selected="false" aria-controls="panel-search" id="tab-search"><span data-i18n="search">Suche</span></button>
     <button class="main-tab" data-main-tab="ingest" role="tab" aria-selected="false" aria-controls="panel-ingest" id="tab-ingest"><span data-i18n="ingest">Daten hinzufügen</span></button>
@@ -53,27 +55,81 @@
       <span aria-hidden="true">⚙</span>
       <span class="visually-hidden" data-i18n="settings">Einstellungen</span>
     </button>
+    <label class="llm-switcher" style="margin-left:8px">
+      <select id="llmSwitcher" aria-label="Select LLM provider">
+        <option value="openai">ChatGPT (OpenAI)</option>
+        <option value="lmstudio">LM Studio (local)</option>
+        <option value="ollama">Ollama (local)</option>
+        <option value="custom">Custom...</option>
+      </select>
+    </label>
+    <label class="model-chooser" style="margin-left:6px;display:flex;align-items:center;gap:6px">
+      <select id="llmModelSelect" aria-label="Select chat model" style="display:none;min-width:180px">
+        <option value="">(Use recommended)</option>
+      </select>
+      <button id="llmApplyBtn" class="btn-small" style="display:none">Apply</button>
+    </label>
+    <div id="openaiBadge" class="openai-badge" style="display:none;margin-left:8px">
+      <span>Using</span>
+      <strong>OpenAI</strong>
+    </div>
   </div>
 
   <!-- Chat -->
   <section id="panel-chat" class="main-panel active" role="tabpanel" aria-labelledby="tab-chat">
+    <div class="workspace-strip" aria-label="Current chat workspace">
+      <div class="workspace-pill" id="providerPill">Provider: <strong>-</strong></div>
+      <div class="workspace-pill" id="personaPill">Persona: <strong>-</strong></div>
+      <div class="workspace-pill" id="modePill">Modi: <strong>Standard</strong></div>
+    </div>
     <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions">
       <div class="empty-state" id="chatEmpty">
         <div class="icon" aria-hidden="true">💬</div>
         <p data-i18n="chat_empty_state">Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p>
+        <div class="chat-suggestions" id="chatSuggestions">
+          <button class="suggestion-btn" onclick="fillChat('Fasse die wichtigsten Infos zusammen')">📝 <span data-i18n="sugg_summarize">Zusammenfassen</span></button>
+          <button class="suggestion-btn" onclick="fillChat('Was sind die neuesten Dokumente?')">🆕 <span data-i18n="sugg_newest">Was ist neu?</span></button>
+          <button class="suggestion-btn" onclick="fillChat('Hilf mir bei der Analyse')">🔍 <span data-i18n="sugg_analyze">Analyse</span></button>
+        </div>
       </div>
     </div>
 
     <div class="chat-input-area">
       <label for="chatQ" class="visually-hidden" data-i18n="chat_input_label">Enter your question</label>
-      <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
-      <button id="chatBtn" aria-label="Send message"><span data-i18n="send">Senden</span></button>
+      <div class="chat-mode-bar" aria-label="Chat modes">
+        <label class="chat-mode-toggle" for="autoSearchMode">
+          <input type="checkbox" id="autoSearchMode" checked>
+          <span data-i18n="auto_search">Auto-Search</span>
+        </label>
+        <label class="chat-mode-toggle" for="deepMode">
+          <input type="checkbox" id="deepMode">
+          <span data-i18n="deep_research">Deep Research</span>
+        </label>
+        <label class="chat-mode-toggle" for="offlineMode">
+          <input type="checkbox" id="offlineMode">
+          <span data-i18n="offline_mode">Offline</span>
+        </label>
+      </div>
+      <div class="chat-input-wrapper">
+        <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
+        <button id="chatBtn" aria-label="Send message"><span data-i18n="send">Senden</span></button>
+      </div>
+      <div class="chat-footer">
+        <span data-i18n="chat_disclaimer">tinyRAG can make mistakes. Check important info.</span>
+        <span class="kbd-hint">Enter senden, Shift+Enter Zeilenumbruch</span>
+      </div>
     </div>
   </section>
 
   <!-- Search -->
   <section id="panel-search" class="main-panel" role="tabpanel" aria-labelledby="tab-search">
-    <label for="searchQ" data-i18n="search_label">Semantische Suche in den Chunks</label>
+    <div class="panel-head">
+      <h2 data-i18n="search">Suche</h2>
+      <p class="panel-subline" data-i18n="search_label">Semantische Suche in den Chunks</p>
+      <div class="panel-meta-row">
+        <span class="panel-badge" id="searchMeta">Top-K 8</span>
+      </div>
+    </div>
     <div class="row">
       <input type="text" id="searchQ" placeholder="Suchbegriff…" autocomplete="off" aria-label="Search query" data-i18n-placeholder="search_placeholder">
       <button class="btn-primary" id="searchBtn" aria-label="Execute search"><span data-i18n="search_button">Suchen</span></button>
@@ -89,6 +145,15 @@
       <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false" aria-controls="ingest-text" id="tab-text"><span data-i18n="text">Text</span></button>
       <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false" aria-controls="ingest-upload" id="tab-upload"><span data-i18n="upload">Upload</span></button>
       <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false" aria-controls="ingest-folder" id="tab-folder"><span data-i18n="folder">Ordner</span></button>
+    </div>
+
+    <div style="margin-top:.5rem;display:flex;gap:8px;align-items:center">
+      <label for="ingestEmbedSelect" style="margin:0;white-space:nowrap">Embedding-Modell (optional)</label>
+      <select id="ingestEmbedSelect" style="max-width:360px;flex:0 0 360px">
+        <option value="">(Default / use settings)</option>
+        <option value="custom">-- Custom --</option>
+      </select>
+      <input id="ingestEmbedCustom" type="text" placeholder="z.B. text-embedding-3-small" style="flex:1;max-width:360px;display:none">
     </div>
 
     <div id="ingest-wiki" role="tabpanel" aria-labelledby="tab-wiki">
@@ -145,6 +210,14 @@
       </div>
       <div id="folderStatus" role="status" aria-live="polite"></div>
     </div>
+
+    <!-- Maintenance Section at bottom of Ingest -->
+    <div style="margin-top: 32px; padding: 20px; border-top: 1px solid var(--border); background: rgba(255,59,48,0.05); border-radius: 16px;">
+      <h4 style="color: var(--danger); margin: 0 0 8px 0; font-size: 16px;" data-i18n="maintenance">Wartung</h4>
+      <p class="muted" style="font-size: 13px; margin: 0 0 16px 0;" data-i18n="clear_chunks_info">Lösche alle Chunks in der Wissensbasis. Diese Aktion kann nicht rückgängig gemacht werden.</p>
+      <button class="btn-primary" id="clearChunksBtn" style="background: var(--danger); color: white; border: none;" aria-label="Clear all chunks"><span data-i18n="clear_chunks">Wissensbasis leeren</span></button>
+      <div id="clearStatus" role="status" aria-live="polite" style="margin-top: 10px;"></div>
+    </div>
   </section>
 </main>
 
@@ -163,6 +236,7 @@
       <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-general" id="stab-general"><span data-i18n="general">Allgemein</span></button>
       <button class="settings-tab" data-settings-tab="llm" role="tab" aria-selected="false" aria-controls="settings-llm" id="stab-llm"><span data-i18n="llm_backend">LLM Backend</span></button>
       <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false" aria-controls="settings-apis" id="stab-apis"><span data-i18n="custom_apis">Custom APIs</span></button>
+      <button class="settings-tab" data-settings-tab="modules" role="tab" aria-selected="false" aria-controls="settings-modules" id="stab-modules"><span data-i18n="modules">Module</span></button>
       <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas"><span data-i18n="personas">Personas</span></button>
     </div>
 
@@ -249,6 +323,27 @@
         <div>
           <label for="setBaseUrl" data-i18n="api_endpoint">API Endpoint (OpenAI-kompatibel)</label>
           <input id="setBaseUrl" type="text" placeholder="http://localhost:1234" aria-label="API Endpoint">
+          <div style="margin-top:.5rem;color:var(--muted);font-size:13px">Standard: derselbe Endpoint wird für Chat und Embeddings verwendet. Für fortgeschrittene Setups kannst du getrennte Endpoints verwenden.</div>
+
+          <label class="inline-check" style="margin-top:.6rem">
+            <input type="checkbox" id="useSeparateEndpoints">
+            <span style="margin-left:8px">Getrennte Chat/Embedding Endpoints verwenden</span>
+          </label>
+
+          <div id="advancedEndpoints" style="display:none;margin-top:.6rem">
+            <label for="setChatBase">Chat Endpoint (z. B. api.openai.com oder lokales Ollama)</label>
+            <input id="setChatBase" type="text" placeholder="http://localhost:1234" aria-label="Chat endpoint">
+            <label for="setEmbedBase" style="margin-top:.6rem">Embedding Endpoint (z. B. lokaler Embed-Service)</label>
+            <input id="setEmbedBase" type="text" placeholder="http://localhost:1234" aria-label="Embed endpoint">
+          </div>
+
+          <label for="setOpenAIKey" style="margin-top:.6rem">OpenAI API Key (optional)</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="setOpenAIKey" type="password" placeholder="sk-..." aria-label="OpenAI API Key">
+            <button class="tool-btn" id="btnUseOpenAI" title="Schnell konfigurieren: OpenAI als Endpoint verwenden">Use OpenAI</button>
+            <button class="tool-btn danger" id="btnClearOpenAI" title="Stored OpenAI key löschen">Delete Key</button>
+          </div>
+          <div id="openaiHint" class="hint" style="margin-top:6px">Trage deinen OpenAI-Key ein und klicke auf <strong>Use OpenAI</strong>, dann auf <strong>Speichern</strong>.</div>
           <div class="mini-actions">
             <button class="tool-btn" id="btnDiscover" aria-label="Auto-discover endpoints"><span data-i18n="auto_discovery">Auto-Discovery</span></button>
             <button class="tool-btn suggested" id="btnTestEndpoint" aria-label="Test endpoint and load models"><span data-i18n="test_load_models">Test &amp; Modelle laden</span></button>
@@ -271,6 +366,7 @@
 
       <div class="actions-row">
         <button class="btn-primary" id="btnSaveSettings" aria-label="Save settings"><span data-i18n="save">Speichern</span></button>
+        <button class="tool-btn danger" id="btnClearAllChunks" title="Alle Chunks löschen" style="margin-left:8px">Alle Chunks löschen</button>
         <span class="tool-status" id="saveStatus" role="status" aria-live="polite"></span>
       </div>
     </div>
@@ -292,6 +388,12 @@
       </div>
     </div>
 
+    <div id="settings-modules" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-modules">
+      <h3 data-i18n="modules">Module</h3>
+      <p class="hint" data-i18n="modules_hint">Module verbinden externe Quellen mit tinyRAG. Testen zeigt Rohdaten, Ingest uebernimmt normalisierten Text in die Wissensbasis.</p>
+      <div id="moduleList" class="api-list" role="list" aria-label="Module list"><p class="muted" data-i18n="loading">Lade…</p></div>
+    </div>
+
     <!-- Tab: Personas -->
     <div id="settings-personas" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-personas">
       <h3 data-i18n="personas">Persönlichkeiten (Pre-Prompts)</h3>
@@ -304,6 +406,7 @@
       <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…" aria-label="Persona pre-prompt" data-i18n-placeholder="persona_prompt_placeholder"></textarea>
       <div class="actions-row">
         <button class="btn-primary" id="btnAddPersona" aria-label="Add persona"><span data-i18n="add">Hinzufügen</span></button>
+        <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas" style="margin-left:8px">Beispiel-Personas hinzufügen</button>
       </div>
     </div>
 
@@ -311,6 +414,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script src="/app.js"></script>
 </body>
