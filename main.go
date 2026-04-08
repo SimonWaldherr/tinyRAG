@@ -8,17 +8,23 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"html"
 	"io"
 	"log"
+	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -96,6 +102,8 @@ type appSettings struct {
 	CustomAPIs []customAPI    `json:"custom_apis"`
 	Modules    []moduleConfig `json:"modules"`
 	Personas   []persona      `json:"personas"`
+	APIUsers   []adminAPIUser `json:"api_users"`
+	APIRoutes  []apiRouteRule `json:"api_routes"`
 	// AllowCodeExec must be explicitly enabled to allow running user
 	// provided code. Defaults to false for safety.
 	AllowCodeExec bool `json:"allow_code_exec"`
@@ -227,7 +235,7 @@ func canRoleUseTool(role, tool string) bool {
 	switch t {
 	case "shell", "nanogo", "exec_code", "tinygo":
 		return p.CanRunCode
-	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news":
+	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news", "wikidata", "github":
 		return p.CanWebFetch
 	case "local_search", "datetime", "calculate", "llm":
 		return true
@@ -331,6 +339,198 @@ func defaultPersonas() []persona {
 	}
 }
 
+type adminAPIUser struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Enabled     bool   `json:"enabled"`
+	APIKeyHash  string `json:"api_key_hash,omitempty"`
+	APIKeyLast4 string `json:"api_key_last4,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+type apiRouteRule struct {
+	Path        string `json:"path"`
+	MatchType   string `json:"match_type"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Public      bool   `json:"public"`
+}
+
+func defaultAPIRouteRules() []apiRouteRule {
+	return []apiRouteRule{
+		{Path: "/api/process", MatchType: "exact", Description: "Structured processing endpoint", Enabled: true, Public: true},
+		{Path: "/api/ask", MatchType: "exact", Description: "Chat SSE endpoint", Enabled: true, Public: true},
+		{Path: "/api/search", MatchType: "exact", Description: "Semantic search", Enabled: true, Public: true},
+		{Path: "/api/tool/execute", MatchType: "exact", Description: "Execute one tool manually", Enabled: true, Public: true},
+		{Path: "/api/add-wiki", MatchType: "exact", Description: "Ingest from Wikipedia", Enabled: true, Public: true},
+		{Path: "/api/add-url", MatchType: "exact", Description: "Ingest from URL", Enabled: true, Public: true},
+		{Path: "/api/add-folder", MatchType: "exact", Description: "Bulk ingest from folder", Enabled: true, Public: true},
+		{Path: "/api/add-text", MatchType: "exact", Description: "Ingest plain text", Enabled: true, Public: true},
+		{Path: "/api/upload", MatchType: "exact", Description: "File upload ingest", Enabled: true, Public: true},
+		{Path: "/api/modules/run", MatchType: "exact", Description: "Run configured module", Enabled: true, Public: true},
+		{Path: "/api/modules/upload", MatchType: "exact", Description: "Module upload bridge", Enabled: true, Public: true},
+		{Path: "/api/modules/download", MatchType: "exact", Description: "Module download bridge", Enabled: true, Public: true},
+	}
+}
+
+func normalizeMatchType(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "prefix":
+		return "prefix"
+	default:
+		return "exact"
+	}
+}
+
+func normalizeAPIRouteRules(rules []apiRouteRule) []apiRouteRule {
+	if len(rules) == 0 {
+		return defaultAPIRouteRules()
+	}
+	defaults := defaultAPIRouteRules()
+	byPath := make(map[string]apiRouteRule, len(rules))
+	for _, rule := range rules {
+		rule.Path = strings.TrimSpace(rule.Path)
+		if rule.Path == "" {
+			continue
+		}
+		rule.MatchType = normalizeMatchType(rule.MatchType)
+		byPath[rule.Path] = rule
+	}
+	out := make([]apiRouteRule, 0, len(defaults))
+	for _, def := range defaults {
+		rule, ok := byPath[def.Path]
+		if !ok {
+			out = append(out, def)
+			continue
+		}
+		if rule.Description == "" {
+			rule.Description = def.Description
+		}
+		if rule.MatchType == "" {
+			rule.MatchType = def.MatchType
+		}
+		out = append(out, rule)
+		delete(byPath, def.Path)
+	}
+	for _, rule := range byPath {
+		out = append(out, rule)
+	}
+	return out
+}
+
+func generateAPIToken() (string, error) {
+	buf := make([]byte, 18)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func hashAPIToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func apiTokenFromRequest(r *http.Request) string {
+	if v := strings.TrimSpace(r.Header.Get("X-API-Key")); v != "" {
+		return v
+	}
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return strings.TrimSpace(auth[7:])
+	}
+	return ""
+}
+
+func findAPIRouteRule(path string, rules []apiRouteRule) (apiRouteRule, bool) {
+	var matched apiRouteRule
+	found := false
+	longest := -1
+	for _, rule := range rules {
+		switch normalizeMatchType(rule.MatchType) {
+		case "prefix":
+			if strings.HasPrefix(path, rule.Path) && len(rule.Path) > longest {
+				matched = rule
+				found = true
+				longest = len(rule.Path)
+			}
+		default:
+			if path == rule.Path {
+				return rule, true
+			}
+		}
+	}
+	return matched, found
+}
+
+func authenticateAPIUser(r *http.Request, users []adminAPIUser) (adminAPIUser, bool) {
+	token := apiTokenFromRequest(r)
+	if token == "" {
+		return adminAPIUser{}, false
+	}
+	tokenHash := hashAPIToken(token)
+	for _, user := range users {
+		if !user.Enabled || user.APIKeyHash == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(user.APIKeyHash), []byte(tokenHash)) == 1 {
+			return user, true
+		}
+	}
+	return adminAPIUser{}, false
+}
+
+func routePolicyMiddleware(settings *settingsStore, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		rule, ok := findAPIRouteRule(r.URL.Path, s.APIRoutes)
+		if !ok {
+			next(w, r)
+			return
+		}
+		if !rule.Enabled {
+			http.Error(w, "API route disabled by admin policy", 403)
+			return
+		}
+		if rule.Public {
+			next(w, r)
+			return
+		}
+		if _, ok := authenticateAPIUser(r, s.APIUsers); !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="tinyRAG API"`)
+			http.Error(w, "valid API key required", 401)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func localAdminOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackRequest(r) {
+			http.Error(w, "admin endpoints are only available from localhost", 403)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // defaultSettingsFromFlags builds initial `appSettings` from CLI flags
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
@@ -351,6 +551,9 @@ func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang strin
 		K:                    k,
 		CustomAPIs:           []customAPI{},
 		Modules:              defaultModules(),
+		Personas:             defaultPersonas(),
+		APIUsers:             []adminAPIUser{},
+		APIRoutes:            defaultAPIRouteRules(),
 		AllowCodeExec:        false,
 		AllowNanoGo:          false,
 		AllowShellExec:       false,
@@ -414,6 +617,10 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 		ss.s.Personas = defaultPersonas()
 	}
 	ss.s.Modules = normalizeModules(ss.s.Modules)
+	for i := range ss.s.APIUsers {
+		ss.s.APIUsers[i].Role = normalizeDemoRole(ss.s.APIUsers[i].Role)
+	}
+	ss.s.APIRoutes = normalizeAPIRouteRules(ss.s.APIRoutes)
 	_ = ss.save() // best-effort normalize on disk
 	return ss, nil
 }
@@ -460,7 +667,7 @@ func fetchWikipedia(article, lang string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -508,7 +715,7 @@ func searchWikipedia(query, lang string) ([]map[string]string, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newHTTPClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -551,7 +758,7 @@ func fetchURL(rawURL string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1")
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -598,7 +805,7 @@ func fetchDuckDuckGo(query string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newHTTPClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -680,6 +887,212 @@ func fetchDuckDuckGo(query string) (string, error) {
 	return fmt.Sprintf("DuckDuckGo-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(snippets, "\n")), nil
 }
 
+func fetchWikidata(query string) (string, error) {
+	u := fmt.Sprintf(
+		"https://www.wikidata.org/w/api.php?action=wbsearchentities&search=%s&language=en&format=json&limit=5",
+		url.QueryEscape(query),
+	)
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	resp, err := newHTTPClient(20 * time.Second).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("wikidata search HTTP %d", resp.StatusCode)
+	}
+	var root struct {
+		Search []struct {
+			ID          string `json:"id"`
+			Label       string `json:"label"`
+			Description string `json:"description"`
+			ConceptURI  string `json:"concepturi"`
+		} `json:"search"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
+		return "", err
+	}
+	if len(root.Search) == 0 {
+		return "", fmt.Errorf("no wikidata results for %q", query)
+	}
+	var parts []string
+	parts = append(parts, fmt.Sprintf("Wikidata-Ergebnisse für %q:", query))
+	for i, item := range root.Search {
+		if i >= 5 {
+			break
+		}
+		line := fmt.Sprintf("- %s (%s)", item.Label, item.ID)
+		if item.Description != "" {
+			line += ": " + item.Description
+		}
+		if item.ConceptURI != "" {
+			line += " — " + item.ConceptURI
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func fetchGitHub(query string) (string, error) {
+	u := fmt.Sprintf("https://api.github.com/search/repositories?q=%s&per_page=5", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := newHTTPClient(20 * time.Second).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("github search HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var root struct {
+		Items []struct {
+			FullName        string `json:"full_name"`
+			Description     string `json:"description"`
+			HTMLURL         string `json:"html_url"`
+			StargazersCount int    `json:"stargazers_count"`
+			Language        string `json:"language"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
+		return "", err
+	}
+	if len(root.Items) == 0 {
+		return "", fmt.Errorf("no github results for %q", query)
+	}
+	var parts []string
+	parts = append(parts, fmt.Sprintf("GitHub-Repositories für %q:", query))
+	for i, item := range root.Items {
+		if i >= 5 {
+			break
+		}
+		line := fmt.Sprintf("- %s", item.FullName)
+		if item.Language != "" {
+			line += " [" + item.Language + "]"
+		}
+		line += fmt.Sprintf(" ★%d", item.StargazersCount)
+		if item.Description != "" {
+			line += ": " + item.Description
+		}
+		if item.HTMLURL != "" {
+			line += " — " + item.HTMLURL
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func fetchStackOverflow(query string) (string, error) {
+	u := fmt.Sprintf(
+		"https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=%s&site=stackoverflow&pagesize=5&filter=default",
+		url.QueryEscape(query),
+	)
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	resp, err := newHTTPClient(20 * time.Second).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("stackoverflow search HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var root struct {
+		Items []struct {
+			Title        string   `json:"title"`
+			Link         string   `json:"link"`
+			Score        int      `json:"score"`
+			AnswerCount  int      `json:"answer_count"`
+			IsAnswered   bool     `json:"is_answered"`
+			CreationDate int64    `json:"creation_date"`
+			Tags         []string `json:"tags"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
+		return "", err
+	}
+	if len(root.Items) == 0 {
+		return "", fmt.Errorf("no stackoverflow results for %q", query)
+	}
+	var parts []string
+	parts = append(parts, fmt.Sprintf("StackOverflow-Ergebnisse für %q:", query))
+	for i, item := range root.Items {
+		if i >= 5 {
+			break
+		}
+		line := fmt.Sprintf("- %s (Score %d, Antworten %d", html.UnescapeString(item.Title), item.Score, item.AnswerCount)
+		if item.IsAnswered {
+			line += ", beantwortet"
+		}
+		line += ")"
+		if len(item.Tags) > 0 {
+			line += " [" + strings.Join(item.Tags, ", ") + "]"
+		}
+		if item.Link != "" {
+			line += " — " + item.Link
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+func fetchMultiWebSearch(query string) (string, error) {
+	variants := expandExternalSearchQueries(query)
+	var parts []string
+	var errs []string
+
+	for i, variant := range variants {
+		if i >= 3 {
+			break
+		}
+		if text, err := fetchDuckDuckGo(variant); err == nil && strings.TrimSpace(text) != "" {
+			parts = append(parts, fmt.Sprintf("DuckDuckGo [%s]\n%s", variant, text))
+		} else if err != nil {
+			errs = append(errs, "ddg("+variant+"): "+err.Error())
+		}
+	}
+
+	if text, err := fetchWikidata(variants[0]); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "wikidata: "+err.Error())
+	}
+
+	if looksTechnicalQuery(query) {
+		if text, err := fetchGitHub(variants[0]); err == nil && strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
+		} else if err != nil {
+			errs = append(errs, "github: "+err.Error())
+		}
+		if text, err := fetchStackOverflow(variants[0]); err == nil && strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
+		} else if err != nil {
+			errs = append(errs, "stackoverflow: "+err.Error())
+		}
+	}
+
+	if len(parts) == 0 {
+		if len(errs) == 0 {
+			return "", fmt.Errorf("no search results for %q", query)
+		}
+		return "", fmt.Errorf(strings.Join(errs, " | "))
+	}
+	return strings.Join(parts, "\n\n---\n\n"), nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Wiktionary / Dictionary
 // ─────────────────────────────────────────────────────────────────────────────
@@ -696,7 +1109,7 @@ func fetchWiktionary(word, lang string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newHTTPClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -817,6 +1230,23 @@ type lmClient struct {
 	http       *http.Client
 }
 
+func newHTTPClient(timeout time.Duration) *http.Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          128,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
 // lmProvider abstracts an LLM client used for embeddings and chat.
 type lmProvider interface {
 	embed(texts []string) ([][]float64, error)
@@ -852,7 +1282,7 @@ func newLMClient(base, embedModel, chatModel, apiKey string) *lmClient {
 		embedModel: embedModel,
 		chatModel:  chatModel,
 		apiKey:     apiKey,
-		http:       &http.Client{Timeout: 120 * time.Second},
+		http:       newHTTPClient(120 * time.Second),
 	}
 }
 
@@ -898,7 +1328,7 @@ func (c *lmClient) listModels(baseOverride string) ([]string, error) {
 	if c.apiKey != "" && strings.Contains(base, "api.openai.com") {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := newHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -1697,7 +2127,7 @@ func candidateLimitForK(k int) int {
 	return limit
 }
 
-func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64, int64, error) {
+func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit, int64, int64, error) {
 	activeRole := "it"
 	if settings != nil {
 		activeRole = settings.get().ActiveRole
@@ -1762,6 +2192,110 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 		})
 	}
 	return hits, embedMs, searchMs, nil
+}
+
+func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64, int64, error) {
+	activeRole := "it"
+	if settings != nil {
+		activeRole = settings.get().ActiveRole
+	}
+	variants := expandRetrievalQueries(query)
+	if len(variants) <= 1 {
+		return r.searchCandidatesSingle(query, k)
+	}
+
+	texts := make([]string, 0, len(variants))
+	for _, variant := range variants {
+		texts = append(texts, variant.Query)
+	}
+	t0 := time.Now()
+	vecs, err := r.getLM().embed(texts)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	embedMs := time.Since(t0).Milliseconds()
+
+	type aggKey struct {
+		article  string
+		chunkIdx int
+	}
+	best := map[aggKey]retrievalHit{}
+	var totalSearchMs int64
+
+	for i, vec := range vecs {
+		if i >= len(variants) {
+			break
+		}
+		q := fmt.Sprintf(
+			"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
+			vecJSON(vec), escapeSQ(r.getActiveEmbedModel()), roleScopeFilterSQL(activeRole), candidateLimitForK(k),
+		)
+		t1 := time.Now()
+		stmt, err := tinysql.ParseSQL(q)
+		if err != nil {
+			return nil, embedMs, totalSearchMs, err
+		}
+		r.dbMu.Lock()
+		rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
+		r.dbMu.Unlock()
+		if err != nil {
+			return nil, embedMs, totalSearchMs, err
+		}
+		totalSearchMs += time.Since(t1).Milliseconds()
+		for _, row := range rs.Rows {
+			c, ok := tinysql.GetVal(row, "content")
+			art, _ := tinysql.GetVal(row, "article")
+			idxVal, _ := tinysql.GetVal(row, "chunk_idx")
+			scoreVal, _ := tinysql.GetVal(row, "score")
+			if !ok || art == nil || idxVal == nil || scoreVal == nil {
+				continue
+			}
+			idx := 0
+			switch iv := idxVal.(type) {
+			case int:
+				idx = iv
+			case int64:
+				idx = int(iv)
+			case float64:
+				idx = int(iv)
+			}
+			score := 0.0
+			switch sv := scoreVal.(type) {
+			case float64:
+				score = sv
+			case int:
+				score = float64(sv)
+			case int64:
+				score = float64(sv)
+			}
+			hit := retrievalHit{
+				Article:  fmt.Sprint(art),
+				ChunkIdx: idx,
+				Content:  fmt.Sprint(c),
+				Score:    score,
+			}
+			hit.Score *= variants[i].Weight
+			key := aggKey{article: hit.Article, chunkIdx: hit.ChunkIdx}
+			if prev, ok := best[key]; !ok || hit.Score > prev.Score {
+				best[key] = hit
+			}
+		}
+	}
+
+	hits := make([]retrievalHit, 0, len(best))
+	for _, hit := range best {
+		hits = append(hits, hit)
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Score == hits[j].Score {
+			if hits[i].Article == hits[j].Article {
+				return hits[i].ChunkIdx < hits[j].ChunkIdx
+			}
+			return hits[i].Article < hits[j].Article
+		}
+		return hits[i].Score > hits[j].Score
+	})
+	return hits, embedMs, totalSearchMs, nil
 }
 
 func formatContextChunk(article string, chunkIdx int, content string) string {
@@ -1890,18 +2424,28 @@ var builtinTools = []toolDef{
 	},
 	{
 		Name:        "stackoverflow",
-		Description: "Sucht relevante StackOverflow-Antworten (gut für Programmierfragen).",
+		Description: "Sucht relevante StackOverflow-Fragen und Antworten über die StackExchange-API (gut für Programmierfragen).",
 		ParamHint:   "Suchbegriff (z.B. 'go http client timeout')",
 	},
 	{
 		Name:        "websearch",
-		Description: "Allgemeine Websuche (DuckDuckGo-basiert) für breite Recherchen.",
+		Description: "Allgemeine Websuche mit Query-Varianten. Nutzt mehrere Formulierungen und kombiniert DuckDuckGo, Wikidata sowie bei technischen Themen GitHub und StackOverflow.",
 		ParamHint:   "Suchbegriff (z.B. 'Wetter Berlin heute')",
 	},
 	{
 		Name:        "news",
 		Description: "Sucht nach aktuellen Nachrichten zu einem Thema.",
 		ParamHint:   "Thema (z.B. 'Künstliche Intelligenz')",
+	},
+	{
+		Name:        "wikidata",
+		Description: "Sucht strukturierte Entitäten und Beschreibungen in Wikidata. Gut für Produkte, Firmen, Standards, technische Begriffe oder bekannte Objekte.",
+		ParamHint:   "Entität oder Suchbegriff",
+	},
+	{
+		Name:        "github",
+		Description: "Sucht öffentliche GitHub-Repositories. Gut für Libraries, SDKs, Implementierungen und technische Referenzen.",
+		ParamHint:   "Repository-, Projekt- oder Library-Suchbegriff",
 	},
 	{
 		Name:        "nanogo",
@@ -1969,7 +2513,7 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 		return s.AllowShellExec
 	case "tinygo":
 		return s.AllowTinyGo
-	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news":
+	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news", "wikidata", "github":
 		return autoSearch
 	default:
 		if strings.HasPrefix(tr.Tool, "module:") {
@@ -2014,13 +2558,19 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		text, fetchErr = fetchWiktionary(tr.Query, s.Lang)
 	case "stackoverflow":
 		source = "so:" + tr.Query
-		text, fetchErr = fetchDuckDuckGo("site:stackoverflow.com " + tr.Query)
+		text, fetchErr = fetchStackOverflow(tr.Query)
 	case "websearch":
 		source = "web:" + tr.Query
-		text, fetchErr = fetchDuckDuckGo(tr.Query)
+		text, fetchErr = fetchMultiWebSearch(tr.Query)
 	case "news":
 		source = "news:" + tr.Query
-		text, fetchErr = fetchDuckDuckGo("news " + tr.Query)
+		text, fetchErr = fetchDuckDuckGo(`news "` + tr.Query + `"`)
+	case "wikidata":
+		source = "wikidata:" + tr.Query
+		text, fetchErr = fetchWikidata(tr.Query)
+	case "github":
+		source = "github:" + tr.Query
+		text, fetchErr = fetchGitHub(tr.Query)
 	case "llm":
 		var buf bytes.Buffer
 		msgs := []chatMsg{{Role: "user", Content: tr.Query}}
@@ -2261,6 +2811,146 @@ func (p *personaStore) remove(id string) (bool, error) {
 	return false, nil
 }
 
+type adminUserStore struct {
+	settings *settingsStore
+}
+
+func newAdminUserStore(settings *settingsStore) *adminUserStore {
+	return &adminUserStore{settings: settings}
+}
+
+func sanitizeAdminUser(user adminAPIUser) adminAPIUser {
+	user.APIKeyHash = ""
+	return user
+}
+
+func (s *adminUserStore) list() []adminAPIUser {
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	out := make([]adminAPIUser, 0, len(s.settings.s.APIUsers))
+	for _, user := range s.settings.s.APIUsers {
+		out = append(out, sanitizeAdminUser(user))
+	}
+	return out
+}
+
+func (s *adminUserStore) create(name, role string) (adminAPIUser, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return adminAPIUser{}, "", fmt.Errorf("name required")
+	}
+	token, err := generateAPIToken()
+	if err != nil {
+		return adminAPIUser{}, "", err
+	}
+	user := adminAPIUser{
+		ID:          fmt.Sprintf("api-user-%d", time.Now().UnixNano()),
+		Name:        name,
+		Role:        normalizeDemoRole(role),
+		Enabled:     true,
+		APIKeyHash:  hashAPIToken(token),
+		APIKeyLast4: token[max(len(token)-4, 0):],
+		CreatedAt:   time.Now().Format(time.RFC3339),
+	}
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	s.settings.s.APIUsers = append(s.settings.s.APIUsers, user)
+	if err := s.settings.saveLocked(); err != nil {
+		return adminAPIUser{}, "", err
+	}
+	return sanitizeAdminUser(user), token, nil
+}
+
+func (s *adminUserStore) update(id, name, role string, enabled bool) (adminAPIUser, error) {
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	for i, user := range s.settings.s.APIUsers {
+		if user.ID != id {
+			continue
+		}
+		if strings.TrimSpace(name) != "" {
+			user.Name = strings.TrimSpace(name)
+		}
+		user.Role = normalizeDemoRole(role)
+		user.Enabled = enabled
+		s.settings.s.APIUsers[i] = user
+		if err := s.settings.saveLocked(); err != nil {
+			return adminAPIUser{}, err
+		}
+		return sanitizeAdminUser(user), nil
+	}
+	return adminAPIUser{}, fmt.Errorf("user not found")
+}
+
+func (s *adminUserStore) regenerateKey(id string) (adminAPIUser, string, error) {
+	token, err := generateAPIToken()
+	if err != nil {
+		return adminAPIUser{}, "", err
+	}
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	for i, user := range s.settings.s.APIUsers {
+		if user.ID != id {
+			continue
+		}
+		user.APIKeyHash = hashAPIToken(token)
+		user.APIKeyLast4 = token[max(len(token)-4, 0):]
+		s.settings.s.APIUsers[i] = user
+		if err := s.settings.saveLocked(); err != nil {
+			return adminAPIUser{}, "", err
+		}
+		return sanitizeAdminUser(user), token, nil
+	}
+	return adminAPIUser{}, "", fmt.Errorf("user not found")
+}
+
+func (s *adminUserStore) remove(id string) (bool, error) {
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	list := s.settings.s.APIUsers
+	for i, user := range list {
+		if user.ID == id {
+			s.settings.s.APIUsers = append(list[:i], list[i+1:]...)
+			return true, s.settings.saveLocked()
+		}
+	}
+	return false, nil
+}
+
+type apiRouteStore struct {
+	settings *settingsStore
+}
+
+func newAPIRouteStore(settings *settingsStore) *apiRouteStore {
+	return &apiRouteStore{settings: settings}
+}
+
+func (s *apiRouteStore) list() []apiRouteRule {
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	out := make([]apiRouteRule, len(s.settings.s.APIRoutes))
+	copy(out, s.settings.s.APIRoutes)
+	return out
+}
+
+func (s *apiRouteStore) update(path string, enabled, public bool) (apiRouteRule, error) {
+	s.settings.mu.Lock()
+	defer s.settings.mu.Unlock()
+	for i, rule := range s.settings.s.APIRoutes {
+		if rule.Path != path {
+			continue
+		}
+		rule.Enabled = enabled
+		rule.Public = public
+		s.settings.s.APIRoutes[i] = rule
+		if err := s.settings.saveLocked(); err != nil {
+			return apiRouteRule{}, err
+		}
+		return rule, nil
+	}
+	return apiRouteRule{}, fmt.Errorf("route not found")
+}
+
 // get returns a customAPI by id if it exists.
 func (s *apiStore) get(id string) (customAPI, bool) {
 	s.settings.mu.Lock()
@@ -2426,7 +3116,8 @@ func buildResponseInstructionsPrompt(deep bool, usageProfile string) string {
 	sb.WriteString("- Beginne mit der Frage: Reicht der lokale Kontext aus, ist er unsicher oder fehlt er?\n")
 	sb.WriteString("- Wenn der lokale Kontext ausreicht, antworte direkt und sage knapp, dass die Antwort auf der Wissensbasis beruht.\n")
 	sb.WriteString("- Wenn Informationen fehlen oder potenziell veraltet sind, nutze genau ein passendes Tool.\n")
-	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`; fuer aktuelle Ereignisse `news`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
+	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`; fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code- oder Library-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
+	sb.WriteString("- Bei technischen Artikeln, Produktcodes oder Teilenummern darfst du praezisere Suchanfragen bilden, z.B. Teilstrings, exakte Phrasen mit Anfuehrungszeichen oder Varianten wie `Technische Details <Begriff>`.\n")
 	sb.WriteString("- Behaupte nie mehr Sicherheit, als der Kontext hergibt.\n")
 	sb.WriteString("- Erfinde keine Kontaktinformationen, URLs, APIs, Produktdetails, Roadmaps oder technische Interna.\n")
 	sb.WriteString("- Wenn ein Tool benutzt wurde, liefere danach genau eine ueberarbeitete finale Antwort, nicht zwei Versionen.\n")
@@ -2754,6 +3445,730 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 		}
 	}
 	return r.assembleContext(sel, desiredK, "lm_requested_retrieval", embedMs, searchMs)
+}
+
+func (r *ragSystem) prepareDirectContext(query string, k int) (string, *debugInfo, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", &debugInfo{UsedK: 0, Decision: "no_query"}, nil
+	}
+	if k <= 0 {
+		k = r.k
+	}
+	hits, embedMs, searchMs, err := r.searchCandidates(query, k)
+	if err != nil {
+		return "", nil, err
+	}
+	if ctx, di, ok := r.loadArticleContext(query, false, embedMs); ok {
+		di.UsedK = k
+		di.Decision = "article_specific_direct"
+		return ctx, di, nil
+	}
+	var sel []retrievalHit
+	for _, h := range hits {
+		if h.Score >= 0.60 {
+			sel = append(sel, h)
+			if len(sel) >= k {
+				break
+			}
+		}
+	}
+	if len(sel) == 0 && len(hits) > 0 {
+		for i := 0; i < k && i < len(hits); i++ {
+			sel = append(sel, hits[i])
+		}
+	}
+	if len(sel) == 0 {
+		activeRole := "it"
+		if settings != nil {
+			activeRole = settings.get().ActiveRole
+		}
+		return "", &debugInfo{
+			EmbedMs:     embedMs,
+			SearchMs:    searchMs,
+			TotalChunks: r.docCountForRole(activeRole),
+			UsedK:       k,
+			Decision:    "no_hits",
+		}, nil
+	}
+	return r.assembleContext(sel, k, "direct_query", embedMs, searchMs)
+}
+
+type processRAGOptions struct {
+	Enabled bool   `json:"enabled"`
+	Query   string `json:"query"`
+	K       int    `json:"k"`
+}
+
+type processOptions struct {
+	ValidateJSON *bool `json:"validate_json"`
+	RepairJSON   *bool `json:"repair_json"`
+	MaxRetries   int   `json:"max_retries"`
+}
+
+type processRequest struct {
+	RequestID      string            `json:"request_id"`
+	Mode           string            `json:"mode"`
+	SystemPrompt   string            `json:"system_prompt"`
+	PrePrompt      string            `json:"pre_prompt"`
+	Input          any               `json:"input"`
+	PostPrompt     string            `json:"post_prompt"`
+	ResponseSchema map[string]any    `json:"response_schema"`
+	PersonaID      string            `json:"persona_id"`
+	RAG            processRAGOptions `json:"rag"`
+	Options        processOptions    `json:"options"`
+}
+
+type processResponse struct {
+	RequestID       string     `json:"request_id"`
+	OK              bool       `json:"ok"`
+	Mode            string     `json:"mode"`
+	ValidJSON       bool       `json:"valid_json"`
+	Attempts        int        `json:"attempts"`
+	DurationMS      int64      `json:"duration_ms"`
+	RAGUsed         bool       `json:"rag_used"`
+	RAGQuery        string     `json:"rag_query,omitempty"`
+	ContextChars    int        `json:"context_chars,omitempty"`
+	Raw             string     `json:"raw,omitempty"`
+	Result          any        `json:"result,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	ValidationError string     `json:"validation_error,omitempty"`
+	Retrieval       *debugInfo `json:"retrieval,omitempty"`
+}
+
+var fencedJSONBlockRE = regexp.MustCompile("(?is)```(?:json)?\\s*(.*?)\\s*```")
+
+func boolOrDefault(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+func normalizeProcessMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "rag":
+		return "rag"
+	default:
+		return "direct"
+	}
+}
+
+func prettyJSON(v any) string {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+func compactJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+func processQueryFromInput(v any) string {
+	raw := strings.TrimSpace(compactJSON(v))
+	if len(raw) > 1000 {
+		raw = raw[:1000]
+	}
+	return raw
+}
+
+func firstNonSpaceIndex(s string) int {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		default:
+			return i
+		}
+	}
+	return -1
+}
+
+func extractBalancedJSON(s string) (string, error) {
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return "", fmt.Errorf("no JSON object or array found")
+	}
+	stack := make([]byte, 0, 8)
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}':
+			if len(stack) == 0 || stack[len(stack)-1] != '{' {
+				return "", fmt.Errorf("invalid JSON structure")
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return s[start : i+1], nil
+			}
+		case ']':
+			if len(stack) == 0 || stack[len(stack)-1] != '[' {
+				return "", fmt.Errorf("invalid JSON structure")
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return s[start : i+1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("unterminated JSON structure")
+}
+
+func extractFirstJSONValue(text string) (string, error) {
+	candidates := []string{strings.TrimSpace(text)}
+	matches := fencedJSONBlockRE.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		if len(m) > 1 {
+			candidates = append(candidates, strings.TrimSpace(m[1]))
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if idx := firstNonSpaceIndex(candidate); idx >= 0 {
+			if candidate[idx] == '{' || candidate[idx] == '[' {
+				var parsed any
+				if err := json.Unmarshal([]byte(candidate[idx:]), &parsed); err == nil {
+					return strings.TrimSpace(candidate[idx:]), nil
+				}
+			}
+		}
+		if out, err := extractBalancedJSON(candidate); err == nil {
+			var parsed any
+			if err := json.Unmarshal([]byte(out), &parsed); err == nil {
+				return out, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no valid JSON found in model output")
+}
+
+func jsonTypeName(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return "null"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	case string:
+		return "string"
+	case bool:
+		return "boolean"
+	case float64:
+		if math.Trunc(v) == v {
+			return "integer"
+		}
+		return "number"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+func schemaTypeMatches(expected string, value any) bool {
+	switch expected {
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		_, ok := value.(float64)
+		return ok
+	case "integer":
+		n, ok := value.(float64)
+		return ok && math.Trunc(n) == n
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "null":
+		return value == nil
+	default:
+		return true
+	}
+}
+
+func validateJSONAgainstSchema(value any, schema map[string]any, path string) error {
+	if len(schema) == 0 {
+		return nil
+	}
+	if path == "" {
+		path = "$"
+	}
+	if enumRaw, ok := schema["enum"].([]any); ok && len(enumRaw) > 0 {
+		matched := false
+		for _, allowed := range enumRaw {
+			if reflect.DeepEqual(allowed, value) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%s: value %v is not part of enum", path, value)
+		}
+	}
+	if rawType, ok := schema["type"]; ok {
+		switch tv := rawType.(type) {
+		case string:
+			if !schemaTypeMatches(tv, value) {
+				return fmt.Errorf("%s: expected %s, got %s", path, tv, jsonTypeName(value))
+			}
+		case []any:
+			matched := false
+			for _, item := range tv {
+				if ts, ok := item.(string); ok && schemaTypeMatches(ts, value) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return fmt.Errorf("%s: unexpected type %s", path, jsonTypeName(value))
+			}
+		}
+	}
+
+	switch actual := value.(type) {
+	case map[string]any:
+		if reqRaw, ok := schema["required"].([]any); ok {
+			for _, item := range reqRaw {
+				key, ok := item.(string)
+				if !ok {
+					continue
+				}
+				if _, exists := actual[key]; !exists {
+					return fmt.Errorf("%s.%s: required property missing", path, key)
+				}
+			}
+		}
+		properties := map[string]any{}
+		if raw, ok := schema["properties"].(map[string]any); ok {
+			properties = raw
+		}
+		if rawAP, ok := schema["additionalProperties"].(bool); ok && !rawAP {
+			for key := range actual {
+				if _, exists := properties[key]; !exists {
+					return fmt.Errorf("%s.%s: additional property not allowed", path, key)
+				}
+			}
+		}
+		for key, item := range actual {
+			childSchema, ok := properties[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := validateJSONAgainstSchema(item, childSchema, path+"."+key); err != nil {
+				return err
+			}
+		}
+	case []any:
+		if minItems, ok := schema["minItems"].(float64); ok && len(actual) < int(minItems) {
+			return fmt.Errorf("%s: expected at least %d items", path, int(minItems))
+		}
+		if maxItems, ok := schema["maxItems"].(float64); ok && len(actual) > int(maxItems) {
+			return fmt.Errorf("%s: expected at most %d items", path, int(maxItems))
+		}
+		if itemSchema, ok := schema["items"].(map[string]any); ok {
+			for i, item := range actual {
+				if err := validateJSONAgainstSchema(item, itemSchema, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+					return err
+				}
+			}
+		}
+	case string:
+		if minLength, ok := schema["minLength"].(float64); ok && len(actual) < int(minLength) {
+			return fmt.Errorf("%s: expected minimum length %d", path, int(minLength))
+		}
+		if maxLength, ok := schema["maxLength"].(float64); ok && len(actual) > int(maxLength) {
+			return fmt.Errorf("%s: expected maximum length %d", path, int(maxLength))
+		}
+	case float64:
+		if minimum, ok := schema["minimum"].(float64); ok && actual < minimum {
+			return fmt.Errorf("%s: expected minimum %v", path, minimum)
+		}
+		if maximum, ok := schema["maximum"].(float64); ok && actual > maximum {
+			return fmt.Errorf("%s: expected maximum %v", path, maximum)
+		}
+	}
+	return nil
+}
+
+func buildStructuredProcessSystemPrompt(s appSettings, personaPrompt, customSystemPrompt, ctxText string, schema map[string]any) string {
+	var sb strings.Builder
+	sb.WriteString(buildAssistantPolicyPrompt(s))
+	sb.WriteString("Du arbeitest als strukturierte JSON-Schnittstelle fuer Backend-Prozesse.\n")
+	sb.WriteString("Gib exakt einen JSON-Wert zurueck, der zum angeforderten Schema passt.\n")
+	sb.WriteString("Keine Markdown-Codeblocks, keine Kommentare, keine Erklaerungen, keine Vor- oder Nachsaetze.\n")
+	sb.WriteString("Wenn Kontext aus der lokalen Wissensbasis vorhanden ist, nutze ihn nur als Zusatzinformation und markiere keine internen Quellen im JSON.\n")
+	if personaPrompt != "" {
+		sb.WriteString("\n### Persona\n")
+		sb.WriteString(personaPrompt)
+		sb.WriteString("\n")
+	}
+	if customSystemPrompt != "" {
+		sb.WriteString("\n### System Prompt\n")
+		sb.WriteString(customSystemPrompt)
+		sb.WriteString("\n")
+	}
+	if ctxText != "" {
+		sb.WriteString("\n### Lokaler Kontext\n")
+		sb.WriteString(ctxText)
+		sb.WriteString("\n")
+	}
+	if len(schema) > 0 {
+		sb.WriteString("\n### Antwortschema\n")
+		sb.WriteString(prettyJSON(schema))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func buildStructuredProcessUserPrompt(req processRequest) string {
+	var sb strings.Builder
+	if strings.TrimSpace(req.PrePrompt) != "" {
+		sb.WriteString(strings.TrimSpace(req.PrePrompt))
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("Input JSON:\n")
+	sb.WriteString(prettyJSON(req.Input))
+	sb.WriteString("\n\n")
+	if len(req.ResponseSchema) > 0 {
+		sb.WriteString("Erwartetes JSON-Schema:\n")
+		sb.WriteString(prettyJSON(req.ResponseSchema))
+		sb.WriteString("\n\n")
+	}
+	if strings.TrimSpace(req.PostPrompt) != "" {
+		sb.WriteString(strings.TrimSpace(req.PostPrompt))
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("Antworte ausschliesslich mit validem JSON.")
+	return sb.String()
+}
+
+func buildStructuredRepairPrompt(req processRequest, validationErr, raw string) string {
+	var sb strings.Builder
+	sb.WriteString("Die vorige Antwort war kein gueltiges JSON fuer das angeforderte Schema.\n\n")
+	if validationErr != "" {
+		sb.WriteString("Validierungsfehler:\n")
+		sb.WriteString(validationErr)
+		sb.WriteString("\n\n")
+	}
+	if len(req.ResponseSchema) > 0 {
+		sb.WriteString("Schema:\n")
+		sb.WriteString(prettyJSON(req.ResponseSchema))
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("Urspruengliche Modellantwort:\n")
+	sb.WriteString(raw)
+	sb.WriteString("\n\nGib jetzt nur die reparierte JSON-Antwort zurueck.")
+	return sb.String()
+}
+
+func processModelOutput(raw string, schema map[string]any, validate bool) (string, any, string, error) {
+	cleaned := stripInternalThinking(strings.TrimSpace(raw))
+	jsonText, err := extractFirstJSONValue(cleaned)
+	if err != nil {
+		return "", nil, "", err
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(jsonText), &parsed); err != nil {
+		return jsonText, nil, "", err
+	}
+	if validate && len(schema) > 0 {
+		if err := validateJSONAgainstSchema(parsed, schema, "$"); err != nil {
+			return jsonText, parsed, err.Error(), err
+		}
+	}
+	return jsonText, parsed, "", nil
+}
+
+func runStructuredProcess(ctx context.Context, rag *ragSystem, s appSettings, personaPrompt string, req processRequest) processResponse {
+	start := time.Now()
+	resp := processResponse{
+		RequestID: req.RequestID,
+		Mode:      normalizeProcessMode(req.Mode),
+	}
+	validateJSON := boolOrDefault(req.Options.ValidateJSON, true)
+	repairJSON := boolOrDefault(req.Options.RepairJSON, true)
+	maxRetries := req.Options.MaxRetries
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	if maxRetries == 0 && repairJSON {
+		maxRetries = 2
+	}
+	var ctxText string
+	var retrieval *debugInfo
+	if req.RAG.Enabled || resp.Mode == "rag" {
+		resp.RAGUsed = true
+		resp.Mode = "rag"
+		query := strings.TrimSpace(req.RAG.Query)
+		if query == "" {
+			query = processQueryFromInput(req.Input)
+		}
+		k := req.RAG.K
+		if k <= 0 {
+			k = rag.k
+		}
+		var err error
+		ctxText, retrieval, err = rag.prepareDirectContext(query, k)
+		if err != nil {
+			resp.Attempts = 0
+			resp.DurationMS = time.Since(start).Milliseconds()
+			resp.Error = err.Error()
+			resp.RAGQuery = query
+			return resp
+		}
+		resp.RAGQuery = query
+		resp.ContextChars = len(ctxText)
+		resp.Retrieval = retrieval
+	}
+	systemPrompt := buildStructuredProcessSystemPrompt(s, personaPrompt, req.SystemPrompt, ctxText, req.ResponseSchema)
+	userPrompt := buildStructuredProcessUserPrompt(req)
+	msgs := []chatMsg{{Role: "user", Content: userPrompt}}
+
+	var raw string
+	for attempt := 1; attempt <= maxRetries+1; attempt++ {
+		var buf bytes.Buffer
+		if err := rag.getLM().chatStream(ctx, systemPrompt, msgs, &buf); err != nil {
+			resp.Attempts = attempt
+			resp.DurationMS = time.Since(start).Milliseconds()
+			resp.Error = err.Error()
+			resp.Raw = strings.TrimSpace(buf.String())
+			return resp
+		}
+		raw = strings.TrimSpace(buf.String())
+		jsonText, parsed, validationErr, err := processModelOutput(raw, req.ResponseSchema, validateJSON)
+		if err == nil {
+			resp.OK = true
+			resp.ValidJSON = true
+			resp.Attempts = attempt
+			resp.DurationMS = time.Since(start).Milliseconds()
+			resp.Raw = jsonText
+			resp.Result = parsed
+			return resp
+		}
+		resp.Raw = raw
+		resp.ValidationError = validationErr
+		if attempt > maxRetries || !repairJSON {
+			resp.Attempts = attempt
+			resp.DurationMS = time.Since(start).Milliseconds()
+			resp.Error = err.Error()
+			return resp
+		}
+		msgs = []chatMsg{{
+			Role:    "user",
+			Content: buildStructuredRepairPrompt(req, validationErr, raw),
+		}}
+	}
+	resp.DurationMS = time.Since(start).Milliseconds()
+	resp.Error = "processing failed"
+	return resp
+}
+
+type weightedSearchQuery struct {
+	Query  string
+	Weight float64
+}
+
+var searchTokenSplitter = regexp.MustCompile(`[^\p{L}\p{N}\-_.#+/]+`)
+
+func splitSearchTokens(s string) []string {
+	raw := searchTokenSplitter.Split(strings.TrimSpace(s), -1)
+	out := make([]string, 0, len(raw))
+	for _, tok := range raw {
+		tok = strings.TrimSpace(tok)
+		if tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func hasDigit(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLetter(s string) bool {
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlphaToken(s string) bool {
+	return hasLetter(s) && !hasDigit(s)
+}
+
+func stopwordSet() map[string]bool {
+	return map[string]bool{
+		"was": true, "weisst": true, "weißt": true, "du": true, "ueber": true, "über": true,
+		"wer": true, "ist": true, "erzaehl": true, "erzähl": true, "mir": true, "von": true,
+		"tell": true, "me": true, "about": true, "what": true, "who": true,
+		"the": true, "ein": true, "eine": true, "und": true, "oder": true, "für": true, "fuer": true,
+		"with": true, "mit": true, "der": true, "die": true, "das": true,
+	}
+}
+
+func looksTechnicalQuery(q string) bool {
+	tokens := splitSearchTokens(q)
+	techScore := 0
+	for _, tok := range tokens {
+		if hasDigit(tok) {
+			techScore++
+		}
+		if strings.ContainsAny(tok, "-_/") {
+			techScore++
+		}
+		low := strings.ToLower(tok)
+		if strings.HasSuffix(low, "rs") || strings.HasSuffix(low, "zz") || strings.Contains(low, "lager") || strings.Contains(low, "bearing") {
+			techScore++
+		}
+	}
+	return techScore >= 2
+}
+
+func expandRetrievalQueries(q string) []weightedSearchQuery {
+	base := strings.TrimSpace(refineSearchQuery(q))
+	if base == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	add := func(out *[]weightedSearchQuery, query string, weight float64) {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			return
+		}
+		key := strings.ToLower(query)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		*out = append(*out, weightedSearchQuery{Query: query, Weight: weight})
+	}
+
+	var out []weightedSearchQuery
+	add(&out, base, 1.00)
+
+	tokens := splitSearchTokens(base)
+	if len(tokens) == 0 {
+		return out
+	}
+
+	if len(tokens) >= 2 && (hasDigit(tokens[0]) || hasDigit(tokens[1])) {
+		add(&out, tokens[0]+" "+tokens[1], 0.98)
+	}
+	if hasDigit(tokens[0]) {
+		add(&out, tokens[0], 0.95)
+	}
+
+	stopwords := stopwordSet()
+	var alpha []string
+	for _, tok := range tokens {
+		low := strings.ToLower(tok)
+		if stopwords[low] {
+			continue
+		}
+		if isAlphaToken(tok) {
+			alpha = append(alpha, tok)
+		}
+	}
+	if len(alpha) > 0 {
+		add(&out, alpha[len(alpha)-1], 0.93)
+		if len(alpha) > 1 {
+			add(&out, strings.Join(alpha, " "), 0.92)
+		}
+	}
+	if len(tokens) >= 3 && hasDigit(tokens[0]) && hasLetter(tokens[len(tokens)-1]) {
+		add(&out, tokens[0]+" "+tokens[len(tokens)-1], 0.91)
+	}
+
+	if len(out) > 5 {
+		out = out[:5]
+	}
+	return out
+}
+
+func expandExternalSearchQueries(q string) []string {
+	base := strings.TrimSpace(refineSearchQuery(q))
+	if base == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	add := func(out *[]string, query string) {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			return
+		}
+		key := strings.ToLower(query)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		*out = append(*out, query)
+	}
+
+	var out []string
+	add(&out, base)
+	tokens := splitSearchTokens(base)
+	if len(tokens) >= 2 && (hasDigit(tokens[0]) || hasDigit(tokens[1])) {
+		add(&out, `"`+tokens[0]+` `+tokens[1]+`"`)
+		add(&out, tokens[0]+" "+tokens[1])
+	}
+	if looksTechnicalQuery(base) {
+		add(&out, "Technische Details "+base)
+		add(&out, `"`+base+`"`)
+	}
+	for _, q := range expandRetrievalQueries(base) {
+		add(&out, q.Query)
+	}
+	if len(out) > 6 {
+		out = out[:6]
+	}
+	return out
 }
 
 // refineSearchQuery attempts to extract an entity-like phrase from the
@@ -3337,6 +4752,9 @@ func maybePreferOfflineLLM(settings *settingsStore) appSettings {
 // runWebServer registers HTTP handlers and starts the web interface.
 func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *chatStore, customAPIs *apiStore, personas *personaStore, modules *moduleStore, llmAvailable bool, llmPingErr error) {
 	mux := http.NewServeMux()
+	adminUsers := newAdminUserStore(settings)
+	apiRoutes := newAPIRouteStore(settings)
+	adminGuard := func(h http.HandlerFunc) http.HandlerFunc { return routePolicyMiddleware(settings, h) }
 
 	// Static assets
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -3600,7 +5018,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	})
 
 	// POST /api/modules/run — preview or ingest a module result into RAG
-	mux.HandleFunc("/api/modules/run", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/modules/run", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -3637,10 +5055,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(res)
-	})
+	}))
 
 	// POST /api/modules/upload?id=<module>&target=<relative-path>
-	mux.HandleFunc("/api/modules/upload", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/modules/upload", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -3702,10 +5120,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
-	})
+	}))
 
 	// GET /api/modules/download?id=<module>&path=<relative-path>
-	mux.HandleFunc("/api/modules/download", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/modules/download", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			http.Error(w, "GET only", 405)
 			return
@@ -3741,7 +5159,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(target)))
 		http.ServeFile(w, r, target)
-	})
+	}))
 
 	// GET /api/discover — auto-discover common local endpoints
 	mux.HandleFunc("/api/discover", func(w http.ResponseWriter, r *http.Request) {
@@ -3831,7 +5249,52 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	})
 
 	// POST /api/ask — SSE streaming answer
-	mux.HandleFunc("/api/ask", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/process", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req processRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if req.Input == nil {
+			http.Error(w, "missing input", 400)
+			return
+		}
+		if req.RequestID == "" {
+			req.RequestID = newRequestID()
+		}
+		req.Mode = normalizeProcessMode(req.Mode)
+
+		s := settings.get()
+		personaID := strings.TrimSpace(req.PersonaID)
+		if personaID == "" {
+			personaID = personas.defaultID()
+		}
+		personaPrompt := ""
+		if personaID != "" {
+			if per, ok := personas.get(personaID); ok {
+				personaPrompt = per.Prompt
+			}
+		}
+
+		resp := runStructuredProcess(r.Context(), rag, s, personaPrompt, req)
+		status := 200
+		if !resp.OK {
+			status = 500
+			if resp.ValidationError != "" || !resp.ValidJSON {
+				status = 422
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(resp)
+	}))
+
+	// POST /api/ask — SSE streaming answer
+	mux.HandleFunc("/api/ask", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4248,7 +5711,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			flusher.Flush()
 		}
 		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, thinkingStr, s.ChatModel, modelMeta)
-	})
+	}))
 
 	// GET /api/tools — list available tools
 	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
@@ -4258,7 +5721,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	})
 
 	// POST /api/tool/execute — execute a tool and add results to RAG
-	mux.HandleFunc("/api/tool/execute", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/tool/execute", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4301,7 +5764,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"total":      rag.docCountForRole(s.ActiveRole),
 			"redactions": redactions,
 		})
-	})
+	}))
 
 	// POST /api/nanogo — execute Go source using the embedded nanoGo interpreter
 	mux.HandleFunc("/api/nanogo", func(w http.ResponseWriter, r *http.Request) {
@@ -4362,7 +5825,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	})
 
 	// POST /api/search
-	mux.HandleFunc("/api/search", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/search", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4385,10 +5848,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(results)
-	})
+	}))
 
 	// POST /api/add-wiki
-	mux.HandleFunc("/api/add-wiki", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/add-wiki", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4441,10 +5904,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"redactions": redactions,
 			"roles":      roleScopes,
 		})
-	})
+	}))
 
 	// POST /api/add-url
-	mux.HandleFunc("/api/add-url", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/add-url", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4491,10 +5954,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"redactions": redactions,
 			"roles":      roleScopes,
 		})
-	})
+	}))
 
 	// POST /api/add-folder — import all text files from a server directory
-	mux.HandleFunc("/api/add-folder", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/add-folder", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4595,10 +6058,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"errors":       errors,
 			"roles":        roleScopes,
 		})
-	})
+	}))
 
 	// POST /api/add-text
-	mux.HandleFunc("/api/add-text", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/add-text", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4636,10 +6099,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"redactions": redactions,
 			"roles":      roleScopes,
 		})
-	})
+	}))
 
 	// POST /api/upload
-	mux.HandleFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/upload", adminGuard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
 			return
@@ -4821,7 +6284,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"redactions": redactions,
 			"roles":      roleScopes,
 		})
-	})
+	}))
 
 	// GET /api/stats
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
@@ -5049,6 +6512,145 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
 	})
+
+	mux.HandleFunc("/api/admin/users", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(adminUsers.list())
+	}))
+
+	mux.HandleFunc("/api/admin/users/create", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Name string `json:"name"`
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+			http.Error(w, "missing name", 400)
+			return
+		}
+		user, token, err := adminUsers.create(req.Name, req.Role)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"user":    user,
+			"api_key": token,
+		})
+	}))
+
+	mux.HandleFunc("/api/admin/users/save", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Role    string `json:"role"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "missing id", 400)
+			return
+		}
+		user, err := adminUsers.update(req.ID, req.Name, req.Role, req.Enabled)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(user)
+	}))
+
+	mux.HandleFunc("/api/admin/users/regenerate", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "missing id", 400)
+			return
+		}
+		user, token, err := adminUsers.regenerateKey(req.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"user":    user,
+			"api_key": token,
+		})
+	}))
+
+	mux.HandleFunc("/api/admin/users/delete", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "missing id", 400)
+			return
+		}
+		ok, err := adminUsers.remove(req.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if !ok {
+			http.Error(w, "not found", 404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+
+	mux.HandleFunc("/api/admin/routes", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(apiRoutes.list())
+	}))
+
+	mux.HandleFunc("/api/admin/routes/save", localAdminOnly(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Path    string `json:"path"`
+			Enabled bool   `json:"enabled"`
+			Public  bool   `json:"public"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Path) == "" {
+			http.Error(w, "missing path", 400)
+			return
+		}
+		rule, err := apiRoutes.update(req.Path, req.Enabled, req.Public)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rule)
+	}))
 
 	fmt.Printf("Web interface: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))

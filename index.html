@@ -260,6 +260,7 @@
       <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false" aria-controls="settings-apis" id="stab-apis"><span data-i18n="custom_apis">Custom APIs</span></button>
       <button class="settings-tab" data-settings-tab="modules" role="tab" aria-selected="false" aria-controls="settings-modules" id="stab-modules"><span data-i18n="modules">Module</span></button>
       <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas"><span data-i18n="personas">Personas</span></button>
+      <button class="settings-tab" data-settings-tab="admin" role="tab" aria-selected="false" aria-controls="settings-admin" id="stab-admin"><span>Admin</span></button>
     </div>
 
     <!-- Tab: General -->
@@ -450,6 +451,30 @@
         <button class="btn-primary" id="btnAddPersona" aria-label="Add persona"><span data-i18n="add">Hinzufügen</span></button>
         <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas">Beispiel-Personas hinzufügen</button>
       </div>
+    </div>
+
+    <div id="settings-admin" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-admin">
+      <h3>API-User</h3>
+      <p class="hint">Diese API-Keys sind fuer externe Clients gedacht. Nicht-oeffentliche Routen verlangen dann einen Key via <code>Authorization: Bearer ...</code> oder <code>X-API-Key</code>.</p>
+      <div id="adminUserList" class="api-list" role="list" aria-label="API user list"><p class="muted">Lade…</p></div>
+
+      <h4>Neuen API-User anlegen</h4>
+      <label for="newAdminUserName">Name</label>
+      <input id="newAdminUserName" placeholder="z.B. ERP Import" aria-label="API user name">
+      <label for="newAdminUserRole">Rolle</label>
+      <select id="newAdminUserRole" aria-label="API user role">
+        <option value="it">IT</option>
+        <option value="logistik">Logistik</option>
+        <option value="vertrieb">Vertrieb</option>
+        <option value="hr">HR</option>
+      </select>
+      <div class="actions-row">
+        <button class="btn-primary" id="btnAddAdminUser" aria-label="Add API user">API-User anlegen</button>
+      </div>
+
+      <h3 style="margin-top:24px">API-Routen</h3>
+      <p class="hint">`Enabled` sperrt eine Route komplett. `Public` erlaubt Aufrufe ohne API-Key. Standardmaessig bleiben bestehende UI-Routen offen.</p>
+      <div id="adminRouteList" class="api-list" role="list" aria-label="API route list"><p class="muted">Lade…</p></div>
     </div>
 
   </div>

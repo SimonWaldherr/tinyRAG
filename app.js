@@ -1244,6 +1244,7 @@ async function initSettingsUI(){
   await loadCustomApis();
   await loadModules();
   await loadPersonas();
+  await loadAdmin();
 
   // Update OpenAI badge visibility in main UI
   updateOpenAIBadge(s);
@@ -1320,6 +1321,110 @@ function updateOpenAIBadge(s){
   updateWorkspaceStrip();
 }
 
+function isLocalLLMBase(base){
+  if(!base) return false;
+  const low = String(base).toLowerCase();
+  return low.includes('localhost') || low.includes('127.0.0.1') || low.includes('[::1]');
+}
+
+function buildQuickChatModelOptions(resp, currentChatModel){
+  const out = [];
+  const seen = new Set();
+  const add = (value, label) => {
+    if(!value || seen.has(value)) return;
+    seen.add(value);
+    out.push({value, label});
+  };
+
+  (resp.recommend_chat || []).forEach(m => add(m, m + ' (recommended)'));
+  (resp.models || []).forEach(m => {
+    const low = String(m).toLowerCase();
+    const looksEmbed = low.includes('embed') || low.includes('embedding');
+    if(looksEmbed && m !== currentChatModel) return;
+    add(m, m);
+  });
+  return out;
+}
+
+async function applyQuickLocalModel(baseUrl, chatModel, currentSettings){
+  const payload = {
+    base_url: currentSettings.base_url || baseUrl,
+    chat_base: currentSettings.chat_base || baseUrl,
+    embed_base: currentSettings.embed_base || currentSettings.base_url || baseUrl,
+    chat_model: chatModel,
+    embed_model: currentSettings.embed_model,
+    active_role: currentRole || currentSettings.active_role || 'it'
+  };
+  await apiPost('/api/settings', payload);
+}
+
+async function refreshQuickModelSwitcher(s){
+  const modelSel = $('#llmModelSelect');
+  const applyBtn = $('#llmApplyBtn');
+  if(!modelSel || !applyBtn) return;
+
+  const baseUrl = (s && (s.chat_base || s.base_url)) ? (s.chat_base || s.base_url) : '';
+  const currentChatModel = s?.chat_model || '';
+  if(!isLocalLLMBase(baseUrl)){
+    modelSel.style.display = 'none';
+    applyBtn.style.display = 'none';
+    modelSel.innerHTML = '<option value="">(Use recommended)</option>';
+    return;
+  }
+
+  try{
+    const resp = await apiPost('/api/llm/list-models', {base_url: baseUrl});
+    const opts = buildQuickChatModelOptions(resp, currentChatModel);
+    if(!opts.length){
+      modelSel.style.display = 'none';
+      applyBtn.style.display = 'none';
+      return;
+    }
+
+    modelSel.innerHTML = '';
+    opts.forEach(o => {
+      const op = document.createElement('option');
+      op.value = o.value;
+      op.textContent = o.label;
+      modelSel.appendChild(op);
+    });
+
+    const hasCurrent = opts.some(o => o.value === currentChatModel);
+    modelSel.value = hasCurrent ? currentChatModel : opts[0].value;
+    modelSel.style.display = '';
+    applyBtn.style.display = '';
+    applyBtn.textContent = 'Switch';
+    applyBtn.disabled = (modelSel.value === currentChatModel);
+    modelSel.title = 'Lokales Chat-Modell';
+    applyBtn.title = 'Ausgewähltes lokales Modell aktivieren';
+
+    modelSel.onchange = ()=>{
+      applyBtn.disabled = (modelSel.value === currentChatModel);
+    };
+
+    applyBtn.onclick = async ()=>{
+      if(!modelSel.value || modelSel.value === currentChatModel) return;
+      setLoading(applyBtn, true);
+      try{
+        await applyQuickLocalModel(baseUrl, modelSel.value, s);
+        const s2 = await apiGet('/api/settings');
+        updateOpenAIBadge(s2);
+        await refreshQuickModelSwitcher(s2);
+        await loadPersonas();
+        await refreshStats();
+      }catch(err){
+        alert('Fehler beim Wechseln des lokalen Modells: '+(err.message||String(err)));
+      }finally{
+        setLoading(applyBtn, false);
+      }
+    };
+  }catch(err){
+    modelSel.style.display = 'none';
+    applyBtn.style.display = 'none';
+    console.error('Failed to refresh quick model switcher', err);
+  }
+}
+
 // Initialize the LLM provider switcher UI and wire selection actions.
 async function initLLMSwitcher(s){
   const sel = $('#llmSwitcher');
@@ -1330,6 +1435,8 @@ async function initLLMSwitcher(s){
   else if(base.includes('localhost:1234')) sel.value = 'lmstudio';
   else if(base.includes('localhost:11434')) sel.value = 'ollama';
   else sel.value = 'custom';
+
+  await refreshQuickModelSwitcher(s);
 
   if(sel.dataset.bound === 'true') return;
   sel.dataset.bound = 'true';
@@ -1384,6 +1491,7 @@ async function initLLMSwitcher(s){
           await apiPost('/api/settings', {chat_base: baseUrl, embed_base: baseUrl, chat_model: selected, embed_model: embedModel});
           const s2 = await apiGet('/api/settings');
           updateOpenAIBadge(s2);
+          await refreshQuickModelSwitcher(s2);
           await loadPersonas();
           await refreshStats();
           alert('LLM gewechselt und Modell angewendet: '+selected);
@@ -1879,6 +1987,165 @@ async function loadPersonas(){
         box.appendChild(div);
       });
     }
+  }
+}
+
+function showIssuedAPIKey(name, key){
+  if(!key) return;
+  window.prompt('API-Key fuer "' + name + '". Jetzt kopieren; spaeter ist er nicht mehr sichtbar.', key);
+}
+
+async function loadAdmin(){
+  await Promise.all([loadAdminUsers(), loadAdminRoutes()]);
+}
+
+async function loadAdminUsers(){
+  const box = $('#adminUserList');
+  if(!box) return;
+  const list = await apiGet('/api/admin/users');
+  if(!list.length){
+    box.innerHTML = '<p class="muted">Noch keine API-User.</p>';
+    return;
+  }
+  box.innerHTML = '';
+  list.forEach(u => {
+    const div = document.createElement('div');
+    div.className = 'api-item';
+    div.innerHTML = `
+      <div style="width:100%">
+        <div class="name" style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+          <input class="admin-user-name" value="${escHtml(u.name || '')}" aria-label="API user name">
+          <label class="inline-check" style="margin:0">
+            <input type="checkbox" class="admin-user-enabled" ${u.enabled ? 'checked' : ''}>
+            <span>Enabled</span>
+          </label>
+        </div>
+        <div class="desc">ID: ${escHtml(u.id)} · Rolle: ${escHtml(u.role || 'it')} · Key endet auf: ${escHtml(u.api_key_last4 || '----')}</div>
+        <div class="desc">Erstellt: ${escHtml(u.created_at || '')}</div>
+        <div class="actions-row" style="margin-top:10px">
+          <select class="admin-user-role" aria-label="API user role">
+            <option value="it" ${u.role === 'it' ? 'selected' : ''}>IT</option>
+            <option value="logistik" ${u.role === 'logistik' ? 'selected' : ''}>Logistik</option>
+            <option value="vertrieb" ${u.role === 'vertrieb' ? 'selected' : ''}>Vertrieb</option>
+            <option value="hr" ${u.role === 'hr' ? 'selected' : ''}>HR</option>
+          </select>
+          <button class="tool-btn admin-user-save">Speichern</button>
+          <button class="tool-btn suggested admin-user-regen">Key neu erzeugen</button>
+          <button class="tool-btn danger admin-user-delete">Löschen</button>
+        </div>
+        <div class="tool-status admin-user-status" style="margin-top:8px"></div>
+      </div>
+    `;
+    const nameEl = div.querySelector('.admin-user-name');
+    const roleEl = div.querySelector('.admin-user-role');
+    const enabledEl = div.querySelector('.admin-user-enabled');
+    const statusEl = div.querySelector('.admin-user-status');
+    div.querySelector('.admin-user-save').addEventListener('click', async ()=>{
+      try{
+        await apiPost('/api/admin/users/save', {
+          id: u.id,
+          name: nameEl.value.trim(),
+          role: roleEl.value,
+          enabled: !!enabledEl.checked
+        });
+        setStatus(statusEl, 'Gespeichert', 'ok');
+        await loadAdminUsers();
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    });
+    div.querySelector('.admin-user-regen').addEventListener('click', async ()=>{
+      if(!confirm('API-Key für '+(nameEl.value.trim() || u.name)+' neu erzeugen? Der alte Key wird sofort ungültig.')) return;
+      try{
+        const res = await apiPost('/api/admin/users/regenerate', {id: u.id});
+        setStatus(statusEl, 'API-Key neu erzeugt', 'ok');
+        showIssuedAPIKey(res.user?.name || nameEl.value.trim() || u.name, res.api_key || '');
+        await loadAdminUsers();
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    });
+    div.querySelector('.admin-user-delete').addEventListener('click', async ()=>{
+      if(!confirm('API-User löschen?\n\n'+(nameEl.value.trim() || u.name))) return;
+      try{
+        await apiPost('/api/admin/users/delete', {id: u.id});
+        await loadAdminUsers();
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    });
+    box.appendChild(div);
+  });
+}
+
+async function loadAdminRoutes(){
+  const box = $('#adminRouteList');
+  if(!box) return;
+  const list = await apiGet('/api/admin/routes');
+  if(!list.length){
+    box.innerHTML = '<p class="muted">Keine Route-Policies vorhanden.</p>';
+    return;
+  }
+  box.innerHTML = '';
+  list.forEach(route => {
+    const div = document.createElement('div');
+    div.className = 'api-item';
+    div.innerHTML = `
+      <div style="width:100%">
+        <div class="name">${escHtml(route.path)}</div>
+        <div class="desc">${escHtml(route.description || '')}</div>
+        <div class="actions-row" style="margin-top:10px">
+          <label class="inline-check" style="margin:0">
+            <input type="checkbox" class="admin-route-enabled" ${route.enabled ? 'checked' : ''}>
+            <span>Enabled</span>
+          </label>
+          <label class="inline-check" style="margin:0">
+            <input type="checkbox" class="admin-route-public" ${route.public ? 'checked' : ''}>
+            <span>Public</span>
+          </label>
+          <button class="tool-btn admin-route-save">Speichern</button>
+        </div>
+        <div class="tool-status admin-route-status" style="margin-top:8px"></div>
+      </div>
+    `;
+    const enabledEl = div.querySelector('.admin-route-enabled');
+    const publicEl = div.querySelector('.admin-route-public');
+    const statusEl = div.querySelector('.admin-route-status');
+    div.querySelector('.admin-route-save').addEventListener('click', async ()=>{
+      try{
+        await apiPost('/api/admin/routes/save', {
+          path: route.path,
+          enabled: !!enabledEl.checked,
+          public: !!publicEl.checked
+        });
+        setStatus(statusEl, 'Gespeichert', 'ok');
+        await loadAdminRoutes();
+      }catch(e){
+        setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    });
+    box.appendChild(div);
+  });
+}
+
+async function addAdminUser(){
+  const name = $('#newAdminUserName') ? $('#newAdminUserName').value.trim() : '';
+  const role = $('#newAdminUserRole') ? $('#newAdminUserRole').value : 'it';
+  if(!name){
+    alert('Bitte Namen angeben');
+    return;
+  }
+  setLoading('#btnAddAdminUser', true);
+  try{
+    const res = await apiPost('/api/admin/users/create', {name, role});
+    if($('#newAdminUserName')) $('#newAdminUserName').value = '';
+    if($('#newAdminUserRole')) $('#newAdminUserRole').value = 'it';
+    showIssuedAPIKey(res.user?.name || name, res.api_key || '');
+    await loadAdminUsers();
+  }catch(e){
+    alert('Fehler beim Anlegen: '+(e.message||String(e)));
+  }finally{
+    setLoading('#btnAddAdminUser', false);
   }
 }
 
@@ -2692,6 +2959,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#btnSaveSettings').addEventListener('click', ()=>saveSettings(false));
   $('#btnAddCustomApi').addEventListener('click', addCustomApi);
   $('#btnAddPersona').addEventListener('click', addPersona);
+  const btnAddAdminUser = $('#btnAddAdminUser'); if(btnAddAdminUser) btnAddAdminUser.addEventListener('click', addAdminUser);
   const btnSamples = $('#btnAddSamplePersonas'); if(btnSamples) btnSamples.addEventListener('click', addSamplePersonas);
 
   await refreshStats();

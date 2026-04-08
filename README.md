@@ -221,6 +221,77 @@ The project follows standard Go conventions:
 - Support for custom system prompts (personas)
 - Context injection from retrieved chunks
 
+## Structured Processing API
+
+For machine-to-machine jobs you can use `POST /api/process`.
+This endpoint is intended for workflows where a Python or PHP tool:
+
+- reads rows from MSSQL
+- sends each row or a grouped payload as JSON
+- passes `system_prompt`, `pre_prompt`, and `post_prompt`
+- requests a strict JSON response with a provided schema
+- validates the JSON on the server
+- writes the result to JSONL
+
+Example request:
+
+```json
+{
+  "request_id": "row-4711",
+  "mode": "direct",
+  "system_prompt": "Du bist ein Extraktionssystem.",
+  "pre_prompt": "Analysiere die Eingabedaten.",
+  "input": {
+    "id": 4711,
+    "company": "Example GmbH",
+    "text": "..."
+  },
+  "post_prompt": "Gib nur JSON zurueck.",
+  "response_schema": {
+    "type": "object",
+    "required": ["status", "summary"],
+    "additionalProperties": false,
+    "properties": {
+      "status": {"type": "string"},
+      "summary": {"type": "string"},
+      "score": {"type": "number"}
+    }
+  },
+  "options": {
+    "validate_json": true,
+    "repair_json": true,
+    "max_retries": 2
+  }
+}
+```
+
+Example response:
+
+```json
+{
+  "request_id": "row-4711",
+  "ok": true,
+  "mode": "direct",
+  "valid_json": true,
+  "attempts": 1,
+  "duration_ms": 812,
+  "raw": "{\"status\":\"ok\",\"summary\":\"...\",\"score\":0.94}",
+  "result": {
+    "status": "ok",
+    "summary": "...",
+    "score": 0.94
+  }
+}
+```
+
+If you want retrieval from the local knowledge base before processing, set `mode` to `"rag"` or `rag.enabled` to `true`.
+
+Included examples:
+
+- `examples/mssql_to_jsonl.py`
+- `examples/mssql_to_jsonl.php`
+- `examples/jsonl_viewer.php`
+
 ## Security Considerations
 
 ### Code Execution

@@ -98,6 +98,93 @@
       "prompt": "Answer briefly and directly. Prioritize short, precise responses with bulleted lists for clarity."
     }
   ],
+  "api_users": null,
+  "api_routes": [
+    {
+      "path": "/api/process",
+      "match_type": "exact",
+      "description": "Structured processing endpoint",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/ask",
+      "match_type": "exact",
+      "description": "Chat SSE endpoint",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/search",
+      "match_type": "exact",
+      "description": "Semantic search",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/tool/execute",
+      "match_type": "exact",
+      "description": "Execute one tool manually",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/add-wiki",
+      "match_type": "exact",
+      "description": "Ingest from Wikipedia",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/add-url",
+      "match_type": "exact",
+      "description": "Ingest from URL",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/add-folder",
+      "match_type": "exact",
+      "description": "Bulk ingest from folder",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/add-text",
+      "match_type": "exact",
+      "description": "Ingest plain text",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/upload",
+      "match_type": "exact",
+      "description": "File upload ingest",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/modules/run",
+      "match_type": "exact",
+      "description": "Run configured module",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/modules/upload",
+      "match_type": "exact",
+      "description": "Module upload bridge",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/modules/download",
+      "match_type": "exact",
+      "description": "Module download bridge",
+      "enabled": true,
+      "public": true
+    }
+  ],
   "allow_code_exec": false,
   "allow_nanogo": false,
   "allow_shell_exec": false,
