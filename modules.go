@@ -662,7 +662,7 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 		return moduleRunResult{}, err
 	}
 	if info.IsDir() {
-		var files, chunksAdded int
+		var files, chunksAdded, redactions int
 		err := filepath.WalkDir(target, func(path string, d os.DirEntry, walkErr error) error {
 			if walkErr != nil || d.IsDir() {
 				return nil
@@ -672,12 +672,14 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 				return nil
 			}
 			relPath, _ := filepath.Rel(root, path)
-			chunks := chunkText(text, settings.get().ChunkSize)
+			cfg := settings.get()
+			chunks, reds := chunksForIngest(text, cfg)
 			if err := rag.addChunks("module:"+mod.ID+":folder:"+relPath, chunks, embedModel); err != nil {
 				return nil
 			}
 			files++
 			chunksAdded += len(chunks)
+			redactions += reds
 			return nil
 		})
 		if err != nil {
@@ -689,9 +691,10 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 			Source:   "module:" + mod.ID + ":folder",
 			Summary:  fmt.Sprintf("%d files ingested", files),
 			Meta: map[string]any{
-				"files":  files,
-				"chunks": chunksAdded,
-				"path":   target,
+				"files":      files,
+				"chunks":     chunksAdded,
+				"path":       target,
+				"redactions": redactions,
 			},
 		}, nil
 	}
@@ -701,7 +704,8 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 		return moduleRunResult{}, err
 	}
 	relPath, _ := filepath.Rel(root, target)
-	chunks := chunkText(text, settings.get().ChunkSize)
+	cfg := settings.get()
+	chunks, redactions := chunksForIngest(text, cfg)
 	if err := rag.addChunks("module:"+mod.ID+":folder:"+relPath, chunks, embedModel); err != nil {
 		return moduleRunResult{}, err
 	}
@@ -712,8 +716,9 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 		Summary:  fmt.Sprintf("File ingested (%d chunks)", len(chunks)),
 		Text:     text,
 		Meta: map[string]any{
-			"path":   target,
-			"chunks": len(chunks),
+			"path":       target,
+			"chunks":     len(chunks),
+			"redactions": redactions,
 		},
 	}, nil
 }
@@ -748,7 +753,7 @@ func ingestModuleResult(rag *ragSystem, embedModel string, res moduleRunResult) 
 	if strings.TrimSpace(res.Text) == "" || strings.TrimSpace(res.Source) == "" {
 		return 0, nil
 	}
-	chunks := chunkText(res.Text, settings.get().ChunkSize)
+	chunks, _ := chunksForIngest(res.Text, settings.get())
 	if err := rag.addChunks(res.Source, chunks, embedModel); err != nil {
 		return 0, err
 	}
@@ -783,7 +788,7 @@ func executeModuleRun(mod moduleConfig, rag *ragSystem, embedModel, action, arg 
 			for _, msg := range msgs {
 				doc := fmt.Sprintf("From: %s\nDate: %s\nSubject: %s\n\n%s", msg.From, msg.Date, msg.Subject, msg.Body)
 				source := fmt.Sprintf("module:%s:mail:%d:%s", mod.ID, msg.Index, strings.ReplaceAll(strings.TrimSpace(msg.Subject), "'", ""))
-				chunks := chunkText(doc, settings.get().ChunkSize)
+				chunks, _ := chunksForIngest(doc, settings.get())
 				if err := rag.addChunks(source, chunks, embedModel); err != nil {
 					return moduleRunResult{}, err
 				}

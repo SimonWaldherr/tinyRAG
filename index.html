@@ -47,6 +47,15 @@
       <span data-i18n="persona">Persona</span>
       <select id="personaSelect" aria-label="Select persona (pre-prompt)"></select>
     </label>
+    <label class="debug-toggle" for="roleSelect">
+      <span data-i18n="role">Rolle</span>
+      <select id="roleSelect" aria-label="Select role context">
+        <option value="it" data-i18n="role_it">IT</option>
+        <option value="logistik" data-i18n="role_logistics">Logistik</option>
+        <option value="vertrieb" data-i18n="role_sales">Vertrieb</option>
+        <option value="hr" data-i18n="role_hr">HR</option>
+      </select>
+    </label>
 
     <label class="debug-toggle" for="debugMode">
       <input type="checkbox" id="debugMode" aria-describedby="debug-description">
@@ -83,6 +92,7 @@
     <div class="workspace-strip" aria-label="Current chat workspace">
       <div class="workspace-pill" id="providerPill">Provider: <strong>-</strong></div>
       <div class="workspace-pill" id="personaPill">Persona: <strong>-</strong></div>
+      <div class="workspace-pill" id="rolePill">Rolle: <strong>-</strong></div>
       <div class="workspace-pill" id="modePill">Modi: <strong>Standard</strong></div>
     </div>
     <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions">
@@ -157,6 +167,15 @@
         <option value="custom">-- Custom --</option>
       </select>
       <input id="ingestEmbedCustom" type="text" placeholder="z.B. text-embedding-3-small" class="ingest-embed-custom" style="display:none">
+    </div>
+
+    <div class="ingest-roles-row" aria-label="Import role scopes">
+      <span class="ingest-roles-label" data-i18n="import_roles">Import-Sichtbarkeit (Rollen)</span>
+      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="it" checked><span data-i18n="role_it">IT</span></label>
+      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="logistik"><span data-i18n="role_logistics">Logistik</span></label>
+      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="vertrieb"><span data-i18n="role_sales">Vertrieb</span></label>
+      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="hr"><span data-i18n="role_hr">HR</span></label>
+      <span class="hint" data-i18n="import_roles_hint">Keine Auswahl = aktive Rolle. Mehrfachauswahl erlaubt (wichtig für Massenupload).</span>
     </div>
 
     <div id="ingest-wiki" role="tabpanel" aria-labelledby="tab-wiki">
@@ -253,6 +272,19 @@
         <option value="de">Deutsch</option>
         <option value="en">English</option>
       </select>
+
+      <label for="setUsageProfile" data-i18n="usage_profile">Nutzungsprofil</label>
+      <select id="setUsageProfile" aria-label="Usage profile">
+        <option value="personal" data-i18n="usage_profile_personal">Persönlich</option>
+        <option value="commercial" data-i18n="usage_profile_commercial">Gewerblich</option>
+      </select>
+
+      <label for="setResponseLanguageMode" data-i18n="response_language_mode">Antwortsprache</label>
+      <select id="setResponseLanguageMode" aria-label="Response language mode">
+        <option value="auto" data-i18n="response_language_auto">Automatisch (Sprache der Anfrage)</option>
+        <option value="settings" data-i18n="response_language_settings">Fix nach Einstellungssprache</option>
+      </select>
+      <div class="hint" data-i18n="response_language_hint">Auto eignet sich für europaweite Teams mit mehreren Sprachen.</div>
       
       <label data-i18n="theme">Theme</label>
       <div class="theme-grid" id="themeGrid" role="radiogroup" aria-label="Theme selection">
@@ -315,6 +347,13 @@
           <span data-i18n="allow_nanogo">Erlaube Ausführung von nanoGo (interpretiertes Go)</span>
         </label>
         <div class="hint" id="nanogo-desc" data-i18n="nanogo_hint">Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.</div>
+      </div>
+      <div class="settings-nanogo">
+        <label class="inline-check" for="setRedactPII">
+          <input type="checkbox" id="setRedactPII" aria-describedby="redact-pii-desc">
+          <span data-i18n="redact_pii">PII beim Ingest maskieren (E-Mail, Telefon, IBAN, Kartenmuster)</span>
+        </label>
+        <div class="hint" id="redact-pii-desc" data-i18n="redact_pii_hint">Empfohlen für gewerbliche Nutzung und sensible Daten (DSGVO).</div>
       </div>
     </div>
 

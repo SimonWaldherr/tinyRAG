@@ -77,9 +77,20 @@ type appSettings struct {
 	// OpenAIKey stores an OpenAI API key if the user set one in the UI.
 	// This is persisted to settings.json. It will not be returned verbatim
 	// over the HTTP API; only presence is exposed to the frontend.
-	OpenAIKey  string         `json:"openai_api_key"`
-	Lang       string         `json:"lang"`
-	Theme      string         `json:"theme"`
+	OpenAIKey string `json:"openai_api_key"`
+	Lang      string `json:"lang"`
+	Theme     string `json:"theme"`
+	// ActiveRole is the currently selected demo role (light RBAC).
+	// Intended as placeholder until AD/LDAP integration.
+	ActiveRole string `json:"active_role"`
+	// UsageProfile sets behavior defaults for private vs. business usage.
+	// Allowed values: "personal", "commercial".
+	UsageProfile string `json:"usage_profile"`
+	// ResponseLanguageMode controls response language strategy.
+	// Allowed values: "auto" (follow user input), "settings" (force Lang).
+	ResponseLanguageMode string `json:"response_language_mode"`
+	// RedactPII redacts common personally identifiable data on ingest.
+	RedactPII  bool           `json:"redact_pii"`
 	ChunkSize  int            `json:"chunk_size"`
 	K          int            `json:"k"`
 	CustomAPIs []customAPI    `json:"custom_apis"`
@@ -122,6 +133,174 @@ func normalizeBaseURL(raw string) string {
 	return u
 }
 
+func normalizeUsageProfile(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "commercial", "business", "enterprise":
+		return "commercial"
+	default:
+		return "personal"
+	}
+}
+
+func normalizeResponseLanguageMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "settings", "fixed", "force":
+		return "settings"
+	default:
+		return "auto"
+	}
+}
+
+func normalizeDemoRole(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "it":
+		return "it"
+	case "logistik", "logistics":
+		return "logistik"
+	case "vertrieb", "sales":
+		return "vertrieb"
+	case "hr", "human_resources", "human-resources":
+		return "hr"
+	default:
+		return "it"
+	}
+}
+
+func demoRoleLabel(role string) string {
+	switch normalizeDemoRole(role) {
+	case "logistik":
+		return "Logistik"
+	case "vertrieb":
+		return "Vertrieb"
+	case "hr":
+		return "HR"
+	default:
+		return "IT"
+	}
+}
+
+type demoRolePermissions struct {
+	Role          string `json:"role"`
+	CanWebFetch   bool   `json:"can_web_fetch"`
+	CanBulkIngest bool   `json:"can_bulk_ingest"`
+	CanRunModules bool   `json:"can_run_modules"`
+	CanRunCode    bool   `json:"can_run_code"`
+}
+
+func permissionsForRole(role string) demoRolePermissions {
+	norm := normalizeDemoRole(role)
+	p := demoRolePermissions{Role: norm}
+	switch norm {
+	case "it":
+		p.CanWebFetch = true
+		p.CanBulkIngest = true
+		p.CanRunModules = true
+		p.CanRunCode = true
+	case "logistik":
+		p.CanWebFetch = true
+		p.CanBulkIngest = true
+		p.CanRunModules = true
+		p.CanRunCode = false
+	case "hr":
+		p.CanWebFetch = true
+		p.CanBulkIngest = true
+		p.CanRunModules = false
+		p.CanRunCode = false
+	default: // vertrieb
+		p.CanWebFetch = true
+		p.CanBulkIngest = false
+		p.CanRunModules = false
+		p.CanRunCode = false
+	}
+	return p
+}
+
+func canRoleUseTool(role, tool string) bool {
+	p := permissionsForRole(role)
+	t := strings.TrimSpace(strings.ToLower(tool))
+	if t == "" {
+		return false
+	}
+	if strings.HasPrefix(t, "module:") {
+		return p.CanRunModules
+	}
+	switch t {
+	case "shell", "nanogo", "exec_code", "tinygo":
+		return p.CanRunCode
+	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news":
+		return p.CanWebFetch
+	case "local_search", "datetime", "calculate", "llm":
+		return true
+	default:
+		// Unknown tool IDs (e.g. custom APIs) are treated as external fetches.
+		return p.CanWebFetch
+	}
+}
+
+func allDemoRoles() []string {
+	return []string{"it", "logistik", "vertrieb", "hr"}
+}
+
+func roleScopeToken(role string) string {
+	return "|" + normalizeDemoRole(role) + "|"
+}
+
+func normalizeRoleScopes(scopes []string, fallbackRole string) []string {
+	seen := make(map[string]bool, len(scopes))
+	var out []string
+	for _, raw := range scopes {
+		v := strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if v == "all" {
+			return allDemoRoles()
+		}
+		role := normalizeDemoRole(v)
+		if !seen[role] {
+			seen[role] = true
+			out = append(out, role)
+		}
+	}
+	if len(out) == 0 {
+		fb := normalizeDemoRole(fallbackRole)
+		return []string{fb}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func serializeRoleScope(scopes []string) string {
+	if len(scopes) == 0 {
+		return "|all|"
+	}
+	var b strings.Builder
+	for _, r := range scopes {
+		b.WriteString(roleScopeToken(r))
+	}
+	return b.String()
+}
+
+func parseRoleCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func roleScopeFilterSQL(role string) string {
+	token := escapeSQ(roleScopeToken(role))
+	return fmt.Sprintf("(role_scope IS NULL OR role_scope = '' OR role_scope = '|all|' OR role_scope LIKE '%%%s%%')", token)
+}
+
 func defaultPersonas() []persona {
 	return []persona{
 		{
@@ -156,22 +335,26 @@ func defaultPersonas() []persona {
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
 	return appSettings{
-		Version:        1,
-		BaseURL:        normalizeBaseURL(urlFlag),
-		ChatBase:       normalizeBaseURL(urlFlag),
-		EmbedBase:      normalizeBaseURL(urlFlag),
-		ChatModel:      chatModelFlag,
-		EmbedModel:     embedModelFlag,
-		OpenAIKey:      "",
-		Lang:           lang,
-		ChunkSize:      chunkSize,
-		K:              k,
-		CustomAPIs:     []customAPI{},
-		Modules:        defaultModules(),
-		AllowCodeExec:  false,
-		AllowNanoGo:    false,
-		AllowShellExec: false,
-		AllowTinyGo:    false,
+		Version:              1,
+		BaseURL:              normalizeBaseURL(urlFlag),
+		ChatBase:             normalizeBaseURL(urlFlag),
+		EmbedBase:            normalizeBaseURL(urlFlag),
+		ChatModel:            chatModelFlag,
+		EmbedModel:           embedModelFlag,
+		OpenAIKey:            "",
+		Lang:                 lang,
+		ActiveRole:           "it",
+		UsageProfile:         "personal",
+		ResponseLanguageMode: "auto",
+		RedactPII:            false,
+		ChunkSize:            chunkSize,
+		K:                    k,
+		CustomAPIs:           []customAPI{},
+		Modules:              defaultModules(),
+		AllowCodeExec:        false,
+		AllowNanoGo:          false,
+		AllowShellExec:       false,
+		AllowTinyGo:          false,
 	}
 }
 
@@ -206,6 +389,9 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	if ss.s.Lang == "" {
 		ss.s.Lang = defaults.Lang
 	}
+	ss.s.ActiveRole = normalizeDemoRole(ss.s.ActiveRole)
+	ss.s.UsageProfile = normalizeUsageProfile(ss.s.UsageProfile)
+	ss.s.ResponseLanguageMode = normalizeResponseLanguageMode(ss.s.ResponseLanguageMode)
 	if ss.s.ChunkSize <= 0 {
 		ss.s.ChunkSize = defaults.ChunkSize
 	}
@@ -546,28 +732,75 @@ func fetchWiktionary(word, lang string) (string, error) {
 
 // chunkText splits `text` into paragraphs and joins them into chunks
 // of at most `maxLen` characters for embedding and storage.
+// It retains a small overlap between chunks to maintain semantic context.
 func chunkText(text string, maxLen int) []string {
 	paragraphs := strings.Split(text, "\n")
 	var chunks []string
-	var buf strings.Builder
+	var current []string
+	currentLen := 0
+
 	for _, p := range paragraphs {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		if buf.Len()+len(p)+1 > maxLen && buf.Len() > 0 {
-			chunks = append(chunks, buf.String())
-			buf.Reset()
+		pLen := len(p)
+
+		if currentLen+pLen > maxLen && len(current) > 0 {
+			chunks = append(chunks, strings.Join(current, "\n"))
+
+			// Overlap: retain the last paragraph if it's not the only one,
+			// and if its length isn't excessively large (e.g. < maxLen/2).
+			lastP := current[len(current)-1]
+			if len(current) > 1 && len(lastP) < maxLen/2 {
+				current = []string{lastP}
+				currentLen = len(lastP) + 1 // +1 for the newline when joining
+			} else {
+				current = nil
+				currentLen = 0
+			}
 		}
-		if buf.Len() > 0 {
-			buf.WriteByte('\n')
-		}
-		buf.WriteString(p)
+
+		current = append(current, p)
+		currentLen += pLen + 1
 	}
-	if buf.Len() > 0 {
-		chunks = append(chunks, buf.String())
+	if len(current) > 0 {
+		chunks = append(chunks, strings.Join(current, "\n"))
 	}
 	return chunks
+}
+
+var (
+	piiEmailRe = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
+	piiPhoneRe = regexp.MustCompile(`\b\+?[0-9][0-9()\s./-]{6,}[0-9]\b`)
+	piiIBANRe  = regexp.MustCompile(`(?i)\b[a-z]{2}[0-9]{2}[a-z0-9]{11,30}\b`)
+	piiCardRe  = regexp.MustCompile(`\b(?:[0-9][ -]?){13,19}\b`)
+)
+
+func sanitizeTextForIngest(text string, s appSettings) (string, int) {
+	if !s.RedactPII || strings.TrimSpace(text) == "" {
+		return text, 0
+	}
+	out := text
+	replacements := 0
+	apply := func(re *regexp.Regexp, marker string) {
+		m := re.FindAllStringIndex(out, -1)
+		if len(m) == 0 {
+			return
+		}
+		replacements += len(m)
+		out = re.ReplaceAllString(out, marker)
+	}
+	apply(piiEmailRe, "[REDACTED_EMAIL]")
+	apply(piiPhoneRe, "[REDACTED_PHONE]")
+	apply(piiIBANRe, "[REDACTED_IBAN]")
+	apply(piiCardRe, "[REDACTED_CARD]")
+	return out, replacements
+}
+
+func chunksForIngest(text string, s appSettings) ([]string, int) {
+	sanitized, redactions := sanitizeTextForIngest(text, s)
+	return chunkText(sanitized, s.ChunkSize), redactions
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1166,7 +1399,7 @@ func (r *ragSystem) save() error {
 
 // init creates required DB tables and initializes runtime counters.
 func (r *ragSystem) init() error {
-	q := "CREATE TABLE IF NOT EXISTS chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embedding VECTOR, embed_model TEXT)"
+	q := "CREATE TABLE IF NOT EXISTS chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embedding VECTOR, embed_model TEXT, role_scope TEXT)"
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return err
@@ -1180,6 +1413,14 @@ func (r *ragSystem) init() error {
 	// Attempt to add embed_model column for older DBs (ignore errors)
 	if alterStmt, err := tinysql.ParseSQL("ALTER TABLE chunks ADD COLUMN embed_model TEXT"); err == nil {
 		_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
+	}
+	// Attempt to add role_scope column for role-scoped visibility (ignore errors)
+	if alterStmt, err := tinysql.ParseSQL("ALTER TABLE chunks ADD COLUMN role_scope TEXT"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
+	}
+	// Normalize older rows without a scope to global visibility.
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET role_scope='|all|' WHERE role_scope IS NULL OR role_scope = ''"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
 	}
 	// Initialize nextID from MAX(id)+1
 	r.idMu.Lock()
@@ -1227,12 +1468,27 @@ func (r *ragSystem) allocIDs(n int) int {
 // addChunks embeds and stores `chunks` for the given `article` into
 // the database, performing batched inserts.
 func (r *ragSystem) addChunks(article string, chunks []string, embedModel string) error {
+	return r.addChunksWithRoles(article, chunks, embedModel, nil)
+}
+
+// addChunksWithRoles stores chunks with an explicit role visibility scope.
+// If roles are omitted, the current active role is used.
+func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedModel string, roles []string) error {
 	if len(chunks) == 0 {
 		return nil
 	}
+	activeRole := "it"
+	if settings != nil {
+		activeRole = settings.get().ActiveRole
+	}
+	normRoles := normalizeRoleScopes(roles, activeRole)
+	roleScope := serializeRoleScope(normRoles)
 	// If this article already exists in the DB, skip adding again to avoid duplicates.
 	// This makes imports idempotent; to replace content delete the source first.
-	checkQ := fmt.Sprintf("SELECT COUNT(*) AS cnt FROM chunks WHERE article = '%s'", escapeSQ(article))
+	checkQ := fmt.Sprintf(
+		"SELECT COUNT(*) AS cnt FROM chunks WHERE article = '%s' AND role_scope = '%s'",
+		escapeSQ(article), escapeSQ(roleScope),
+	)
 	if st, err := tinysql.ParseSQL(checkQ); err == nil {
 		r.dbMu.Lock()
 		if rs, err := tinysql.Execute(context.Background(), r.db, "default", st); err == nil && rs != nil && len(rs.Rows) > 0 {
@@ -1280,8 +1536,8 @@ func (r *ragSystem) addChunks(article string, chunks []string, embedModel string
 		var vals []string
 		for j, v := range vecs {
 			idx := i + j
-			tup := fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s')",
-				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), vecJSON(v), escapeSQ(embedModel))
+			tup := fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s')",
+				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), vecJSON(v), escapeSQ(embedModel), escapeSQ(roleScope))
 			vals = append(vals, tup)
 		}
 		q := "INSERT INTO chunks VALUES " + strings.Join(vals, ",")
@@ -1308,6 +1564,33 @@ func (r *ragSystem) addChunks(article string, chunks []string, embedModel string
 // docCount returns the total number of stored chunks.
 func (r *ragSystem) docCount() int {
 	q := "SELECT COUNT(*) AS cnt FROM chunks"
+	stmt, _ := tinysql.ParseSQL(q)
+
+	r.dbMu.Lock()
+	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
+	r.dbMu.Unlock()
+
+	if err != nil || rs == nil || len(rs.Rows) == 0 {
+		return 0
+	}
+	v, ok := tinysql.GetVal(rs.Rows[0], "cnt")
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+func (r *ragSystem) docCountForRole(role string) int {
+	normRole := normalizeDemoRole(role)
+	q := fmt.Sprintf("SELECT COUNT(*) AS cnt FROM chunks WHERE %s", roleScopeFilterSQL(normRole))
 	stmt, _ := tinysql.ParseSQL(q)
 
 	r.dbMu.Lock()
@@ -1415,6 +1698,10 @@ func candidateLimitForK(k int) int {
 }
 
 func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64, int64, error) {
+	activeRole := "it"
+	if settings != nil {
+		activeRole = settings.get().ActiveRole
+	}
 	t0 := time.Now()
 	qvec, err := r.getLM().embedSingle(query)
 	if err != nil {
@@ -1423,8 +1710,8 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 	embedMs := time.Since(t0).Milliseconds()
 
 	q := fmt.Sprintf(
-		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' ORDER BY score DESC LIMIT %d",
-		vecJSON(qvec), escapeSQ(r.getActiveEmbedModel()), candidateLimitForK(k),
+		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
+		vecJSON(qvec), escapeSQ(r.getActiveEmbedModel()), roleScopeFilterSQL(activeRole), candidateLimitForK(k),
 	)
 
 	t1 := time.Now()
@@ -1477,8 +1764,20 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 	return hits, embedMs, searchMs, nil
 }
 
+func formatContextChunk(article string, chunkIdx int, content string) string {
+	article = strings.TrimSpace(article)
+	if article == "" {
+		article = "unknown"
+	}
+	return fmt.Sprintf("[Quelle: %s | Chunk: %d]\n%s", article, chunkIdx, strings.TrimSpace(content))
+}
+
 func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64) (string, *debugInfo, bool) {
-	q := fmt.Sprintf("SELECT article, chunk_idx, content FROM chunks WHERE LOWER(article) = LOWER('%s') ORDER BY chunk_idx", escapeSQ(article))
+	activeRole := "it"
+	if settings != nil {
+		activeRole = settings.get().ActiveRole
+	}
+	q := fmt.Sprintf("SELECT article, chunk_idx, content FROM chunks WHERE LOWER(article) = LOWER('%s') AND %s ORDER BY chunk_idx", escapeSQ(article), roleScopeFilterSQL(activeRole))
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return "", nil, false
@@ -1513,12 +1812,12 @@ func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64
 			}
 		}
 		content := fmt.Sprint(c)
-		parts = append(parts, content)
+		parts = append(parts, formatContextChunk(resolvedArticle, idx, content))
 		if debug {
 			dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: content, Article: resolvedArticle, ChunkIdx: idx, IsNeighbor: false})
 		}
 	}
-	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: 0, TotalChunks: r.docCount(), UsedK: r.k, Decision: "article_specific"}
+	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: 0, TotalChunks: r.docCountForRole(activeRole), UsedK: r.k, Decision: "article_specific"}
 	return strings.Join(parts, "\n---\n"), di, true
 }
 
@@ -1533,7 +1832,7 @@ func (r *ragSystem) assembleContext(hits []retrievalHit, usedK int, decision str
 			return
 		}
 		seen[key] = true
-		contextParts = append(contextParts, content)
+		contextParts = append(contextParts, formatContextChunk(article, idx, content))
 		dbgChunks = append(dbgChunks, debugChunk{
 			Score:      score,
 			Content:    content,
@@ -1555,7 +1854,11 @@ func (r *ragSystem) assembleContext(hits []retrievalHit, usedK int, decision str
 		}
 	}
 
-	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCount(), UsedK: usedK, Decision: decision}
+	activeRole := "it"
+	if settings != nil {
+		activeRole = settings.get().ActiveRole
+	}
+	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCountForRole(activeRole), UsedK: usedK, Decision: decision}
 	return strings.Join(contextParts, "\n---\n"), di, nil
 }
 
@@ -1616,6 +1919,16 @@ var builtinTools = []toolDef{
 		ParamHint:   "Shell-Befehl (z.B. 'ls -la')",
 	},
 	{
+		Name:        "local_search",
+		Description: "Durchsucht die eigene lokale Wissensbasis (RAG-Datenbank) nach zusätzlichen Informationen. Nutze dies für interaktive Suchen in deinen Daten.",
+		ParamHint:   "Suchbegriff für die Vektorsuche",
+	},
+	{
+		Name:        "datetime",
+		Description: "Gibt das aktuelle System-Datum und die Uhrzeit zurück. Gut für zeitliche Einordnungen.",
+		ParamHint:   "Leer lassen oder 'now'",
+	},
+	{
 		Name:        "tinygo",
 		Description: "Alias für nanogo - interpretiert Go-Code direkt ohne Kompilierung. Sichere Sandbox-Umgebung für Go-Programme.",
 		ParamHint:   "Go-Quelltext (z.B. 'package main; func main() { ... }')",
@@ -1638,8 +1951,17 @@ type toolRequest struct {
 }
 
 func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool {
+	if !canRoleUseTool(s.ActiveRole, tr.Tool) {
+		return false
+	}
+	if s.UsageProfile == "commercial" {
+		switch tr.Tool {
+		case "nanogo", "exec_code", "shell", "tinygo":
+			return false
+		}
+	}
 	switch tr.Tool {
-	case "calculate":
+	case "calculate", "local_search", "datetime":
 		return true
 	case "nanogo", "exec_code":
 		return s.AllowNanoGo || s.AllowCodeExec
@@ -1663,6 +1985,24 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	var fetchErr error
 
 	switch tr.Tool {
+	case "local_search":
+		hits, err := rag.searchJSON(tr.Query, s.K)
+		if err != nil {
+			fetchErr = err
+		} else if len(hits) == 0 {
+			text = "Keine passenden lokalen Dokumente gefunden."
+			source = "rag_local:" + tr.Query
+		} else {
+			var sb strings.Builder
+			for i, h := range hits {
+				sb.WriteString(fmt.Sprintf("Treffer %d (Score %.2f):\n%s\n\n", i+1, h.Score, h.Content))
+			}
+			text = sb.String()
+			source = "rag_local:" + tr.Query
+		}
+	case "datetime":
+		text = fmt.Sprintf("Aktuelles System-Datum und Uhrzeit: %s", time.Now().Format("2006-01-02 15:04:05 MST"))
+		source = "system:datetime"
 	case "wikipedia":
 		source = "wiki:" + tr.Query
 		text, fetchErr = fetchWikipedia(tr.Query, s.Lang)
@@ -1772,6 +2112,16 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	}
 
 	return text, source, fetchErr
+}
+
+func filterToolsForRole(tools []toolDef, role string) []toolDef {
+	out := make([]toolDef, 0, len(tools))
+	for _, t := range tools {
+		if canRoleUseTool(role, t.Name) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // ── Custom API store (persisted through settingsStore) ──────────────
@@ -1993,10 +2343,46 @@ func stripInternalThinking(text string) string {
 	return strings.TrimSpace(cleaned)
 }
 
-func buildAssistantPolicyPrompt() string {
+func languageLabel(code string) string {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "de":
+		return "Deutsch"
+	case "en":
+		return "English"
+	case "fr":
+		return "Français"
+	case "es":
+		return "Español"
+	case "it":
+		return "Italiano"
+	case "nl":
+		return "Nederlands"
+	case "pt":
+		return "Português"
+	case "pl":
+		return "Polski"
+	default:
+		if code == "" {
+			return "Deutsch"
+		}
+		return strings.ToLower(code)
+	}
+}
+
+func buildAssistantPolicyPrompt(s appSettings) string {
 	var sb strings.Builder
-	sb.WriteString("Du bist ein praeziser deutschsprachiger RAG- und Research-Assistent.\n")
+	sb.WriteString("Du bist ein praeziser RAG- und Research-Assistent fuer persoenliche und unternehmerische Nutzung.\n")
 	sb.WriteString("Deine Prioritaeten sind: 1) Korrektheit, 2) klare Trennung von Fakten und Unsicherheit, 3) knappe, nuetzliche Antworten.\n")
+	sb.WriteString(fmt.Sprintf("Aktive Rolle (Demo-RBAC): %s.\n", demoRoleLabel(s.ActiveRole)))
+	switch s.ResponseLanguageMode {
+	case "settings":
+		sb.WriteString(fmt.Sprintf("Antworte durchgaengig auf %s.\n", languageLabel(s.Lang)))
+	default:
+		sb.WriteString(fmt.Sprintf("Antworte in der Sprache der Nutzeranfrage. Falls unklar, nutze %s.\n", languageLabel(s.Lang)))
+	}
+	if s.UsageProfile == "commercial" {
+		sb.WriteString("Kontext: gewerbliche Nutzung in einem europaweiten Unternehmen. Priorisiere Nachvollziehbarkeit, neutrale Sprache und risikoarme Aussagen.\n")
+	}
 	sb.WriteString("Erfinde nichts. Wenn Informationen fehlen oder duenn belegt sind, sage das klar.\n")
 	sb.WriteString("Vermeide Marketing-Sprache, Wiederholungen, Halluzinationen und unnoetige Ausschmueckungen.\n")
 	sb.WriteString("Nutze interne Denkschritte nur implizit und zeige sie nicht.\n\n")
@@ -2034,7 +2420,7 @@ func buildToolingPrompt(tools []toolDef) string {
 	return sb.String()
 }
 
-func buildResponseInstructionsPrompt(deep bool) string {
+func buildResponseInstructionsPrompt(deep bool, usageProfile string) string {
 	var sb strings.Builder
 	sb.WriteString("\n### Instruktionen:\n")
 	sb.WriteString("- Beginne mit der Frage: Reicht der lokale Kontext aus, ist er unsicher oder fehlt er?\n")
@@ -2046,6 +2432,10 @@ func buildResponseInstructionsPrompt(deep bool) string {
 	sb.WriteString("- Wenn ein Tool benutzt wurde, liefere danach genau eine ueberarbeitete finale Antwort, nicht zwei Versionen.\n")
 	sb.WriteString("- Trenne lokale Wissensbasis und externe Recherche explizit, wenn beide verwendet wurden.\n")
 	sb.WriteString("- Wenn externe Recherche wenig hergibt, sage das offen statt Luecken zu fuellen.\n")
+	if usageProfile == "commercial" {
+		sb.WriteString("- Wenn die Wissensbasis genutzt wurde, fuege am Ende den Abschnitt `Quellenbasis` mit den verwendeten `[Quelle: ...]`-Bezeichnern an.\n")
+		sb.WriteString("- Bei fehlender Beleglage liefere eine vorsichtige Empfehlung statt einer harten Zusage.\n")
+	}
 	if deep {
 		sb.WriteString("- Im Deep-Research-Modus strukturiere die Antwort in: Kurzfazit, Befunde, Unsicherheiten, Schlussfolgerung.\n")
 		sb.WriteString("- Priorisiere Genauigkeit und Einordnung vor Vollstaendigkeit.\n")
@@ -2057,11 +2447,11 @@ func buildResponseInstructionsPrompt(deep bool) string {
 
 // buildToolSystemPrompt constructs the system prompt describing
 // available tools and how the assistant should emit tool requests.
-func buildToolSystemPrompt(ctxText string, tools []toolDef, deep bool) string {
-	return buildAssistantPolicyPrompt() +
+func buildToolSystemPrompt(ctxText string, tools []toolDef, deep bool, s appSettings) string {
+	return buildAssistantPolicyPrompt(s) +
 		buildContextPrompt(ctxText) +
 		buildToolingPrompt(tools) +
-		buildResponseInstructionsPrompt(deep)
+		buildResponseInstructionsPrompt(deep, s.UsageProfile)
 }
 
 // ── Debug / Search models ─────────────────────────────────────────
@@ -2113,6 +2503,8 @@ type debugPayload struct {
 	DBPath             string      `json:"db_path"`
 	Models             debugModels `json:"models"`
 	Retrieval          *debugInfo  `json:"retrieval"`
+	ActiveRole         string      `json:"active_role"`
+	RoleLabel          string      `json:"role_label"`
 	PersonaID          string      `json:"persona_id"`
 	PersonaName        string      `json:"persona_name"`
 	PersonaPromptChars int         `json:"persona_prompt_chars"`
@@ -2187,7 +2579,11 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 	action, _ := decisionMap["action"].(string)
 	if strings.ToUpper(action) == "ANSWER_DIRECT" {
 		// Let the chat model answer without extra context.
-		di := &debugInfo{EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCount(), UsedK: 0, Decision: "answer_direct"}
+		activeRole := "it"
+		if settings != nil {
+			activeRole = settings.get().ActiveRole
+		}
+		di := &debugInfo{EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCountForRole(activeRole), UsedK: 0, Decision: "answer_direct"}
 		return "", di, nil
 	}
 
@@ -2305,7 +2701,11 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 
 	action, _ := decisionMap["action"].(string)
 	if strings.ToUpper(action) == "ANSWER_DIRECT" {
-		di := &debugInfo{EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCount(), UsedK: 0, Decision: "answer_direct"}
+		activeRole := "it"
+		if settings != nil {
+			activeRole = settings.get().ActiveRole
+		}
+		di := &debugInfo{EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCountForRole(activeRole), UsedK: 0, Decision: "answer_direct"}
 		return "", di, nil
 	}
 
@@ -2366,8 +2766,26 @@ func refineSearchQuery(q string) string {
 		`was weißt du über (.+)`,
 		`wer ist (.+)`,
 		`erzähl mir von (.+)`,
+		`was ist (.+)`,
+		`worum geht es bei (.+)`,
 		`tell me about (.+)`,
 		`who is (.+)`,
+		`what is (.+)`,
+		`qui est (.+)`,
+		`parle-moi de (.+)`,
+		`qu[ei]én es (.+)`,
+		`háblame de (.+)`,
+		`hablame de (.+)`,
+		`chi è (.+)`,
+		`chi e (.+)`,
+		`parlami di (.+)`,
+		`quem é (.+)`,
+		`quem e (.+)`,
+		`fale sobre (.+)`,
+		`wie is (.+)`,
+		`vertel me over (.+)`,
+		`kim jest (.+)`,
+		`powiedz mi o (.+)`,
 	}
 	for _, p := range patterns {
 		re := regexp.MustCompile(`(?i)` + p)
@@ -2438,9 +2856,13 @@ Examples:
 // fetchNeighborContent returns the content for a specific chunk index
 // of an article, used to include context neighbors around hits.
 func (r *ragSystem) fetchNeighborContent(article string, chunkIdx int) (string, bool) {
+	activeRole := "it"
+	if settings != nil {
+		activeRole = settings.get().ActiveRole
+	}
 	q := fmt.Sprintf(
-		"SELECT content FROM chunks WHERE article = '%s' AND chunk_idx = %d",
-		escapeSQ(article), chunkIdx,
+		"SELECT content FROM chunks WHERE article = '%s' AND chunk_idx = %d AND %s",
+		escapeSQ(article), chunkIdx, roleScopeFilterSQL(activeRole),
 	)
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
@@ -2464,7 +2886,15 @@ func (r *ragSystem) fetchNeighborContent(article string, chunkIdx int) (string, 
 // listSources returns distinct article names with their chunk counts
 // listSources returns metadata about stored articles and their chunk counts.
 func (r *ragSystem) listSources() []map[string]any {
-	q := "SELECT article, COUNT(*) AS cnt FROM chunks GROUP BY article ORDER BY article"
+	role := "it"
+	if settings != nil {
+		role = settings.get().ActiveRole
+	}
+	return r.listSourcesForRole(role)
+}
+
+func (r *ragSystem) listSourcesForRole(role string) []map[string]any {
+	q := fmt.Sprintf("SELECT article, COUNT(*) AS cnt FROM chunks WHERE %s GROUP BY article ORDER BY article", roleScopeFilterSQL(role))
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return nil
@@ -2491,7 +2921,15 @@ func (r *ragSystem) listSources() []map[string]any {
 // deleteSource removes all chunks belonging to `article` and persists
 // the change.
 func (r *ragSystem) deleteSource(article string) error {
-	q := fmt.Sprintf("DELETE FROM chunks WHERE article = '%s'", escapeSQ(article))
+	role := "it"
+	if settings != nil {
+		role = settings.get().ActiveRole
+	}
+	return r.deleteSourceForRole(article, role)
+}
+
+func (r *ragSystem) deleteSourceForRole(article, role string) error {
+	q := fmt.Sprintf("DELETE FROM chunks WHERE article = '%s' AND %s", escapeSQ(article), roleScopeFilterSQL(role))
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return err
@@ -2921,16 +3359,21 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			s := settings.get()
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"base_url":     s.BaseURL,
-				"chat_base":    s.ChatBase,
-				"embed_base":   s.EmbedBase,
-				"chat_model":   s.ChatModel,
-				"embed_model":  s.EmbedModel,
-				"lang":         s.Lang,
-				"theme":        s.Theme,
-				"chunk_size":   s.ChunkSize,
-				"k":            s.K,
-				"allow_nanogo": s.AllowNanoGo,
+				"base_url":               s.BaseURL,
+				"chat_base":              s.ChatBase,
+				"embed_base":             s.EmbedBase,
+				"chat_model":             s.ChatModel,
+				"embed_model":            s.EmbedModel,
+				"lang":                   s.Lang,
+				"theme":                  s.Theme,
+				"active_role":            s.ActiveRole,
+				"role_permissions":       permissionsForRole(s.ActiveRole),
+				"usage_profile":          s.UsageProfile,
+				"response_language_mode": s.ResponseLanguageMode,
+				"redact_pii":             s.RedactPII,
+				"chunk_size":             s.ChunkSize,
+				"k":                      s.K,
+				"allow_nanogo":           s.AllowNanoGo,
 				// Do not return the API key itself; only expose whether one is configured
 				"openai_key_present": s.OpenAIKey != "",
 			})
@@ -2947,6 +3390,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				OpenAIKey      string `json:"openai_api_key"`
 				OpenAIKeyClear bool   `json:"openai_api_key_clear"`
 				Theme          string `json:"theme"`
+				ActiveRole     string `json:"active_role"`
+				UsageProfile   string `json:"usage_profile"`
+				ResponseLang   string `json:"response_language_mode"`
+				RedactPII      *bool  `json:"redact_pii"`
+				AllowNanoGo    *bool  `json:"allow_nanogo"`
 				Force          bool   `json:"force"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -3003,19 +3451,35 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			if req.Theme != "" {
 				settings.s.Theme = req.Theme
 			}
+			if req.ActiveRole != "" {
+				settings.s.ActiveRole = normalizeDemoRole(req.ActiveRole)
+			}
+			if req.UsageProfile != "" {
+				settings.s.UsageProfile = normalizeUsageProfile(req.UsageProfile)
+			}
+			if req.ResponseLang != "" {
+				settings.s.ResponseLanguageMode = normalizeResponseLanguageMode(req.ResponseLang)
+			}
+			if req.RedactPII != nil {
+				settings.s.RedactPII = *req.RedactPII
+			}
+			if req.AllowNanoGo != nil {
+				settings.s.AllowNanoGo = *req.AllowNanoGo
+			}
 			_ = settings.saveLocked()
 			settings.mu.Unlock()
 
 			// Apply runtime LM clients (may be composite)
 			// Prefer persisted OpenAI key from settings; fallback to env var if none present
-			key := settings.s.OpenAIKey
+			applied := settings.get()
+			key := applied.OpenAIKey
 			if key == "" {
 				key = os.Getenv("OPENAI_API_KEY")
 			}
-			chatLM := newLMClient(settings.s.ChatBase, settings.s.EmbedModel, settings.s.ChatModel, key)
-			embedLM := newLMClient(settings.s.EmbedBase, settings.s.EmbedModel, settings.s.ChatModel, key)
+			chatLM := newLMClient(applied.ChatBase, applied.EmbedModel, applied.ChatModel, key)
+			embedLM := newLMClient(applied.EmbedBase, applied.EmbedModel, applied.ChatModel, key)
 			var provider lmProvider
-			if settings.s.ChatBase == settings.s.EmbedBase {
+			if applied.ChatBase == applied.EmbedBase {
 				provider = chatLM
 			} else {
 				provider = &compositeLM{embedClient: embedLM, chatClient: chatLM}
@@ -3051,6 +3515,58 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		settings.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "theme": req.Theme})
+	})
+
+	// POST /api/settings/lang — persist UI/wiki default language
+	mux.HandleFunc("/api/settings/lang", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Lang string `json:"lang"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		lang := strings.ToLower(strings.TrimSpace(req.Lang))
+		if lang == "" {
+			http.Error(w, "missing lang", 400)
+			return
+		}
+		settings.mu.Lock()
+		settings.s.Lang = lang
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "lang": lang})
+	})
+
+	// POST /api/settings/role — switch demo role context (light RBAC)
+	mux.HandleFunc("/api/settings/role", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Role string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		role := normalizeDemoRole(req.Role)
+		settings.mu.Lock()
+		settings.s.ActiveRole = role
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":          true,
+			"role":        role,
+			"permissions": permissionsForRole(role),
+		})
 	})
 
 	// GET /api/modules — list configured modules
@@ -3089,6 +3605,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, "POST only", 405)
 			return
 		}
+		role := settings.get().ActiveRole
+		if !permissionsForRole(role).CanRunModules {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to run modules", demoRoleLabel(role)), 403)
+			return
+		}
 		var req struct {
 			ID     string `json:"id"`
 			Action string `json:"action"`
@@ -3122,6 +3643,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	mux.HandleFunc("/api/modules/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
+			return
+		}
+		role := settings.get().ActiveRole
+		if !permissionsForRole(role).CanRunModules {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to upload via modules", demoRoleLabel(role)), 403)
 			return
 		}
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
@@ -3162,11 +3688,15 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if parseBoolString(mod.Config["ingest_on_upload"]) {
 			text, err := readFileForRAG(savedPath, 5*1024*1024)
 			if err == nil && strings.TrimSpace(text) != "" {
+				cfg := settings.get()
 				source := "module:" + mod.ID + ":upload:" + filepath.Base(savedPath)
-				chunks := chunkText(text, settings.get().ChunkSize)
-				if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err == nil {
+				chunks, redactions := chunksForIngest(text, cfg)
+				if err := rag.addChunks(source, chunks, cfg.EmbedModel); err == nil {
 					resp["chunks"] = len(chunks)
 					resp["source"] = source
+					if redactions > 0 {
+						resp["redactions"] = redactions
+					}
 				}
 			}
 		}
@@ -3178,6 +3708,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	mux.HandleFunc("/api/modules/download", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
 			http.Error(w, "GET only", 405)
+			return
+		}
+		role := settings.get().ActiveRole
+		if !permissionsForRole(role).CanRunModules {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to download via modules", demoRoleLabel(role)), 403)
 			return
 		}
 		id := strings.TrimSpace(r.URL.Query().Get("id"))
@@ -3198,9 +3733,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		if parseBoolString(mod.Config["download_ingest"]) {
 			if text, err := readFileForRAG(target, 5*1024*1024); err == nil && strings.TrimSpace(text) != "" {
+				cfg := settings.get()
 				source := "module:" + mod.ID + ":download:" + filepath.Base(target)
-				chunks := chunkText(text, settings.get().ChunkSize)
-				_ = rag.addChunks(source, chunks, settings.get().EmbedModel)
+				chunks, _ := chunksForIngest(text, cfg)
+				_ = rag.addChunks(source, chunks, cfg.EmbedModel)
 			}
 		}
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(target)))
@@ -3346,7 +3882,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 
-		totalChunks := rag.docCount()
+		totalChunks := rag.docCountForRole(s.ActiveRole)
 		usedK := rag.k
 		mode := "normal"
 		if req.Deep {
@@ -3376,25 +3912,28 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		metaPayload := map[string]any{
-			"chat_id":       conv.ID,
-			"title":         conv.Title,
-			"request_id":    reqID,
-			"mode":          mode,
-			"k":             usedK,
-			"base_k":        rag.k,
-			"chunk_size":    s.ChunkSize,
-			"total_chunks":  totalChunks,
-			"storage_mode":  storageModeLabel(rag.storageMode),
-			"db_path":       rag.dbPath,
-			"auto_search":   req.AutoSearch,
-			"debug":         req.Debug,
-			"deep":          req.Deep,
-			"offline":       req.Offline,
-			"message_count": len(conv.Messages),
-			"created":       conv.Created,
-			"updated":       conv.Updated,
-			"persona_id":    personaID,
-			"persona_name":  personaName,
+			"chat_id":          conv.ID,
+			"title":            conv.Title,
+			"request_id":       reqID,
+			"mode":             mode,
+			"k":                usedK,
+			"base_k":           rag.k,
+			"chunk_size":       s.ChunkSize,
+			"total_chunks":     totalChunks,
+			"storage_mode":     storageModeLabel(rag.storageMode),
+			"db_path":          rag.dbPath,
+			"auto_search":      req.AutoSearch,
+			"debug":            req.Debug,
+			"deep":             req.Deep,
+			"offline":          req.Offline,
+			"message_count":    len(conv.Messages),
+			"created":          conv.Created,
+			"updated":          conv.Updated,
+			"persona_id":       personaID,
+			"persona_name":     personaName,
+			"active_role":      s.ActiveRole,
+			"role_label":       demoRoleLabel(s.ActiveRole),
+			"role_permissions": permissionsForRole(s.ActiveRole),
 			"models": map[string]string{
 				"base_url":    s.BaseURL,
 				"chat_model":  s.ChatModel,
@@ -3455,6 +3994,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			DBPath:             rag.dbPath,
 			Models:             debugModels{BaseURL: s.BaseURL, ChatModel: s.ChatModel, EmbedModel: s.EmbedModel},
 			Retrieval:          di,
+			ActiveRole:         s.ActiveRole,
+			RoleLabel:          demoRoleLabel(s.ActiveRole),
 			PersonaID:          personaID,
 			PersonaName:        personaName,
 			PersonaPromptChars: len(personaPrompt),
@@ -3493,10 +4034,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		// Normal mode: call LM with SSE streaming
 		pr, pw := io.Pipe()
 
-		allTools := append(customAPIs.allTools(), modules.enabledTools()...)
+		allTools := filterToolsForRole(append(customAPIs.allTools(), modules.enabledTools()...), s.ActiveRole)
 		// build system prompt; in deep mode add research instructions
 		var systemPrompt string
-		systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep)
+		systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep, s)
 		if personaPrompt != "" {
 			systemPrompt = personaPrompt + "\n\n" + systemPrompt
 		}
@@ -3507,7 +4048,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			// Truncate context to first 5000 chars as fallback
 			if len(ctxText) > 5000 {
 				ctxText = ctxText[:5000] + "\n[... Kontext gekürzt ...]"
-				systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep)
+				systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep, s)
 			}
 		}
 		debugBase.SystemPromptChars = len(systemPrompt)
@@ -3634,7 +4175,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 					flusher.Flush()
 
 					// add to RAG as chunks so subsequent retrieval can use it
-					chunks := chunkText(text, s.ChunkSize)
+					chunks, _ := chunksForIngest(text, s)
 					if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
 						log.Printf("REQ %s: failed to add tool result to RAG: %v", reqID, err)
 					} else {
@@ -3646,7 +4187,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 					contMsgs := make([]chatMsg, 0, len(msgs)+2)
 					contMsgs = append(contMsgs, msgs...)
 					contMsgs = append(contMsgs, chatMsg{Role: "assistant", Content: cleanAnswer})
-					contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Ich habe das Tool %s ausgefuehrt.\n\nTool-Ergebnis:\n%s\n\nErstelle jetzt eine einzige ueberarbeitete finale Antwort auf Deutsch.\n\nZiel:\n- Beste moegliche Endfassung fuer den Nutzer.\n\nRegeln:\n- Nicht wiederholen oder anhaengen, sondern komplett ueberarbeiten.\n- Nutze lokale Wissensbasis und Tool-Ergebnis nur in dem Mass, wie sie belastbar sind.\n- Trenne klar zwischen lokalem Wissen und externer Recherche, wenn beides vorkommt.\n- Markiere unsichere, duenn belegte oder moeglicherweise veraltete Aussagen vorsichtig.\n- Wenn die Recherche wenig hergibt, sage das offen.\n- Schreibe kompakt, konkret und ohne Marketing-Sprache.\n- Keine TOOL_REQUEST-Marker und keine Meta-Erklaerungen ueber den internen Ablauf.\n", tr.Tool, text)})
+					contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Ich habe das Tool %s ausgefuehrt.\n\nTool-Ergebnis:\n%s\n\nErstelle jetzt eine einzige ueberarbeitete finale Antwort in der passenden Sprache gemaess den Systemregeln.\n\nZiel:\n- Beste moegliche Endfassung fuer den Nutzer.\n\nRegeln:\n- Nicht wiederholen oder anhaengen, sondern komplett ueberarbeiten.\n- Nutze lokale Wissensbasis und Tool-Ergebnis nur in dem Mass, wie sie belastbar sind.\n- Trenne klar zwischen lokalem Wissen und externer Recherche, wenn beides vorkommt.\n- Markiere unsichere, duenn belegte oder moeglicherweise veraltete Aussagen vorsichtig.\n- Wenn die Recherche wenig hergibt, sage das offen.\n- Schreibe kompakt, konkret und ohne Marketing-Sprache.\n- Keine TOOL_REQUEST-Marker und keine Meta-Erklaerungen ueber den internen Ablauf.\n", tr.Tool, text)})
 
 					// Stream continuation
 					pr2, pw2 := io.Pipe()
@@ -3712,7 +4253,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	// GET /api/tools — list available tools
 	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(append(customAPIs.allTools(), modules.enabledTools()...))
+		s := settings.get()
+		json.NewEncoder(w).Encode(filterToolsForRole(append(customAPIs.allTools(), modules.enabledTools()...), s.ActiveRole))
 	})
 
 	// POST /api/tool/execute — execute a tool and add results to RAG
@@ -3728,6 +4270,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		s := settings.get()
+		if !canRoleUseTool(s.ActiveRole, req.Tool) {
+			http.Error(w, fmt.Sprintf("tool %q is not allowed for role %s", req.Tool, demoRoleLabel(s.ActiveRole)), 403)
+			return
+		}
 
 		var text string
 		var source string
@@ -3739,7 +4285,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 
-		chunks := chunkText(text, s.ChunkSize)
+		chunks, redactions := chunksForIngest(text, s)
 		if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -3747,12 +4293,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"tool":   req.Tool,
-			"query":  req.Query,
-			"source": source,
-			"chars":  len(text),
-			"chunks": len(chunks),
-			"total":  rag.docCount(),
+			"tool":       req.Tool,
+			"query":      req.Query,
+			"source":     source,
+			"chars":      len(text),
+			"chunks":     len(chunks),
+			"total":      rag.docCountForRole(s.ActiveRole),
+			"redactions": redactions,
 		})
 	})
 
@@ -3771,6 +4318,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanRunCode {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to execute code", demoRoleLabel(s.ActiveRole)), 403)
+			return
+		}
 		if !s.AllowNanoGo {
 			http.Error(w, "nanoGo execution disabled in settings", 403)
 			return
@@ -3843,15 +4394,20 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Article    string `json:"article"`
-			Lang       string `json:"lang"`
-			EmbedModel string `json:"embed_model"`
+			Article    string   `json:"article"`
+			Lang       string   `json:"lang"`
+			EmbedModel string   `json:"embed_model"`
+			Roles      []string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Article == "" {
 			http.Error(w, "missing article", 400)
 			return
 		}
 		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanWebFetch {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to fetch external web sources", demoRoleLabel(s.ActiveRole)), 403)
+			return
+		}
 		if req.Lang == "" {
 			req.Lang = s.Lang
 		}
@@ -3866,21 +4422,24 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		chunks := chunkText(text, s.ChunkSize)
+		chunks, redactions := chunksForIngest(text, s)
 		em := settings.get().EmbedModel
 		if req.EmbedModel != "" {
 			em = req.EmbedModel
 		}
-		if err := rag.addChunks(req.Article, chunks, em); err != nil {
+		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
+		if err := rag.addChunksWithRoles(req.Article, chunks, em, roleScopes); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"article": req.Article,
-			"chars":   len(text),
-			"chunks":  len(chunks),
-			"total":   rag.docCount(),
+			"article":    req.Article,
+			"chars":      len(text),
+			"chunks":     len(chunks),
+			"total":      rag.docCountForRole(s.ActiveRole),
+			"redactions": redactions,
+			"roles":      roleScopes,
 		})
 	})
 
@@ -3891,8 +4450,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			URL        string `json:"url"`
-			EmbedModel string `json:"embed_model"`
+			URL        string   `json:"url"`
+			EmbedModel string   `json:"embed_model"`
+			Roles      []string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
 			http.Error(w, "missing url", 400)
@@ -3902,27 +4462,34 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, "invalid url", 400)
 			return
 		}
+		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanWebFetch {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to fetch external web sources", demoRoleLabel(s.ActiveRole)), 403)
+			return
+		}
 		text, err := fetchURL(req.URL)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		s := settings.get()
-		chunks := chunkText(text, s.ChunkSize)
+		chunks, redactions := chunksForIngest(text, s)
 		em := settings.get().EmbedModel
 		if req.EmbedModel != "" {
 			em = req.EmbedModel
 		}
-		if err := rag.addChunks(req.URL, chunks, em); err != nil {
+		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
+		if err := rag.addChunksWithRoles(req.URL, chunks, em, roleScopes); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"source": req.URL,
-			"chars":  len(text),
-			"chunks": len(chunks),
-			"total":  rag.docCount(),
+			"source":     req.URL,
+			"chars":      len(text),
+			"chunks":     len(chunks),
+			"total":      rag.docCountForRole(s.ActiveRole),
+			"redactions": redactions,
+			"roles":      roleScopes,
 		})
 	})
 
@@ -3933,9 +4500,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Path       string `json:"path"`
-			Recursive  bool   `json:"recursive"`
-			EmbedModel string `json:"embed_model"`
+			Path       string   `json:"path"`
+			Recursive  bool     `json:"recursive"`
+			EmbedModel string   `json:"embed_model"`
+			Roles      []string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
 			http.Error(w, "missing path", 400)
@@ -3961,6 +4529,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanBulkIngest {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to run bulk ingest", demoRoleLabel(s.ActiveRole)), 403)
+			return
+		}
+		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
 		em := s.EmbedModel
 		if req.EmbedModel != "" {
 			em = req.EmbedModel
@@ -4000,8 +4573,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				relPath = filepath.Base(path)
 			}
 			source := "folder:" + relPath
-			chunks := chunkText(text, s.ChunkSize)
-			if err := rag.addChunks(source, chunks, em); err != nil {
+			chunks, _ := chunksForIngest(text, s)
+			if err := rag.addChunksWithRoles(source, chunks, em, roleScopes); err != nil {
 				errors = append(errors, relPath+": "+err.Error())
 				return nil
 			}
@@ -4018,8 +4591,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"files":        totalFiles,
 			"total_chars":  totalChars,
 			"total_chunks": totalChunksN,
-			"total":        rag.docCount(),
+			"total":        rag.docCountForRole(s.ActiveRole),
 			"errors":       errors,
+			"roles":        roleScopes,
 		})
 	})
 
@@ -4030,9 +4604,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Title      string `json:"title"`
-			Text       string `json:"text"`
-			EmbedModel string `json:"embed_model"`
+			Title      string   `json:"title"`
+			Text       string   `json:"text"`
+			EmbedModel string   `json:"embed_model"`
+			Roles      []string `json:"roles"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
 			http.Error(w, "missing text", 400)
@@ -4042,21 +4617,24 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if req.Title == "" {
 			req.Title = "manual-" + strconv.FormatInt(time.Now().Unix(), 10)
 		}
-		chunks := chunkText(req.Text, s.ChunkSize)
+		chunks, redactions := chunksForIngest(req.Text, s)
 		em := settings.get().EmbedModel
 		if req.EmbedModel != "" {
 			em = req.EmbedModel
 		}
-		if err := rag.addChunks(req.Title, chunks, em); err != nil {
+		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
+		if err := rag.addChunksWithRoles(req.Title, chunks, em, roleScopes); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"title":  req.Title,
-			"chars":  len(req.Text),
-			"chunks": len(chunks),
-			"total":  rag.docCount(),
+			"title":      req.Title,
+			"chars":      len(req.Text),
+			"chunks":     len(chunks),
+			"total":      rag.docCountForRole(s.ActiveRole),
+			"redactions": redactions,
+			"roles":      roleScopes,
 		})
 	})
 
@@ -4064,6 +4642,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	mux.HandleFunc("/api/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "POST only", 405)
+			return
+		}
+		role := settings.get().ActiveRole
+		if !permissionsForRole(role).CanBulkIngest {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to upload files", demoRoleLabel(role)), 403)
 			return
 		}
 		r.ParseMultipartForm(50 << 20) // allow larger archives (50MB)
@@ -4086,6 +4669,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		lower := strings.ToLower(filename)
 		s := settings.get()
+		roleScopes := normalizeRoleScopes(parseRoleCSV(r.FormValue("roles")), s.ActiveRole)
 		allowedExts := map[string]bool{
 			".txt": true, ".md": true, ".csv": true, ".json": true,
 			".xml": true, ".html": true, ".log": true, ".htm": true,
@@ -4147,8 +4731,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 						continue
 					}
 					src := "upload:" + filename + ":" + f.Name
-					chunks := chunkText(string(content), s.ChunkSize)
-					if err := rag.addChunks(src, chunks, em); err != nil {
+					chunks, _ := chunksForIngest(string(content), s)
+					if err := rag.addChunksWithRoles(src, chunks, em, roleScopes); err != nil {
 						errorsList = append(errorsList, f.Name+": "+err.Error())
 						continue
 					}
@@ -4197,8 +4781,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 						continue
 					}
 					src := "upload:" + filename + ":" + hdr.Name
-					chunks := chunkText(string(content), s.ChunkSize)
-					if err := rag.addChunks(src, chunks, em); err != nil {
+					chunks, _ := chunksForIngest(string(content), s)
+					if err := rag.addChunksWithRoles(src, chunks, em, roleScopes); err != nil {
 						errorsList = append(errorsList, hdr.Name+": "+err.Error())
 						continue
 					}
@@ -4213,8 +4797,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				"files":   totalFiles,
 				"chars":   totalChars,
 				"chunks":  totalChunks,
-				"total":   rag.docCount(),
+				"total":   rag.docCountForRole(s.ActiveRole),
 				"errors":  errorsList,
+				"roles":   roleScopes,
 			})
 			return
 		}
@@ -4222,33 +4807,39 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		// regular single-file upload
 		text := string(data)
 		title := filepath.Base(header.Filename)
-		chunks := chunkText(text, s.ChunkSize)
-		if err := rag.addChunks(title, chunks, em); err != nil {
+		chunks, redactions := chunksForIngest(text, s)
+		if err := rag.addChunksWithRoles(title, chunks, em, roleScopes); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"file":   title,
-			"chars":  len(text),
-			"chunks": len(chunks),
-			"total":  rag.docCount(),
+			"file":       title,
+			"chars":      len(text),
+			"chunks":     len(chunks),
+			"total":      rag.docCountForRole(s.ActiveRole),
+			"redactions": redactions,
+			"roles":      roleScopes,
 		})
 	})
 
 	// GET /api/stats
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"chunks":  rag.docCount(),
-			"sources": rag.listSources(),
+			"chunks":       rag.docCountForRole(s.ActiveRole),
+			"sources":      rag.listSourcesForRole(s.ActiveRole),
+			"active_role":  s.ActiveRole,
+			"chunks_total": rag.docCount(),
 		})
 	})
 
 	// GET /api/sources
 	mux.HandleFunc("/api/sources", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(rag.listSources())
+		json.NewEncoder(w).Encode(rag.listSourcesForRole(s.ActiveRole))
 	})
 
 	// POST /api/sources/delete
@@ -4264,12 +4855,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, "missing article", 400)
 			return
 		}
-		if err := rag.deleteSource(req.Article); err != nil {
+		s := settings.get()
+		if err := rag.deleteSourceForRole(req.Article, s.ActiveRole); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"deleted": req.Article, "total": rag.docCount()})
+		json.NewEncoder(w).Encode(map[string]any{"deleted": req.Article, "total": rag.docCountForRole(s.ActiveRole)})
 	})
 
 	// GET /api/chats — list conversations
@@ -4745,7 +5337,7 @@ func main() {
 				fmt.Printf("Error: %v\n", err)
 				continue
 			}
-			chunks := chunkText(text, s.ChunkSize)
+			chunks, _ := chunksForIngest(text, s)
 			fmt.Printf("  %d chars -> %d chunks\n", len(text), len(chunks))
 			if err := rag.addChunks(art, chunks, settings.get().EmbedModel); err != nil {
 				fmt.Printf("Error: %v\n", err)

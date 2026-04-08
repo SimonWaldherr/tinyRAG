@@ -265,9 +265,43 @@ function currentModeSummary(){
   return modes.length ? modes.join(' · ') : 'Standard';
 }
 
+function roleLabelForUI(role){
+  const map = {
+    it: t('role_it'),
+    logistik: t('role_logistics'),
+    vertrieb: t('role_sales'),
+    hr: t('role_hr')
+  };
+  return map[role] || String(role || 'IT');
+}
+
+function applyRolePermissionsUI(perms){
+  currentRolePermissions = perms || null;
+  const p = currentRolePermissions || {can_web_fetch: true, can_bulk_ingest: true};
+
+  const setDisabled = (sel, disabled, title)=>{
+    const el = $(sel);
+    if(!el) return;
+    el.disabled = !!disabled;
+    if(disabled && title){
+      el.title = title;
+    }else if(!disabled){
+      el.removeAttribute('title');
+    }
+  };
+
+  const noWeb = !p.can_web_fetch;
+  const noBulk = !p.can_bulk_ingest;
+  setDisabled('#wikiBtn', noWeb, 'Für diese Rolle nicht erlaubt');
+  setDisabled('#urlBtn', noWeb, 'Für diese Rolle nicht erlaubt');
+  setDisabled('#folderBtn', noBulk, 'Für diese Rolle nicht erlaubt');
+  setDisabled('#fileInput', noBulk, 'Für diese Rolle nicht erlaubt');
+}
+
 function updateWorkspaceStrip(){
   const providerEl = $('#providerPill strong');
   const personaEl = $('#personaPill strong');
+  const roleEl = $('#rolePill strong');
   const modeEl = $('#modePill strong');
   if(providerEl){
     providerEl.textContent = $('#openaiBadge strong')?.textContent?.trim() || 'LLM';
@@ -276,9 +310,37 @@ function updateWorkspaceStrip(){
     const persona = cachedPersonas.find(p => p.id === currentPersonaId);
     personaEl.textContent = persona?.name || $('#personaSelect')?.selectedOptions?.[0]?.textContent || 'Standard';
   }
+  if(roleEl){
+    roleEl.textContent = roleLabelForUI(currentRole);
+  }
   if(modeEl){
     modeEl.textContent = currentModeSummary();
   }
+}
+
+async function setActiveRole(role){
+  try{
+    const resp = await apiPost('/api/settings/role', {role});
+    currentRole = resp.role || normalizeRoleValue(role);
+    applyRolePermissionsUI(resp.permissions || null);
+    const sel = $('#roleSelect');
+    if(sel) sel.value = currentRole;
+    syncIngestRoleScopesWithActiveRole();
+    updateWorkspaceStrip();
+  }catch(err){
+    const sel = $('#roleSelect');
+    if(sel) sel.value = currentRole;
+    alert('Rollenwechsel fehlgeschlagen: ' + (err.message || String(err)));
+  }
+}
+
+function normalizeRoleValue(role){
+  const v = String(role || '').trim().toLowerCase();
+  if(v === 'logistics') return 'logistik';
+  if(v === 'sales') return 'vertrieb';
+  if(v === 'human-resources' || v === 'human_resources') return 'hr';
+  if(['it','logistik','vertrieb','hr'].includes(v)) return v;
+  return 'it';
 }
 
 function fillChatWithSearchHit(content){
@@ -321,6 +383,26 @@ function getIngestEmbedModel(){
   return v || '';
 }
 
+function getIngestRoleScopes(){
+  const checks = Array.from(document.querySelectorAll('.ingest-role-scope'));
+  const selected = checks.filter(c => c.checked).map(c => normalizeRoleValue(c.value));
+  if(selected.length) return Array.from(new Set(selected));
+  return [normalizeRoleValue(currentRole || 'it')];
+}
+
+function syncIngestRoleScopesWithActiveRole(force=false){
+  const checks = Array.from(document.querySelectorAll('.ingest-role-scope'));
+  if(!checks.length) return;
+  const target = normalizeRoleValue(currentRole || 'it');
+  if(force){
+    checks.forEach(c => { c.checked = normalizeRoleValue(c.value) === target; });
+    return;
+  }
+  const anyChecked = checks.some(c => c.checked);
+  if(anyChecked) return;
+  checks.forEach(c => { c.checked = normalizeRoleValue(c.value) === target; });
+}
+
 // --- i18n simple helper
 const _translations = {
   de: {
@@ -343,6 +425,13 @@ const _translations = {
     search: 'Suche',
     ingest: 'Daten hinzufügen',
     persona: 'Persona',
+    role: 'Rolle',
+    role_it: 'IT',
+    role_logistics: 'Logistik',
+    role_sales: 'Vertrieb',
+    role_hr: 'HR',
+    import_roles: 'Import-Sichtbarkeit (Rollen)',
+    import_roles_hint: 'Keine Auswahl = aktive Rolle. Mehrfachauswahl erlaubt (wichtig für Massenupload).',
     debug: 'Debug',
     debug_description: 'Zeigt die RAG-Kontextdaten an, die das System für die Antwort verwendet',
     auto_search: 'Auto-Search',
@@ -390,10 +479,19 @@ const _translations = {
     personas: 'Personas',
     appearance: 'Erscheinungsbild',
     language: 'Sprache / Language',
+    usage_profile: 'Nutzungsprofil',
+    usage_profile_personal: 'Persönlich',
+    usage_profile_commercial: 'Gewerblich',
+    response_language_mode: 'Antwortsprache',
+    response_language_auto: 'Automatisch (Sprache der Anfrage)',
+    response_language_settings: 'Fix nach Einstellungssprache',
+    response_language_hint: 'Auto eignet sich für europaweite Teams mit mehreren Sprachen.',
     theme: 'Theme',
     endpoint_note: 'Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.',
     allow_nanogo: 'Erlaube Ausführung von nanoGo (interpretiertes Go)',
     nanogo_hint: 'Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.',
+    redact_pii: 'PII beim Ingest maskieren (E-Mail, Telefon, IBAN, Kartenmuster)',
+    redact_pii_hint: 'Empfohlen für gewerbliche Nutzung und sensible Daten (DSGVO).',
     api_endpoint: 'API Endpoint (OpenAI-kompatibel)',
     auto_discovery: 'Auto-Discovery',
     test_load_models: 'Test & Modelle laden',
@@ -446,6 +544,13 @@ const _translations = {
     search: 'Search',
     ingest: 'Add Data',
     persona: 'Persona',
+    role: 'Role',
+    role_it: 'IT',
+    role_logistics: 'Logistics',
+    role_sales: 'Sales',
+    role_hr: 'HR',
+    import_roles: 'Import Visibility (Roles)',
+    import_roles_hint: 'No selection = active role. Multi-select supported (important for bulk upload).',
     debug: 'Debug',
     debug_description: 'Shows RAG context data that the system uses for the response',
     auto_search: 'Auto-Search',
@@ -493,10 +598,19 @@ const _translations = {
     personas: 'Personas',
     appearance: 'Appearance',
     language: 'Language',
+    usage_profile: 'Usage Profile',
+    usage_profile_personal: 'Personal',
+    usage_profile_commercial: 'Commercial',
+    response_language_mode: 'Response Language',
+    response_language_auto: 'Automatic (language of the request)',
+    response_language_settings: 'Fixed by selected UI language',
+    response_language_hint: 'Auto mode is recommended for multilingual European teams.',
     theme: 'Theme',
     endpoint_note: 'Note: The endpoint field expects the base URL without <code>/v1</code>. If you enter <code>/v1</code>, it will be automatically removed.',
     allow_nanogo: 'Allow execution of nanoGo (interpreted Go)',
     nanogo_hint: 'Recommended: only enable if you want to allow executions from trusted sources.',
+    redact_pii: 'Redact PII on ingest (email, phone, IBAN, card patterns)',
+    redact_pii_hint: 'Recommended for commercial usage and sensitive data (GDPR).',
     api_endpoint: 'API Endpoint (OpenAI-compatible)',
     auto_discovery: 'Auto-Discovery',
     test_load_models: 'Test & Load Models',
@@ -688,6 +802,8 @@ function handleTabKeydown(e, selector, group){
 
 let currentChatId = '';
 let currentPersonaId = '';
+let currentRole = 'it';
+let currentRolePermissions = null;
 let debugMode = false;
 let deepMode = false;
 let offlineMode = false;
@@ -1018,7 +1134,24 @@ async function refreshSources(src){
 async function initSettingsUI(){
   // Load persisted settings
   const s = await apiGet('/api/settings');
+  currentRole = s.active_role || currentRole || 'it';
+  applyRolePermissionsUI(s.role_permissions || null);
+  syncIngestRoleScopesWithActiveRole(true);
   $('#wikiLang').value = s.lang || 'de';
+  const langSel = $('#langSelect');
+  if(langSel){
+    const pref = (s.lang || 'de').split('-')[0];
+    if(Array.from(langSel.options).some(o => o.value === pref)){
+      langSel.value = pref;
+    }
+  }
+  if($('#setUsageProfile')) $('#setUsageProfile').value = s.usage_profile || 'personal';
+  if($('#setResponseLanguageMode')) $('#setResponseLanguageMode').value = s.response_language_mode || 'auto';
+  if($('#setRedactPII')) $('#setRedactPII').checked = !!s.redact_pii;
+  const roleSel = $('#roleSelect');
+  if(roleSel){
+    roleSel.value = currentRole;
+  }
   $('#setBaseUrl').value = s.base_url || 'http://localhost:1234';
   // Support separate chat/embed bases
   $('#setChatBase').value = s.chat_base || s.base_url || 'http://localhost:1234';
@@ -1063,6 +1196,7 @@ async function initSettingsUI(){
 
   // Wire quick "Use OpenAI" button: fill base URL and enable simple setup
   const btnUse = $('#btnUseOpenAI');
+  const btnClearKey = $('#btnClearOpenAI');
   const hint = $('#openaiHint');
   if(btnUse){
     btnUse.addEventListener('click', ()=>{
@@ -1079,6 +1213,32 @@ async function initSettingsUI(){
         if(hint) hint.textContent = 'Trage deinen OpenAI-Key ein und klicke auf Speichern.';
       }
     });
+  }
+  if(btnClearKey){
+    btnClearKey.onclick = async ()=>{
+      try{
+        await apiPost('/api/settings', {
+          base_url: $('#setBaseUrl').value.trim(),
+          chat_base: ($('#useSeparateEndpoints') && $('#useSeparateEndpoints').checked) ? $('#setChatBase').value.trim() : '',
+          embed_base: ($('#useSeparateEndpoints') && $('#useSeparateEndpoints').checked) ? $('#setEmbedBase').value.trim() : '',
+          chat_model: $('#setChatModel').value,
+          embed_model: $('#setEmbedModel').value,
+          active_role: currentRole || 'it',
+          usage_profile: $('#setUsageProfile') ? $('#setUsageProfile').value : 'personal',
+          response_language_mode: $('#setResponseLanguageMode') ? $('#setResponseLanguageMode').value : 'auto',
+          redact_pii: $('#setRedactPII') ? !!$('#setRedactPII').checked : false,
+          allow_nanogo: $('#allowNanoGo') ? !!$('#allowNanoGo').checked : false,
+          openai_api_key_clear: true
+        });
+        if(keyInp){
+          keyInp.value = '';
+          keyInp.placeholder = 'sk-...';
+        }
+        if(hint) hint.textContent = 'OpenAI-Key gelöscht.';
+      }catch(e){
+        if(hint) hint.textContent = 'Fehler beim Löschen des Keys: ' + (e.message||String(e));
+      }
+    };
   }
 
   await loadCustomApis();
@@ -1457,6 +1617,9 @@ async function saveSettings(force=false){
   const emb = $('#setEmbedModel').value;
   const openaiKey = $('#setOpenAIKey') ? $('#setOpenAIKey').value.trim() : '';
   const allowNano = $('#allowNanoGo') ? !!$('#allowNanoGo').checked : false;
+  const usageProfile = $('#setUsageProfile') ? $('#setUsageProfile').value : 'personal';
+  const responseLanguageMode = $('#setResponseLanguageMode') ? $('#setResponseLanguageMode').value : 'auto';
+  const redactPII = $('#setRedactPII') ? !!$('#setRedactPII').checked : false;
   if(!chat || !emb){
     setStatus($('#saveStatus'), 'Bitte Chat- und Embedding-Modell wählen.', 'err');
     return;
@@ -1464,7 +1627,18 @@ async function saveSettings(force=false){
   setStatus($('#saveStatus'), 'Speichere…', '');
   try{
     // Only send chat_base/embed_base when advanced mode is used; otherwise server will use base_url
-    const payload = {base_url: base, chat_model: chat, embed_model: emb, openai_api_key: openaiKey, force, allow_nanogo: allowNano};
+    const payload = {
+      base_url: base,
+      chat_model: chat,
+      embed_model: emb,
+      openai_api_key: openaiKey,
+      active_role: currentRole || 'it',
+      force,
+      allow_nanogo: allowNano,
+      usage_profile: usageProfile,
+      response_language_mode: responseLanguageMode,
+      redact_pii: redactPII
+    };
     if(useSep){ payload.chat_base = chatBase; payload.embed_base = embedBase; }
     await apiPost('/api/settings', payload);
     setStatus($('#saveStatus'), 'Gespeichert. Einstellungen aktiv.', 'ok');
@@ -1955,7 +2129,8 @@ async function askChat(){
         deep: deepMode,
         offline: offlineMode,
         auto_search: autoSearchMode,
-        persona_id: currentPersonaId
+        persona_id: currentPersonaId,
+        active_role: currentRole
       })
     });
 
@@ -1999,6 +2174,14 @@ async function askChat(){
               currentPersonaId = meta.persona_id;
               const sel = $('#personaSelect');
               if(sel) sel.value = currentPersonaId;
+            }
+            if(meta.active_role){
+              currentRole = normalizeRoleValue(meta.active_role);
+              const roleSel = $('#roleSelect');
+              if(roleSel) roleSel.value = currentRole;
+            }
+            if(meta.role_permissions){
+              applyRolePermissionsUI(meta.role_permissions);
             }
             // refresh chats sidebar
             refreshChats();
@@ -2153,7 +2336,8 @@ async function addWiki(opts={}){
   setStatus($('#wikiStatus'), t('loading'), '');
   try{
     const embedModel = getIngestEmbedModel();
-    const r = await apiPost('/api/add-wiki', {article, lang, embed_model: embedModel});
+    const roles = getIngestRoleScopes();
+    const r = await apiPost('/api/add-wiki', {article, lang, embed_model: embedModel, roles});
     if(r.not_found){
       const box = $('#wikiStatus');
       box.className = 'tool-status warn';
@@ -2205,7 +2389,8 @@ async function addURL(){
   setStatus($('#urlStatus'), t('scrape'), '');
   try{
     const embedModel = getIngestEmbedModel();
-    const r = await apiPost('/api/add-url', {url, embed_model: embedModel});
+    const roles = getIngestRoleScopes();
+    const r = await apiPost('/api/add-url', {url, embed_model: embedModel, roles});
     setStatus($('#urlStatus'), t('ok_chunks', r.chunks, r.total), 'ok');
     $('#scrapeUrl').value = '';
     await refreshStats();
@@ -2224,7 +2409,8 @@ async function addText(){
   setStatus($('#textStatus'), t('saving'), '');
   try{
     const embedModel = getIngestEmbedModel();
-    const r = await apiPost('/api/add-text', {title, text, embed_model: embedModel});
+    const roles = getIngestRoleScopes();
+    const r = await apiPost('/api/add-text', {title, text, embed_model: embedModel, roles});
     setStatus($('#textStatus'), t('ok_chunks', r.chunks, r.total), 'ok');
     $('#textTitle').value = '';
     $('#textContent').value = '';
@@ -2257,6 +2443,8 @@ function initUpload(){
     form.append('file', file);
     const embedModel = getIngestEmbedModel();
     if(embedModel) form.append('embed_model', embedModel);
+    const roles = getIngestRoleScopes();
+    if(roles.length) form.append('roles', roles.join(','));
     inp.disabled = true;
     fetch('/api/upload', {method:'POST', body: form})
       .then(async r=>{
@@ -2293,7 +2481,8 @@ async function addFolder(){
   setStatus($('#folderStatus'), t('importing'), '');
   try{
     const embedModel = getIngestEmbedModel();
-    const r = await apiPost('/api/add-folder', {path, recursive, embed_model: embedModel});
+    const roles = getIngestRoleScopes();
+    const r = await apiPost('/api/add-folder', {path, recursive, embed_model: embedModel, roles});
     let msg = `OK: ${r.files} Dateien · ${r.total_chunks} Chunks · Total: ${r.total}`;
     if(r.errors && r.errors.length){
       msg += ` · Fehler: ${r.errors.length}`;
@@ -2315,6 +2504,11 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     if(s && s.lang) applyTranslations(s.lang);
     else applyTranslations(navigator.language || 'de');
     if(s && s.theme) applyTheme(s.theme);
+    currentRole = normalizeRoleValue(s?.active_role || currentRole);
+    applyRolePermissionsUI(s?.role_permissions || null);
+    const roleSel = $('#roleSelect');
+    if(roleSel) roleSel.value = currentRole;
+    syncIngestRoleScopesWithActiveRole(true);
     updateOpenAIBadge(s);
     initLLMSwitcher(s);
     updateWorkspaceStrip();
@@ -2365,6 +2559,16 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       updateWorkspaceStrip();
     });
   }
+  const roleSelect = $('#roleSelect');
+  if(roleSelect){
+    roleSelect.addEventListener('change', (e)=>{
+      const nextRole = normalizeRoleValue(e.target.value);
+      setActiveRole(nextRole);
+    });
+  }
+  document.querySelectorAll('.ingest-role-scope').forEach(cb => {
+    cb.addEventListener('change', ()=>syncIngestRoleScopesWithActiveRole());
+  });
   const sidebarToggle = $('#sidebarToggle');
   if(sidebarToggle){
     sidebarToggle.addEventListener('click', ()=>{
@@ -2479,6 +2683,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       }catch(err){
         console.error('Failed to save language:', err);
       }
+      updateWorkspaceStrip();
     });
   }
 
