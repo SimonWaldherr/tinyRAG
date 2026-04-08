@@ -1088,7 +1088,7 @@ func fetchMultiWebSearch(query string) (string, error) {
 		if len(errs) == 0 {
 			return "", fmt.Errorf("no search results for %q", query)
 		}
-		return "", fmt.Errorf(strings.Join(errs, " | "))
+		return "", fmt.Errorf("Errors: %s", strings.Join(errs, " | "))
 	}
 	return strings.Join(parts, "\n\n---\n\n"), nil
 }
