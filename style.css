@@ -839,6 +839,45 @@ button { font-family: var(--font); cursor: pointer }
 .chat-input-area button span { font-size: 0 }
 .chat-input-area button::before { content: '↑'; font-size: 18px; font-weight: 700 }
 
+/* Image attach button inside the chat input wrapper */
+.attach-img-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 18px;
+  color: var(--muted);
+  transition: color .15s, background .15s;
+  margin-right: 4px;
+}
+.attach-img-btn:hover { color: var(--accent); background: var(--accent-subtle); }
+
+/* Image preview strip below the chat input */
+.chat-image-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 820px;
+  margin: 6px auto 0;
+  padding: 4px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.img-clear-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.img-clear-btn:hover { color: var(--text); }
+
 .chat-footer {
   display: flex;
   align-items: center;

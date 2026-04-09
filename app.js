@@ -238,8 +238,17 @@ function resolveProviderName(url){
   if(!url) return '';
   const u = url.toLowerCase();
   if(u.includes('openai.com')) return 'OpenAI';
-  if(u.includes('ollama')) return 'Ollama';
-  if(u.includes('lmstudio') || u.includes('lm-studio') || u.includes('lmstudio.ai')) return 'LM Studio';
+  if(u.includes('anthropic.com')) return 'Anthropic';
+  if(u.includes('googleapis.com') || u.includes('generativelanguage')) return 'Google Gemini';
+  if(u.includes('mistral.ai')) return 'Mistral AI';
+  if(u.includes('groq.com')) return 'Groq';
+  if(u.includes('deepseek.com')) return 'DeepSeek';
+  if(u.includes('together.xyz') || u.includes('together.ai')) return 'Together AI';
+  if(u.includes('x.ai')) return 'xAI';
+  if(u.includes('cohere.com')) return 'Cohere';
+  if(u.includes('openrouter.ai')) return 'OpenRouter';
+  if(u.includes('ollama') || u.includes('11434')) return 'Ollama';
+  if(u.includes('lmstudio') || u.includes('lm-studio') || u.includes('lmstudio.ai') || u.includes('1234')) return 'LM Studio';
   if(u.includes('localhost') || u.includes('127.0.0.1')) return 'Local LLM';
   return 'Remote LLM';
 }
@@ -811,6 +820,43 @@ let autoSearchMode = true;
 let typingBubble = null;
 let lastDebugData = null;
 
+// ─── Image attachment state ────────────────────────────────────────────────
+let pendingImageBase64 = '';
+let pendingImageType = '';
+let pendingImagePreviewURL = '';
+
+function clearChatImage(){
+  pendingImageBase64 = '';
+  pendingImageType = '';
+  if(pendingImagePreviewURL) URL.revokeObjectURL(pendingImagePreviewURL);
+  pendingImagePreviewURL = '';
+  const prev = $('#chatImagePreview');
+  if(prev) prev.style.display = 'none';
+  const thumb = $('#chatImageThumb');
+  if(thumb) thumb.src = '';
+}
+
+function attachChatImage(file){
+  if(!file || !file.type.startsWith('image/')) return;
+  // Release previous object URL
+  if(pendingImagePreviewURL) URL.revokeObjectURL(pendingImagePreviewURL);
+  pendingImageType = file.type;
+  pendingImagePreviewURL = URL.createObjectURL(file);
+  const thumb = $('#chatImageThumb');
+  if(thumb){ thumb.src = pendingImagePreviewURL; }
+  const prev = $('#chatImagePreview');
+  if(prev){ prev.style.display = 'flex'; }
+  // Read as base64
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataURL = e.target.result;
+    // dataURL is "data:<mime>;base64,<b64>"
+    const comma = dataURL.indexOf(',');
+    pendingImageBase64 = comma >= 0 ? dataURL.slice(comma+1) : dataURL;
+  };
+  reader.readAsDataURL(file);
+}
+
 // ═══════ Debug panel rendering ═══════
 function renderDebugPanel(data){
   const panel = document.createElement('div');
@@ -917,11 +963,21 @@ function renderDebugPanel(data){
   return panel;
 }
 
-function msgElement(role, content, timeIso, model, modelMeta, thinking){
+function msgElement(role, content, timeIso, model, modelMeta, thinking, imageURL){
   const msg = document.createElement('div');
   msg.className = `msg ${role}`;
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
+
+  // For user messages with an attached image, show the thumbnail above the text.
+  if(role === 'user' && imageURL){
+    const img = document.createElement('img');
+    img.src = imageURL;
+    img.alt = 'Attached image';
+    img.style.cssText = 'max-height:120px;border-radius:6px;display:block;margin-bottom:.4em';
+    bubble.appendChild(img);
+  }
+
   renderBubbleContent(bubble, content);
 
   // If model info is present, add it to the bubble as a title or badge
@@ -968,10 +1024,10 @@ function msgElement(role, content, timeIso, model, modelMeta, thinking){
   return msg;
 }
 
-function addMessage(role, content, timeIso, model, modelMeta, thinking){
+function addMessage(role, content, timeIso, model, modelMeta, thinking, imageURL){
   const wrap = $('#chatMessages');
   $('#chatEmpty').style.display = 'none';
-  wrap.appendChild(msgElement(role, content, timeIso || new Date().toISOString(), model, modelMeta, thinking));
+  wrap.appendChild(msgElement(role, content, timeIso || new Date().toISOString(), model, modelMeta, thinking, imageURL));
   wrap.scrollTop = wrap.scrollHeight;
 }
 
@@ -1434,6 +1490,11 @@ async function initLLMSwitcher(s){
   if(base.includes('openai.com')) sel.value = 'openai';
   else if(base.includes('localhost:1234')) sel.value = 'lmstudio';
   else if(base.includes('localhost:11434')) sel.value = 'ollama';
+  else if(base.includes('groq.com')) sel.value = 'groq';
+  else if(base.includes('anthropic.com')) sel.value = 'anthropic';
+  else if(base.includes('mistral.ai')) sel.value = 'mistral';
+  else if(base.includes('deepseek.com')) sel.value = 'deepseek';
+  else if(base.includes('openrouter.ai')) sel.value = 'openrouter';
   else sel.value = 'custom';
 
   await refreshQuickModelSwitcher(s);
@@ -1449,7 +1510,16 @@ async function initLLMSwitcher(s){
       return;
     }
     // Map selection to base URL
-    const map = {openai: 'https://api.openai.com', lmstudio: 'http://localhost:1234', ollama: 'http://localhost:11434'};
+    const map = {
+      openai: 'https://api.openai.com',
+      lmstudio: 'http://localhost:1234',
+      ollama: 'http://localhost:11434',
+      groq: 'https://api.groq.com/openai',
+      anthropic: 'https://api.anthropic.com',
+      mistral: 'https://api.mistral.ai',
+      deepseek: 'https://api.deepseek.com',
+      openrouter: 'https://openrouter.ai/api',
+    };
     const baseUrl = map[v];
     if(!baseUrl) return;
     // Probe and populate a compact model selector so the user can pick a chat model before applying
@@ -2367,7 +2437,14 @@ async function askChat(){
   $('#chatQ').value = '';
   autosize($('#chatQ'));
   lastDebugData = null;
-  addMessage('user', q, new Date().toISOString());
+
+  // Collect image attachment (if any)
+  const imgData = pendingImageBase64;
+  const imgType = pendingImageType;
+  const imgPreviewURL = pendingImagePreviewURL;
+  clearChatImage();
+
+  addMessage('user', q, new Date().toISOString(), null, null, null, imgPreviewURL);
 
   // placeholder assistant msg
   addMessage('assistant', '🔄 Wird bearbeitet...', new Date().toISOString());
@@ -2386,19 +2463,21 @@ async function askChat(){
   let hasError = false;
 
   try{
+    const payload = {
+      question:q,
+      chat_id: currentChatId,
+      debug: debugMode,
+      deep: deepMode,
+      offline: offlineMode,
+      auto_search: autoSearchMode,
+      persona_id: currentPersonaId,
+      active_role: currentRole
+    };
+    if(imgData){ payload.image_base64 = imgData; payload.image_type = imgType || 'image/jpeg'; }
     const resp = await fetch('/api/ask', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        question:q,
-        chat_id: currentChatId,
-        debug: debugMode,
-        deep: deepMode,
-        offline: offlineMode,
-        auto_search: autoSearchMode,
-        persona_id: currentPersonaId,
-        active_role: currentRole
-      })
+      body: JSON.stringify(payload)
     });
 
     if(!resp.ok){
@@ -2819,6 +2898,34 @@ window.addEventListener('DOMContentLoaded', async ()=>{
 
   // Chat
   $('#chatBtn').addEventListener('click', askChat);
+
+  // Image attach button
+  const chatImgInput = $('#chatImageInput');
+  if(chatImgInput){
+    chatImgInput.addEventListener('change', ()=>{
+      if(chatImgInput.files?.[0]) attachChatImage(chatImgInput.files[0]);
+      chatImgInput.value = '';
+    });
+  }
+  const chatImgClear = $('#chatImageClear');
+  if(chatImgClear){ chatImgClear.addEventListener('click', clearChatImage); }
+  // Allow pasting images into the chat textarea
+  const chatQEl = $('#chatQ');
+  if(chatQEl){
+    chatQEl.addEventListener('paste', (e)=>{
+      const items = e.clipboardData?.items;
+      if(!items) return;
+      for(const item of items){
+        if(item.type.startsWith('image/')){
+          e.preventDefault();
+          attachChatImage(item.getAsFile());
+          break;
+        }
+      }
+    });
+  }
+
+
   const personaSelect = $('#personaSelect');
   if(personaSelect){
     personaSelect.addEventListener('change', (e)=>{

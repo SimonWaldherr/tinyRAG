@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -1325,7 +1326,7 @@ func (c *lmClient) listModels(baseOverride string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create models request: %w", err)
 	}
-	if c.apiKey != "" && strings.Contains(base, "api.openai.com") {
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := newHTTPClient(10 * time.Second).Do(req)
@@ -1379,7 +1380,7 @@ func (c *lmClient) embed(texts []string) ([][]float64, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" && strings.Contains(c.base, "api.openai.com") {
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
@@ -1424,10 +1425,109 @@ type chatReq struct {
 	Stream   bool      `json:"stream"`
 }
 
+// contentPart is a single element in a multimodal message content array,
+// used for vision-capable models (text + image_url parts).
+type contentPart struct {
+	Type     string           `json:"type"`
+	Text     string           `json:"text,omitempty"`
+	ImageURL *imageURLContent `json:"image_url,omitempty"`
+}
+
+// imageURLContent carries the URL (data URI or https) and optional detail level
+// for an image_url content part.
+type imageURLContent struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"` // "low", "high", or "auto"
+}
+
 // chatMsg represents a single chat message with a role and content.
+// Content is a plain string for text-only messages.  When ContentParts is
+// non-empty the message is multimodal and its JSON representation uses an
+// array of contentPart objects instead of a string, as required by the
+// OpenAI vision API.
 type chatMsg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role         string        `json:"role"`
+	Content      string        `json:"content,omitempty"`
+	ContentParts []contentPart `json:"-"` // populated for vision messages; not stored in history
+}
+
+// MarshalJSON serialises chatMsg to the wire format expected by
+// OpenAI-compatible APIs.  Text-only messages produce {"role":"…","content":"…"};
+// multimodal messages produce {"role":"…","content":[…]}.
+func (m chatMsg) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Role    string      `json:"role"`
+		Content interface{} `json:"content"`
+	}
+	if len(m.ContentParts) > 0 {
+		return json.Marshal(wire{Role: m.Role, Content: m.ContentParts})
+	}
+	return json.Marshal(wire{Role: m.Role, Content: m.Content})
+}
+
+// isVisionModel reports whether a model ID is likely to support image inputs.
+// The check is heuristic and covers the most common vision-capable families.
+func isVisionModel(model string) bool {
+	ml := strings.ToLower(model)
+	return strings.Contains(ml, "vision") ||
+		strings.Contains(ml, "-vl") ||
+		strings.Contains(ml, "vl-") ||
+		strings.Contains(ml, "llava") ||
+		strings.Contains(ml, "pixtral") ||
+		strings.Contains(ml, "gpt-4o") ||
+		strings.Contains(ml, "gpt-4-turbo") ||
+		strings.Contains(ml, "claude-3") ||
+		strings.Contains(ml, "claude-opus") ||
+		strings.Contains(ml, "claude-sonnet") ||
+		strings.Contains(ml, "gemini") ||
+		strings.Contains(ml, "internvl") ||
+		strings.Contains(ml, "cogvlm") ||
+		strings.Contains(ml, "minicpm") ||
+		strings.Contains(ml, "moondream") ||
+		strings.Contains(ml, "phi-3-vision") ||
+		strings.Contains(ml, "phi4") ||
+		strings.Contains(ml, "qwen2-vl") ||
+		strings.Contains(ml, "smolvlm")
+}
+
+// imageDataURI builds a base64-encoded data URI from raw image bytes and a MIME type.
+func imageDataURI(data []byte, mimeType string) string {
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// describeImageWithVision calls a vision-capable LLM to generate a text
+// description of an image that can be stored in the RAG knowledge base.
+func describeImageWithVision(ctx context.Context, lm lmProvider, imageData []byte, mimeType, filename string) (string, error) {
+	dataURI := imageDataURI(imageData, mimeType)
+	msg := chatMsg{
+		Role: "user",
+		ContentParts: []contentPart{
+			{
+				Type: "text",
+				Text: fmt.Sprintf(
+					"Describe the content of this image (%s) in detail. "+
+						"Include all visible text, diagrams, tables, charts, and any other "+
+						"information that would be useful in a knowledge base. "+
+						"Be thorough and precise.",
+					filename,
+				),
+			},
+			{
+				Type:     "image_url",
+				ImageURL: &imageURLContent{URL: dataURI, Detail: "high"},
+			},
+		},
+	}
+	systemPrompt := "You are an image analysis assistant. Describe images accurately and extract all textual and visual information in a structured way."
+	var buf bytes.Buffer
+	if err := lm.chatStream(ctx, systemPrompt, []chatMsg{msg}, &buf); err != nil {
+		return "", fmt.Errorf("vision description failed: %w", err)
+	}
+	desc := strings.TrimSpace(buf.String())
+	if desc == "" {
+		return "", fmt.Errorf("vision model returned an empty description for %q", filename)
+	}
+	return desc, nil
 }
 
 func writeStreamChunk(w io.Writer, s string) error {
@@ -1549,7 +1649,7 @@ func (c *lmClient) chatStreamDetailed(ctx context.Context, system string, msgs [
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" && strings.Contains(c.base, "api.openai.com") {
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
@@ -4600,11 +4700,45 @@ type llmCheckResp struct {
 // providerHintFromURL returns a human-friendly hint about the LLM
 // provider based on common port patterns in the base URL.
 func providerHintFromURL(base string) string {
-	if strings.Contains(base, "11434") {
+	u := strings.ToLower(base)
+	if strings.Contains(u, "11434") {
 		return "Ollama"
 	}
-	if strings.Contains(base, "1234") {
+	if strings.Contains(u, "1234") && (strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")) {
 		return "LM Studio"
+	}
+	if strings.Contains(u, "openai.com") {
+		return "OpenAI"
+	}
+	if strings.Contains(u, "anthropic.com") {
+		return "Anthropic"
+	}
+	if strings.Contains(u, "googleapis.com") || strings.Contains(u, "generativelanguage") {
+		return "Google Gemini"
+	}
+	if strings.Contains(u, "mistral.ai") {
+		return "Mistral AI"
+	}
+	if strings.Contains(u, "groq.com") {
+		return "Groq"
+	}
+	if strings.Contains(u, "deepseek.com") {
+		return "DeepSeek"
+	}
+	if strings.Contains(u, "together.xyz") || strings.Contains(u, "together.ai") {
+		return "Together AI"
+	}
+	if strings.Contains(u, "x.ai") {
+		return "xAI"
+	}
+	if strings.Contains(u, "cohere.com") {
+		return "Cohere"
+	}
+	if strings.Contains(u, "perplexity.ai") {
+		return "Perplexity"
+	}
+	if strings.Contains(u, "openrouter.ai") {
+		return "OpenRouter"
 	}
 	return "OpenAI-compatible"
 }
@@ -4615,17 +4749,39 @@ func recommendModels(models []string) (chat []string, embed []string) {
 	// Heuristics only: highlight likely candidates.
 	for _, m := range models {
 		ml := strings.ToLower(m)
-		if strings.Contains(ml, "embed") || strings.Contains(ml, "embedding") {
+		if strings.Contains(ml, "embed") || strings.Contains(ml, "embedding") ||
+			strings.Contains(ml, "e5-") || strings.Contains(ml, "bge-") ||
+			strings.Contains(ml, "minilm") || strings.Contains(ml, "nomic") ||
+			strings.Contains(ml, "gte-") || strings.Contains(ml, "jina-embed") {
 			embed = append(embed, m)
 		}
 		// Common chat-ish hints
 		if strings.Contains(ml, "llama") ||
 			strings.Contains(ml, "mistral") ||
+			strings.Contains(ml, "mixtral") ||
 			strings.Contains(ml, "qwen") ||
 			strings.Contains(ml, "gemma") ||
 			strings.Contains(ml, "phi") ||
 			strings.Contains(ml, "gpt") ||
-			strings.Contains(ml, "ministral") {
+			strings.Contains(ml, "ministral") ||
+			strings.Contains(ml, "claude") ||
+			strings.Contains(ml, "gemini") ||
+			strings.Contains(ml, "command") ||
+			strings.Contains(ml, "deepseek") ||
+			strings.Contains(ml, "hermes") ||
+			strings.Contains(ml, "zephyr") ||
+			strings.Contains(ml, "falcon") ||
+			strings.Contains(ml, "vicuna") ||
+			strings.Contains(ml, "wizard") ||
+			strings.Contains(ml, "solar") ||
+			strings.Contains(ml, "openchat") ||
+			strings.Contains(ml, "dolphin") ||
+			strings.Contains(ml, "nous") ||
+			strings.Contains(ml, "llava") ||
+			strings.Contains(ml, "pixtral") ||
+			strings.Contains(ml, "smolvlm") ||
+			strings.Contains(ml, "internvl") ||
+			strings.Contains(ml, "moondream") {
 			chat = append(chat, m)
 		}
 	}
@@ -5302,13 +5458,15 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		reqID := newRequestID()
 		var req struct {
-			Question   string `json:"question"`
-			ChatID     string `json:"chat_id"`
-			Debug      bool   `json:"debug"`
-			Deep       bool   `json:"deep"`
-			Offline    bool   `json:"offline"`
-			AutoSearch bool   `json:"auto_search"`
-			PersonaID  string `json:"persona_id"`
+			Question    string `json:"question"`
+			ChatID      string `json:"chat_id"`
+			Debug       bool   `json:"debug"`
+			Deep        bool   `json:"deep"`
+			Offline     bool   `json:"offline"`
+			AutoSearch  bool   `json:"auto_search"`
+			PersonaID   string `json:"persona_id"`
+			ImageBase64 string `json:"image_base64"` // optional: base64-encoded image for vision models
+			ImageType   string `json:"image_type"`   // optional: MIME type, e.g. "image/jpeg"
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Question) == "" {
 			http.Error(w, "missing question", 400)
@@ -5527,7 +5685,25 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		for _, m := range history[start:] {
 			msgs = append(msgs, chatMsg{Role: m.Role, Content: m.Content})
 		}
-		msgs = append(msgs, chatMsg{Role: "user", Content: req.Question})
+
+		// Build the current user message – multimodal when an image is attached.
+		lastMsg := chatMsg{Role: "user", Content: req.Question}
+		if req.ImageBase64 != "" {
+			mimeType := strings.TrimSpace(req.ImageType)
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = "image/jpeg"
+			}
+			dataURI := "data:" + mimeType + ";base64," + req.ImageBase64
+			lastMsg = chatMsg{
+				Role: "user",
+				ContentParts: []contentPart{
+					{Type: "text", Text: req.Question},
+					{Type: "image_url", ImageURL: &imageURLContent{URL: dataURI, Detail: "auto"}},
+				},
+			}
+			log.Printf("REQ %s: vision message attached (mime=%s, b64_len=%d)", reqID, mimeType, len(req.ImageBase64))
+		}
+		msgs = append(msgs, lastMsg)
 
 		debugBase.HistoryMessages = len(msgs)
 		if req.Debug {
@@ -6268,8 +6444,48 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		// regular single-file upload
-		text := string(data)
 		title := filepath.Base(header.Filename)
+		fileExt := strings.ToLower(filepath.Ext(filename))
+
+		// Image files: describe via vision model and ingest the description.
+		imageMIME := map[string]string{
+			".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+			".png": "image/png", ".gif": "image/gif",
+			".webp": "image/webp", ".bmp": "image/bmp",
+		}
+		if mimeType, ok := imageMIME[fileExt]; ok {
+			if !isVisionModel(s.ChatModel) {
+				http.Error(w, fmt.Sprintf(
+					"image upload requires a vision-capable chat model; %q does not appear to support images. "+
+						"Switch to a vision model (e.g. gpt-4o, llava, claude-3-opus) in settings.",
+					s.ChatModel,
+				), 400)
+				return
+			}
+			desc, err := describeImageWithVision(r.Context(), rag.getLM(), data, mimeType, title)
+			if err != nil {
+				http.Error(w, "vision description failed: "+err.Error(), 500)
+				return
+			}
+			ingestText := fmt.Sprintf("Image: %s\n\n%s", title, desc)
+			chunks, _ := chunksForIngest(ingestText, s)
+			if err := rag.addChunksWithRoles(title+" (image)", chunks, em, roleScopes); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"file":   title,
+				"chars":  len(ingestText),
+				"chunks": len(chunks),
+				"total":  rag.docCountForRole(s.ActiveRole),
+				"image":  true,
+				"roles":  roleScopes,
+			})
+			return
+		}
+
+		text := string(data)
 		chunks, redactions := chunksForIngest(text, s)
 		if err := rag.addChunksWithRoles(title, chunks, em, roleScopes); err != nil {
 			http.Error(w, err.Error(), 500)
