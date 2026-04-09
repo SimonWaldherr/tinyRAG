@@ -6451,7 +6451,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		imageMIME := map[string]string{
 			".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 			".png": "image/png", ".gif": "image/gif",
-			".webp": "image/webp", ".bmp": "image/bmp",
+			".webp": "image/webp",
 		}
 		if mimeType, ok := imageMIME[fileExt]; ok {
 			if !isVisionModel(s.ChatModel) {

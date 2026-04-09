@@ -878,6 +878,8 @@ button { font-family: var(--font); cursor: pointer }
 }
 .img-clear-btn:hover { color: var(--text); }
 
+.upload-format-hint { font-size: .8em; margin-top: .25em; }
+
 .chat-footer {
   display: flex;
   align-items: center;

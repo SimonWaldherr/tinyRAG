@@ -234,22 +234,37 @@ function buildEmptyStateHtml(){
     </div>`;
 }
 
+// resolveProviderName maps a base URL to a human-friendly provider name.
+// It uses URL hostname parsing where possible to avoid substring-matching
+// against arbitrary host prefixes/suffixes.
 function resolveProviderName(url){
   if(!url) return '';
-  const u = url.toLowerCase();
-  if(u.includes('openai.com')) return 'OpenAI';
-  if(u.includes('anthropic.com')) return 'Anthropic';
-  if(u.includes('googleapis.com') || u.includes('generativelanguage')) return 'Google Gemini';
-  if(u.includes('mistral.ai')) return 'Mistral AI';
-  if(u.includes('groq.com')) return 'Groq';
-  if(u.includes('deepseek.com')) return 'DeepSeek';
-  if(u.includes('together.xyz') || u.includes('together.ai')) return 'Together AI';
-  if(u.includes('x.ai')) return 'xAI';
-  if(u.includes('cohere.com')) return 'Cohere';
-  if(u.includes('openrouter.ai')) return 'OpenRouter';
-  if(u.includes('ollama') || u.includes('11434')) return 'Ollama';
-  if(u.includes('lmstudio') || u.includes('lm-studio') || u.includes('lmstudio.ai') || u.includes('1234')) return 'LM Studio';
-  if(u.includes('localhost') || u.includes('127.0.0.1')) return 'Local LLM';
+  let hostname = '';
+  try{
+    // Normalise: add a scheme so URL() parses correctly for bare host:port strings.
+    const raw = url.trim();
+    hostname = new URL(raw.includes('://') ? raw : 'https://'+raw).hostname.toLowerCase();
+  }catch(e){
+    // Fall back to raw string for non-parseable inputs (shouldn't normally happen).
+    hostname = url.toLowerCase();
+  }
+  if(hostname === 'api.openai.com' || hostname.endsWith('.openai.com')) return 'OpenAI';
+  if(hostname === 'api.anthropic.com' || hostname.endsWith('.anthropic.com')) return 'Anthropic';
+  if(hostname.endsWith('.googleapis.com') || hostname === 'generativelanguage.googleapis.com') return 'Google Gemini';
+  if(hostname === 'api.mistral.ai' || hostname.endsWith('.mistral.ai')) return 'Mistral AI';
+  if(hostname === 'api.groq.com' || hostname.endsWith('.groq.com')) return 'Groq';
+  if(hostname === 'api.deepseek.com' || hostname.endsWith('.deepseek.com')) return 'DeepSeek';
+  if(hostname.endsWith('.together.xyz') || hostname.endsWith('.together.ai')) return 'Together AI';
+  if(hostname === 'api.x.ai' || hostname.endsWith('.x.ai')) return 'xAI';
+  if(hostname === 'api.cohere.com' || hostname.endsWith('.cohere.com') || hostname === 'api.cohere.ai') return 'Cohere';
+  if(hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai')) return 'OpenRouter';
+  if(hostname === 'localhost' || hostname === '127.0.0.1'){
+    // Distinguish common local providers by port.
+    const port = (() => { try{ return new URL(url.includes('://') ? url : 'https://'+url).port; }catch(e){ return ''; } })();
+    if(port === '11434') return 'Ollama';
+    if(port === '1234') return 'LM Studio';
+    return 'Local LLM';
+  }
   return 'Remote LLM';
 }
 
@@ -1485,17 +1500,16 @@ async function refreshQuickModelSwitcher(s){
 async function initLLMSwitcher(s){
   const sel = $('#llmSwitcher');
   if(!sel) return;
-  // Determine active base (chat preferred)
+  // Determine active base (chat preferred) and map to a switcher value using
+  // resolveProviderName so we share the same hostname-safe logic.
   const base = (s && (s.chat_base || s.embed_base || s.base_url)) ? (s.chat_base || s.embed_base || s.base_url) : '';
-  if(base.includes('openai.com')) sel.value = 'openai';
-  else if(base.includes('localhost:1234')) sel.value = 'lmstudio';
-  else if(base.includes('localhost:11434')) sel.value = 'ollama';
-  else if(base.includes('groq.com')) sel.value = 'groq';
-  else if(base.includes('anthropic.com')) sel.value = 'anthropic';
-  else if(base.includes('mistral.ai')) sel.value = 'mistral';
-  else if(base.includes('deepseek.com')) sel.value = 'deepseek';
-  else if(base.includes('openrouter.ai')) sel.value = 'openrouter';
-  else sel.value = 'custom';
+  const provName = resolveProviderName(base);
+  const provToVal = {
+    'OpenAI': 'openai', 'LM Studio': 'lmstudio', 'Ollama': 'ollama',
+    'Groq': 'groq', 'Anthropic': 'anthropic', 'Mistral AI': 'mistral',
+    'DeepSeek': 'deepseek', 'OpenRouter': 'openrouter',
+  };
+  sel.value = provToVal[provName] || 'custom';
 
   await refreshQuickModelSwitcher(s);
 
