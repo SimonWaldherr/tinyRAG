@@ -1448,7 +1448,7 @@ type imageURLContent struct {
 type chatMsg struct {
 	Role         string        `json:"role"`
 	Content      string        `json:"content,omitempty"`
-	ContentParts []contentPart `json:"-"` // populated for vision messages; not stored in history
+	ContentParts []contentPart `json:"-"` // set for vision messages; excluded from JSON struct tags so MarshalJSON controls serialisation
 }
 
 // MarshalJSON serialises chatMsg to the wire format expected by
@@ -4698,48 +4698,60 @@ type llmCheckResp struct {
 }
 
 // providerHintFromURL returns a human-friendly hint about the LLM
-// provider based on common port patterns in the base URL.
+// provider based on the base URL, using proper hostname matching where possible.
 func providerHintFromURL(base string) string {
-	u := strings.ToLower(base)
-	if strings.Contains(u, "11434") {
-		return "Ollama"
+	parsed, parseErr := url.Parse(strings.TrimSpace(base))
+	if parseErr != nil {
+		parsed = &url.URL{}
 	}
-	if strings.Contains(u, "1234") && (strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")) {
-		return "LM Studio"
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+
+	// Local endpoints identified by known host + port combinations.
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		if port == "11434" {
+			return "Ollama"
+		}
+		if port == "1234" {
+			return "LM Studio"
+		}
+		return "Local LLM"
 	}
-	if strings.Contains(u, "openai.com") {
+
+	// Remote providers matched by hostname suffix.
+	switch {
+	case host == "api.openai.com" || strings.HasSuffix(host, ".openai.com"):
 		return "OpenAI"
-	}
-	if strings.Contains(u, "anthropic.com") {
+	case host == "api.anthropic.com" || strings.HasSuffix(host, ".anthropic.com"):
 		return "Anthropic"
-	}
-	if strings.Contains(u, "googleapis.com") || strings.Contains(u, "generativelanguage") {
+	case strings.HasSuffix(host, ".googleapis.com") || host == "generativelanguage.googleapis.com":
 		return "Google Gemini"
-	}
-	if strings.Contains(u, "mistral.ai") {
+	case host == "api.mistral.ai" || strings.HasSuffix(host, ".mistral.ai"):
 		return "Mistral AI"
-	}
-	if strings.Contains(u, "groq.com") {
+	case host == "api.groq.com" || strings.HasSuffix(host, ".groq.com"):
 		return "Groq"
-	}
-	if strings.Contains(u, "deepseek.com") {
+	case host == "api.deepseek.com" || strings.HasSuffix(host, ".deepseek.com"):
 		return "DeepSeek"
-	}
-	if strings.Contains(u, "together.xyz") || strings.Contains(u, "together.ai") {
+	case strings.HasSuffix(host, ".together.xyz") || strings.HasSuffix(host, ".together.ai"):
 		return "Together AI"
-	}
-	if strings.Contains(u, "x.ai") {
+	case host == "api.x.ai" || strings.HasSuffix(host, ".x.ai"):
 		return "xAI"
-	}
-	if strings.Contains(u, "cohere.com") {
+	case strings.HasSuffix(host, ".cohere.com") || strings.HasSuffix(host, ".cohere.ai"):
 		return "Cohere"
-	}
-	if strings.Contains(u, "perplexity.ai") {
+	case strings.HasSuffix(host, ".perplexity.ai"):
 		return "Perplexity"
-	}
-	if strings.Contains(u, "openrouter.ai") {
+	case host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai"):
 		return "OpenRouter"
 	}
+
+	// Fallback: port-based hints for non-standard local deployments.
+	if port == "11434" {
+		return "Ollama"
+	}
+	if port == "1234" {
+		return "LM Studio"
+	}
+
 	return "OpenAI-compatible"
 }
 

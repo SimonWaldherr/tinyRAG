@@ -239,15 +239,17 @@ function buildEmptyStateHtml(){
 // against arbitrary host prefixes/suffixes.
 function resolveProviderName(url){
   if(!url) return '';
-  let hostname = '';
+  // Parse the URL once, normalising bare host:port strings first.
+  let parsed = null;
   try{
-    // Normalise: add a scheme so URL() parses correctly for bare host:port strings.
     const raw = url.trim();
-    hostname = new URL(raw.includes('://') ? raw : 'https://'+raw).hostname.toLowerCase();
+    parsed = new URL(raw.includes('://') ? raw : 'https://'+raw);
   }catch(e){
-    // Fall back to raw string for non-parseable inputs (shouldn't normally happen).
-    hostname = url.toLowerCase();
+    // Unparseable – treat as remote.
+    return 'Remote LLM';
   }
+  const hostname = parsed.hostname.toLowerCase();
+  const port = parsed.port;
   if(hostname === 'api.openai.com' || hostname.endsWith('.openai.com')) return 'OpenAI';
   if(hostname === 'api.anthropic.com' || hostname.endsWith('.anthropic.com')) return 'Anthropic';
   if(hostname.endsWith('.googleapis.com') || hostname === 'generativelanguage.googleapis.com') return 'Google Gemini';
@@ -259,8 +261,6 @@ function resolveProviderName(url){
   if(hostname === 'api.cohere.com' || hostname.endsWith('.cohere.com') || hostname === 'api.cohere.ai') return 'Cohere';
   if(hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai')) return 'OpenRouter';
   if(hostname === 'localhost' || hostname === '127.0.0.1'){
-    // Distinguish common local providers by port.
-    const port = (() => { try{ return new URL(url.includes('://') ? url : 'https://'+url).port; }catch(e){ return ''; } })();
     if(port === '11434') return 'Ollama';
     if(port === '1234') return 'LM Studio';
     return 'Local LLM';
