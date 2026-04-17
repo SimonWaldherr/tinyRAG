@@ -4859,7 +4859,7 @@ func maybePreferOfflineLLM(settings *settingsStore) appSettings {
 }
 
 // runWebServer registers HTTP handlers and starts the web interface.
-func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *chatStore, customAPIs *apiStore, personas *personaStore, modules *moduleStore, llmAvailable bool, llmPingErr error) {
+func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *chatStore, customAPIs *apiStore, personas *personaStore, modules *moduleStore, connectors *connectorStore, connectorExec *connectorExecutor, llmAvailable bool, llmPingErr error) {
 	mux := http.NewServeMux()
 	adminUsers := newAdminUserStore(settings)
 	apiRoutes := newAPIRouteStore(settings)
@@ -7071,6 +7071,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		json.NewEncoder(w).Encode(rule)
 	}))
 
+	// Connector system routes
+	registerConnectorRoutes(mux, connectors, connectorExec)
+
 	fmt.Printf("Web interface: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
@@ -7321,8 +7324,14 @@ func main() {
 	personas := newPersonaStore(settings)
 	chats := newChatStore(*chatsPath)
 
+	connectors, err := newConnectorStore("connectors.json")
+	if err != nil {
+		log.Fatalf("Failed to load connector store: %v", err)
+	}
+	connectorExec := newConnectorExecutor(connectors)
+
 	if *web {
-		runWebServer(rag, *addr, settings, chats, customAPIs, personas, modules, llmAvailable, llmPingErr)
+		runWebServer(rag, *addr, settings, chats, customAPIs, personas, modules, connectors, connectorExec, llmAvailable, llmPingErr)
 		return
 	}
 

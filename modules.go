@@ -238,6 +238,7 @@ const maxXMLFileSize = 20 * 1024 * 1024
 // minTextRunLength is the minimum number of consecutive printable ASCII
 // characters required to treat a run as a text fragment during PDF fallback extraction.
 const minTextRunLength = 4
+
 func allowedBinaryExtensions() map[string]bool {
 	return map[string]bool{
 		".pdf":  true,
