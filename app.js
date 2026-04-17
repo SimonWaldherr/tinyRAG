@@ -522,7 +522,16 @@ const _translations = {
     sugg_newest: 'Was ist neu?',
     sugg_newest_val: 'Welche Dokumente wurden zuletzt hinzugefügt und was ist deren Inhalt?',
     sugg_analyze: 'Analyse',
-    sugg_analyze_val: 'Hilf mir bei der Analyse der vorhandenen Daten.'
+    sugg_analyze_val: 'Hilf mir bei der Analyse der vorhandenen Daten.',
+    upload_label: 'Datei hochladen (Text, PDF, DOCX, ODT, PPTX, XLSX)',
+    folder_hint: 'Absoluter Pfad zum Ordner auf dem Server. Unterstützte Dateien: .txt, .md, .csv, .json, .xml, .html, .log, .pdf, .docx, .odt u.a.',
+    stt_listening: 'Höre zu…',
+    stt_error: 'Spracheingabe fehlgeschlagen',
+    tts_speak: 'Vorlesen',
+    tts_stop: 'Stopp',
+    attach_image: 'Bild anhängen',
+    remove_image: 'Bild entfernen',
+    vision_mode: 'Bildanalyse'
   },
   en: {
     loading: 'Loading…',
@@ -641,7 +650,16 @@ const _translations = {
     sugg_newest: 'What\'s new?',
     sugg_newest_val: 'What documents were added recently and what is their content?',
     sugg_analyze: 'Analyze',
-    sugg_analyze_val: 'Help me analyze the existing data.'
+    sugg_analyze_val: 'Help me analyze the existing data.',
+    upload_label: 'Upload file (Text, PDF, DOCX, ODT, PPTX, XLSX)',
+    folder_hint: 'Absolute path to folder on server. Supported files: .txt, .md, .csv, .json, .xml, .html, .log, .pdf, .docx, .odt, etc.',
+    stt_listening: 'Listening…',
+    stt_error: 'Voice input failed',
+    tts_speak: 'Read aloud',
+    tts_stop: 'Stop',
+    attach_image: 'Attach image',
+    remove_image: 'Remove image',
+    vision_mode: 'Image analysis'
   }
 };
 
@@ -962,6 +980,31 @@ function msgElement(role, content, timeIso, model, modelMeta, thinking){
       copyToClipboard(raw, copyBtn);
     });
     actions.appendChild(copyBtn);
+
+    // TTS speak button
+    const speakBtn = document.createElement('button');
+    speakBtn.className = 'icon-btn speak-btn';
+    speakBtn.innerHTML = '🔊';
+    speakBtn.title = t('tts_speak') || 'Vorlesen';
+    speakBtn.addEventListener('click', () => {
+      const raw = bubble.dataset.raw || content;
+      if(speakBtn.classList.contains('speaking')){
+        stopTTS();
+        speakBtn.classList.remove('speaking');
+        speakBtn.innerHTML = '🔊';
+      } else {
+        // Stop any other active TTS first
+        $$('.speak-btn.speaking').forEach(b => {
+          b.classList.remove('speaking');
+          b.innerHTML = '🔊';
+        });
+        speakBtn.classList.add('speaking');
+        speakBtn.innerHTML = '⏹';
+        speakText(raw, ()=>{ speakBtn.classList.remove('speaking'); speakBtn.innerHTML = '🔊'; });
+      }
+    });
+    actions.appendChild(speakBtn);
+
     msg.appendChild(actions);
   }
 
@@ -2363,10 +2406,22 @@ async function executeTool(tool, query){
 
 async function askChat(){
   const q = $('#chatQ').value.trim();
-  if(!q) return;
+  if(!q && !attachedImageBase64) return;
   $('#chatQ').value = '';
   autosize($('#chatQ'));
   lastDebugData = null;
+
+  // If an image is attached, use the vision endpoint
+  if(attachedImageBase64){
+    const imageB64  = attachedImageBase64;
+    const imageMime = attachedImageMime;
+    clearAttachedImage();
+    const userLabel = q || '[Bild]';
+    addMessage('user', userLabel, new Date().toISOString());
+    await askVision(q, imageB64, imageMime);
+    return;
+  }
+
   addMessage('user', q, new Date().toISOString());
 
   // placeholder assistant msg
@@ -2689,12 +2744,199 @@ async function addText(){
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Speech-to-Text (STT) — microphone input
+// ─────────────────────────────────────────────────────────────────────────────
+
+let sttActive = false;
+let sttRecognition = null;
+let sttMediaRecorder = null;
+let sttAudioChunks = [];
+
+function startSTT(onResult, onEnd){
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(SpeechRecognition){
+    sttRecognition = new SpeechRecognition();
+    sttRecognition.continuous = false;
+    sttRecognition.interimResults = false;
+    sttRecognition.lang = uiLang === 'de' ? 'de-DE' : 'en-US';
+    sttRecognition.onresult = (e) => {
+      const text = Array.from(e.results).map(r=>r[0].transcript).join('');
+      onResult(text);
+    };
+    sttRecognition.onerror = () => { onEnd && onEnd(); };
+    sttRecognition.onend  = () => { sttActive = false; onEnd && onEnd(); };
+    sttRecognition.start();
+    sttActive = true;
+    return;
+  }
+  if(!navigator.mediaDevices){ onEnd && onEnd(); return; }
+  navigator.mediaDevices.getUserMedia({audio:true}).then(stream => {
+    sttAudioChunks = [];
+    sttMediaRecorder = new MediaRecorder(stream);
+    sttMediaRecorder.ondataavailable = e => sttAudioChunks.push(e.data);
+    sttMediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t=>t.stop());
+      const blob = new Blob(sttAudioChunks, {type:'audio/webm'});
+      const form = new FormData();
+      form.append('file', blob, 'audio.webm');
+      try{
+        const resp = await fetch('/api/stt', {method:'POST', body:form});
+        if(resp.ok){ const data = await resp.json(); if(data.text) onResult(data.text); }
+      }catch(e){ console.error('STT error', e); }
+      onEnd && onEnd();
+    };
+    sttMediaRecorder.start();
+    sttActive = true;
+  }).catch(() => { onEnd && onEnd(); });
+}
+
+function stopSTT(){
+  sttActive = false;
+  if(sttRecognition){ try{ sttRecognition.stop(); }catch(e){} sttRecognition = null; }
+  if(sttMediaRecorder && sttMediaRecorder.state !== 'inactive'){
+    try{ sttMediaRecorder.stop(); }catch(e){}
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text-to-Speech (TTS)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let ttsAudio = null;
+
+function stopTTS(){
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+  if(ttsAudio){ ttsAudio.pause(); ttsAudio.src=''; ttsAudio=null; }
+}
+
+function speakText(text, onDone){
+  const clean = text
+    .replace(/[#*_`~>|]/g,'')
+    .replace(/!\[.*?\]\(.*?\)/g,'')
+    .replace(/\[.*?\]\(.*?\)/g, m => m.replace(/\[|\]|\(.*?\)/g,''))
+    .replace(/\s+/g,' ').trim().slice(0, 4096);
+  if(window.speechSynthesis){
+    const u = new SpeechSynthesisUtterance(clean);
+    u.lang = uiLang === 'de' ? 'de-DE' : 'en-US';
+    u.onend  = () => onDone && onDone();
+    u.onerror = () => onDone && onDone();
+    window.speechSynthesis.speak(u);
+    return;
+  }
+  fetch('/api/tts', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: clean, voice:'alloy', model:'tts-1'})
+  }).then(async resp => {
+    if(!resp.ok){ onDone && onDone(); return; }
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    ttsAudio = new Audio(url);
+    ttsAudio.onended = () => { URL.revokeObjectURL(url); ttsAudio=null; onDone && onDone(); };
+    ttsAudio.onerror = () => { URL.revokeObjectURL(url); ttsAudio=null; onDone && onDone(); };
+    ttsAudio.play();
+  }).catch(() => onDone && onDone());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image attachment for multimodal / vision chat
+// ─────────────────────────────────────────────────────────────────────────────
+
+let attachedImageBase64 = '';
+let attachedImageMime   = '';
+let attachedImageName   = '';
+
+function clearAttachedImage(){
+  attachedImageBase64 = '';
+  attachedImageMime   = '';
+  attachedImageName   = '';
+  const bar = $('#imagePreviewBar');
+  if(bar) bar.style.display = 'none';
+  const inp = $('#imageAttachInput');
+  if(inp) inp.value = '';
+}
+
+function setAttachedImage(file){
+  if(!file) return;
+  attachedImageMime = file.type || 'image/jpeg';
+  attachedImageName = file.name;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    const comma = dataUrl.indexOf(',');
+    attachedImageBase64 = comma >= 0 ? dataUrl.slice(comma+1) : dataUrl;
+    const bar  = $('#imagePreviewBar');
+    const thumb = $('#imagePreviewThumb');
+    const name  = $('#imagePreviewName');
+    if(bar && thumb && name){
+      thumb.src = dataUrl;
+      name.textContent = file.name;
+      bar.style.display = 'flex';
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function askVision(question, imageBase64, mimeType){
+  addMessage('assistant', '🔄 Wird bearbeitet...', new Date().toISOString());
+  const bubbles = $$('#chatMessages .msg.assistant .bubble');
+  if(bubbles.length){
+    const b = bubbles[bubbles.length-1];
+    b.classList.add('typing');
+    b.textContent = t('assistant_typing');
+  }
+  let acc = '';
+  try{
+    const resp = await fetch('/api/vision', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({question, image_base64: imageBase64, mime_type: mimeType,
+        chat_id: currentChatId, persona_id: currentPersonaId})
+    });
+    if(!resp.ok){ replaceAssistantLast('Fehler: '+(await resp.text())); return; }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let idx;
+      while((idx = buf.indexOf('\n\n')) >= 0){
+        const raw = buf.slice(0, idx); buf = buf.slice(idx+2);
+        const lines = raw.split('\n').filter(Boolean);
+        let event = 'message', dataLines = [];
+        for(const line of lines){
+          if(line.startsWith('event:')) event = line.slice(6).trim();
+          else if(line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+        }
+        const dataStr = dataLines.join('\n');
+        if(event === 'meta'){
+          try{ const m = JSON.parse(dataStr); if(m.chat_id) currentChatId = m.chat_id; refreshChats(); }catch(e){}
+          continue;
+        }
+        if(event === 'reasoning'){
+          try{ const r = JSON.parse(dataStr); if(typeof r==='string') setAssistantLastThinking(r); }catch(e){}
+          continue;
+        }
+        if(dataStr === '[DONE]'){
+          try{
+            const msgs2 = document.querySelectorAll('#chatMessages .msg.assistant .bubble');
+            if(msgs2.length){ renderBubbleContent(msgs2[msgs2.length-1], stripInternalThinking(acc || '')); }
+          }catch(e){}
+          break;
+        }
+        try{ const tok = JSON.parse(dataStr); if(typeof tok==='string'){ acc+=tok; replaceAssistantLast(acc); } }catch(e){}
+      }
+    }
+  }catch(e){ replaceAssistantLast('Fehler: '+(e.message||String(e))); }
+}
+
 function initUpload(){
   const dz = $('#dropZone');
   const inp = $('#fileInput');
 
   dz.addEventListener('click', ()=>inp.click());
-  
+
   // Add keyboard support for drop zone
   dz.addEventListener('keydown', (e)=>{
     if(e.key === 'Enter' || e.key === ' '){
@@ -2819,6 +3061,47 @@ window.addEventListener('DOMContentLoaded', async ()=>{
 
   // Chat
   $('#chatBtn').addEventListener('click', askChat);
+
+  // STT microphone button
+  const sttBtn = $('#sttBtn');
+  if(sttBtn){
+    sttBtn.addEventListener('click', ()=>{
+      if(sttActive){
+        stopSTT();
+        sttBtn.classList.remove('recording');
+        sttBtn.setAttribute('aria-pressed','false');
+        sttBtn.textContent = '🎤';
+      } else {
+        sttBtn.classList.add('recording');
+        sttBtn.setAttribute('aria-pressed','true');
+        sttBtn.textContent = '⏹';
+        startSTT(
+          (text) => {
+            const box = $('#chatQ');
+            if(box){ box.value += (box.value ? ' ' : '') + text; autosize(box); }
+          },
+          () => {
+            sttBtn.classList.remove('recording');
+            sttBtn.setAttribute('aria-pressed','false');
+            sttBtn.textContent = '🎤';
+          }
+        );
+      }
+    });
+  }
+
+  // Image attachment button
+  const imageAttachBtn = $('#imageAttachBtn');
+  const imageAttachInput = $('#imageAttachInput');
+  if(imageAttachBtn && imageAttachInput){
+    imageAttachBtn.addEventListener('click', ()=> imageAttachInput.click());
+    imageAttachInput.addEventListener('change', (e)=>{
+      const file = e.target.files?.[0];
+      if(file) setAttachedImage(file);
+    });
+    const removeBtn = $('#imagePreviewRemove');
+    if(removeBtn) removeBtn.addEventListener('click', clearAttachedImage);
+  }
   const personaSelect = $('#personaSelect');
   if(personaSelect){
     personaSelect.addEventListener('change', (e)=>{

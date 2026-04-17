@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -361,6 +362,9 @@ func defaultAPIRouteRules() []apiRouteRule {
 	return []apiRouteRule{
 		{Path: "/api/process", MatchType: "exact", Description: "Structured processing endpoint", Enabled: true, Public: true},
 		{Path: "/api/ask", MatchType: "exact", Description: "Chat SSE endpoint", Enabled: true, Public: true},
+		{Path: "/api/vision", MatchType: "exact", Description: "Multimodal vision chat (SSE)", Enabled: true, Public: true},
+		{Path: "/api/stt", MatchType: "exact", Description: "Speech-to-text (Whisper proxy)", Enabled: true, Public: true},
+		{Path: "/api/tts", MatchType: "exact", Description: "Text-to-speech proxy", Enabled: true, Public: true},
 		{Path: "/api/search", MatchType: "exact", Description: "Semantic search", Enabled: true, Public: true},
 		{Path: "/api/tool/execute", MatchType: "exact", Description: "Execute one tool manually", Enabled: true, Public: true},
 		{Path: "/api/add-wiki", MatchType: "exact", Description: "Ingest from Wikipedia", Enabled: true, Public: true},
@@ -1253,6 +1257,7 @@ type lmProvider interface {
 	embedSingle(text string) ([]float64, error)
 	chatStream(ctx context.Context, system string, msgs []chatMsg, w io.Writer) error
 	chatStreamDetailed(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error
+	chatStreamVision(ctx context.Context, system string, msgs []visionMsg, w io.Writer, thinkW io.Writer) error
 }
 
 // compositeLM allows routing embeddings and chat to different backends.
@@ -1272,6 +1277,10 @@ func (c *compositeLM) chatStream(ctx context.Context, system string, msgs []chat
 }
 func (c *compositeLM) chatStreamDetailed(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error {
 	return c.chatClient.chatStreamDetailed(ctx, system, msgs, w, thinkW)
+}
+
+func (c *compositeLM) chatStreamVision(ctx context.Context, system string, msgs []visionMsg, w io.Writer, thinkW io.Writer) error {
+	return c.chatClient.chatStreamVision(ctx, system, msgs, w, thinkW)
 }
 
 // newLMClient constructs an `lmClient` configured for the given
@@ -1428,6 +1437,106 @@ type chatReq struct {
 type chatMsg struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+// visionContentPart represents a single part of a multimodal message
+// (either plain text or an image URL / base64 data URI).
+type visionContentPart struct {
+	Type     string            `json:"type"`               // "text" or "image_url"
+	Text     string            `json:"text,omitempty"`     // set when Type=="text"
+	ImageURL *visionImageURL   `json:"image_url,omitempty"` // set when Type=="image_url"
+}
+
+type visionImageURL struct {
+	URL    string `json:"url"`              // data URI or https URL
+	Detail string `json:"detail,omitempty"` // "auto", "low", "high"
+}
+
+// visionMsg is a chat message whose content is a slice of content parts,
+// enabling multimodal (vision) requests.
+type visionMsg struct {
+	Role    string              `json:"role"`
+	Content []visionContentPart `json:"content"`
+}
+
+// visionReq is the request body sent to the chat completions endpoint for
+// multimodal (vision) conversations.
+type visionReq struct {
+	Model    string      `json:"model"`
+	Messages []visionMsg `json:"messages"`
+	Stream   bool        `json:"stream"`
+}
+
+// chatStreamVision sends a vision request to the LLM and streams the
+// response tokens to w (thinking tokens to thinkW if non-nil).
+func (c *lmClient) chatStreamVision(ctx context.Context, system string, msgs []visionMsg, w io.Writer, thinkW io.Writer) error {
+	all := make([]visionMsg, 0, len(msgs)+1)
+	// Prepend system message as plain text visionMsg.
+	all = append(all, visionMsg{
+		Role: "system",
+		Content: []visionContentPart{
+			{Type: "text", Text: system},
+		},
+	})
+	all = append(all, msgs...)
+	body, err := json.Marshal(visionReq{Model: c.chatModel, Messages: all, Stream: true})
+	if err != nil {
+		return fmt.Errorf("failed to marshal vision request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create vision HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("vision request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("vision HTTP %d: %s", resp.StatusCode, string(raw))
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	var pending string
+	inThink := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
+			tok := chunk.Choices[0].Delta.Content
+			if tok != "" {
+				if err := streamSplitThinkingChunk(tok, &pending, &inThink, w, thinkW); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if pending != "" {
+		if inThink && thinkW != nil {
+			writeStreamChunk(thinkW, pending)
+		} else {
+			writeStreamChunk(w, pending)
+		}
+	}
+	return scanner.Err()
 }
 
 func writeStreamChunk(w io.Writer, s string) error {
@@ -6133,13 +6242,14 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		lower := strings.ToLower(filename)
 		s := settings.get()
 		roleScopes := normalizeRoleScopes(parseRoleCSV(r.FormValue("roles")), s.ActiveRole)
-		allowedExts := map[string]bool{
-			".txt": true, ".md": true, ".csv": true, ".json": true,
-			".xml": true, ".html": true, ".log": true, ".htm": true,
-			".yaml": true, ".yml": true, ".toml": true, ".ini": true,
-			".cfg": true, ".conf": true, ".sql": true, ".go": true,
-			".py": true, ".js": true, ".ts": true, ".rs": true,
-			".c": true, ".h": true, ".cpp": true, ".java": true,
+
+		// Merge plain-text and binary document extensions into one allowed set.
+		allowedExts := make(map[string]bool)
+		for k, v := range allowedTextExtensions() {
+			allowedExts[k] = v
+		}
+		for k, v := range allowedBinaryExtensions() {
+			allowedExts[k] = v
 		}
 
 		var totalFiles, totalChars, totalChunks int
@@ -6193,8 +6303,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 					if len(content) == 0 {
 						continue
 					}
+					text, err := extractTextFromFile(content, f.Name)
+					if err != nil {
+						errorsList = append(errorsList, f.Name+": "+err.Error())
+						continue
+					}
 					src := "upload:" + filename + ":" + f.Name
-					chunks, _ := chunksForIngest(string(content), s)
+					chunks, _ := chunksForIngest(text, s)
 					if err := rag.addChunksWithRoles(src, chunks, em, roleScopes); err != nil {
 						errorsList = append(errorsList, f.Name+": "+err.Error())
 						continue
@@ -6243,8 +6358,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 						errorsList = append(errorsList, hdr.Name+": "+err.Error())
 						continue
 					}
+					text, err := extractTextFromFile(content, hdr.Name)
+					if err != nil {
+						errorsList = append(errorsList, hdr.Name+": "+err.Error())
+						continue
+					}
 					src := "upload:" + filename + ":" + hdr.Name
-					chunks, _ := chunksForIngest(string(content), s)
+					chunks, _ := chunksForIngest(text, s)
 					if err := rag.addChunksWithRoles(src, chunks, em, roleScopes); err != nil {
 						errorsList = append(errorsList, hdr.Name+": "+err.Error())
 						continue
@@ -6268,7 +6388,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		// regular single-file upload
-		text := string(data)
+		text, err := extractTextFromFile(data, filename)
+		if err != nil {
+			http.Error(w, "could not extract text: "+err.Error(), 400)
+			return
+		}
 		title := filepath.Base(header.Filename)
 		chunks, redactions := chunksForIngest(text, s)
 		if err := rag.addChunksWithRoles(title, chunks, em, roleScopes); err != nil {
@@ -6284,6 +6408,302 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"redactions": redactions,
 			"roles":      roleScopes,
 		})
+	}))
+
+
+	// POST /api/stt — Speech-to-Text proxy (Whisper)
+	// Accepts a multipart/form-data request with a "file" audio field.
+	// Forwards to the OpenAI /v1/audio/transcriptions endpoint and returns
+	// {"text": "<transcription>"} as JSON.
+	mux.HandleFunc("/api/stt", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		s := settings.get()
+		apiKey := s.OpenAIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+		chatBase := s.ChatBase
+		if chatBase == "" {
+			chatBase = s.BaseURL
+		}
+		base := normalizeBaseURL(chatBase)
+
+		r.ParseMultipartForm(25 << 20)
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing audio file: "+err.Error(), 400)
+			return
+		}
+		defer file.Close()
+
+		model := r.FormValue("model")
+		if model == "" {
+			model = "whisper-1"
+		}
+
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, err := mw.CreateFormFile("file", header.Filename)
+		if err != nil {
+			http.Error(w, "internal: "+err.Error(), 500)
+			return
+		}
+		if _, err := io.Copy(fw, file); err != nil {
+			http.Error(w, "internal: "+err.Error(), 500)
+			return
+		}
+		mw.WriteField("model", model)
+		mw.WriteField("response_format", "json")
+		mw.Close()
+
+		req, err := http.NewRequestWithContext(r.Context(), "POST", base+"/v1/audio/transcriptions", &buf)
+		if err != nil {
+			http.Error(w, "internal: "+err.Error(), 500)
+			return
+		}
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		hc := newHTTPClient(60 * time.Second)
+		resp, err := hc.Do(req)
+		if err != nil {
+			http.Error(w, "STT request failed: "+err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 {
+			http.Error(w, fmt.Sprintf("STT error %d: %s", resp.StatusCode, string(raw)), 502)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(raw)
+	}))
+
+	// POST /api/tts — Text-to-Speech proxy
+	// Accepts JSON {"text":"...", "voice":"alloy", "model":"tts-1"} and
+	// streams back the audio produced by the configured TTS endpoint.
+	mux.HandleFunc("/api/tts", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		s := settings.get()
+		apiKey := s.OpenAIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+		chatBase := s.ChatBase
+		if chatBase == "" {
+			chatBase = s.BaseURL
+		}
+		base := normalizeBaseURL(chatBase)
+
+		var body struct {
+			Text   string `json:"text"`
+			Voice  string `json:"voice"`
+			Model  string `json:"model"`
+			Format string `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
+			http.Error(w, "missing text", 400)
+			return
+		}
+		if body.Voice == "" {
+			body.Voice = "alloy"
+		}
+		if body.Model == "" {
+			body.Model = "tts-1"
+		}
+		if body.Format == "" {
+			body.Format = "mp3"
+		}
+		payload, _ := json.Marshal(map[string]string{
+			"model":           body.Model,
+			"input":           body.Text,
+			"voice":           body.Voice,
+			"response_format": body.Format,
+		})
+		req, err := http.NewRequestWithContext(r.Context(), "POST", base+"/v1/audio/speech", bytes.NewReader(payload))
+		if err != nil {
+			http.Error(w, "internal: "+err.Error(), 500)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		hc := newHTTPClient(60 * time.Second)
+		resp, err := hc.Do(req)
+		if err != nil {
+			http.Error(w, "TTS request failed: "+err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			raw, _ := io.ReadAll(resp.Body)
+			http.Error(w, fmt.Sprintf("TTS error %d: %s", resp.StatusCode, string(raw)), 502)
+			return
+		}
+		ct := resp.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "audio/mpeg"
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "no-store")
+		io.Copy(w, resp.Body)
+	}))
+
+	// POST /api/vision — Multimodal vision chat (SSE streaming)
+	// Accepts JSON {"question":"...","image_base64":"...","mime_type":"image/jpeg",
+	// "chat_id":"...","persona_id":""} and streams LLM tokens via SSE.
+	mux.HandleFunc("/api/vision", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Question    string `json:"question"`
+			ImageBase64 string `json:"image_base64"`
+			MimeType    string `json:"mime_type"`
+			ChatID      string `json:"chat_id"`
+			Debug       bool   `json:"debug"`
+			PersonaID   string `json:"persona_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		if strings.TrimSpace(req.Question) == "" && strings.TrimSpace(req.ImageBase64) == "" {
+			http.Error(w, "missing question or image", 400)
+			return
+		}
+		if req.MimeType == "" {
+			req.MimeType = "image/jpeg"
+		}
+
+		s := settings.get()
+		var conv *conversation
+		if req.ChatID != "" {
+			conv = chats.get(req.ChatID)
+		}
+		personaID := strings.TrimSpace(req.PersonaID)
+		if conv != nil && personaID == "" {
+			personaID = conv.Persona
+		}
+		if personaID == "" {
+			personaID = personas.defaultID()
+		}
+		if conv == nil {
+			conv = chats.create("", personaID)
+		}
+		userText := req.Question
+		if userText == "" {
+			userText = "[image]"
+		}
+		chats.addMessage(conv.ID, "user", userText)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", 500)
+			return
+		}
+
+		reqID := newRequestID()
+		personaPrompt := ""
+		personaName := ""
+		if personaID != "" {
+			if per, ok := personas.get(personaID); ok {
+				personaPrompt = per.Prompt
+				personaName = per.Name
+			}
+		}
+
+		// Optionally enrich the prompt with RAG context if a question was given.
+		var ctxText string
+		if strings.TrimSpace(req.Question) != "" {
+			ctxText, _, _ = rag.prepareContext(req.Question, false)
+		}
+		systemPrompt := buildToolSystemPrompt(ctxText, nil, false, s)
+		if personaPrompt != "" {
+			systemPrompt = personaPrompt + "\n\n" + systemPrompt
+		}
+
+		textContent := req.Question
+		if ctxText != "" {
+			textContent = "Kontext:\n" + ctxText + "\n\nFrage: " + req.Question
+		}
+
+		var parts []visionContentPart
+		if textContent != "" {
+			parts = append(parts, visionContentPart{Type: "text", Text: textContent})
+		}
+		if req.ImageBase64 != "" {
+			dataURI := "data:" + req.MimeType + ";base64," + req.ImageBase64
+			parts = append(parts, visionContentPart{
+				Type:     "image_url",
+				ImageURL: &visionImageURL{URL: dataURI, Detail: "auto"},
+			})
+		}
+
+		msgs := []visionMsg{{Role: "user", Content: parts}}
+
+		meta, _ := json.Marshal(map[string]any{
+			"chat_id":      conv.ID,
+			"request_id":   reqID,
+			"mode":         "vision",
+			"persona_id":   personaID,
+			"persona_name": personaName,
+			"active_role":  s.ActiveRole,
+			"models":       map[string]string{"chat_model": s.ChatModel},
+		})
+		fmt.Fprintf(w, "event: meta\ndata: %s\n\n", meta)
+		flusher.Flush()
+
+		log.Printf("VISION[%s] chat=%s q=%q", reqID, conv.ID, req.Question)
+
+		pr, pw := io.Pipe()
+		var thinkBuf bytes.Buffer
+		go func() {
+			err := rag.getLM().chatStreamVision(r.Context(), systemPrompt, msgs, pw, &thinkBuf)
+			if err != nil {
+				pw.CloseWithError(err)
+			} else {
+				pw.Close()
+			}
+		}()
+
+		sc := bufio.NewScanner(pr)
+		sc.Split(bufio.ScanRunes)
+		var answer strings.Builder
+		for sc.Scan() {
+			tok := sc.Text()
+			answer.WriteString(tok)
+			fmt.Fprintf(w, "data: %s\n\n", mustJSON(tok))
+			flusher.Flush()
+		}
+		if scErr := sc.Err(); scErr != nil {
+			log.Printf("VISION[%s] scanner error: %v", reqID, scErr)
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+
+		answerStr := stripInternalThinking(answer.String())
+		thinkingStr := strings.TrimSpace(thinkBuf.String())
+		if thinkingStr != "" {
+			fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", mustJSON(thinkingStr))
+			flusher.Flush()
+		}
+		modelMeta := map[string]string{"chat_model": s.ChatModel}
+		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, thinkingStr, s.ChatModel, modelMeta)
+		log.Printf("VISION[%s] complete: %d chars", reqID, len(answerStr))
 	}))
 
 	// GET /api/stats
