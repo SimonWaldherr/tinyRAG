@@ -231,8 +231,13 @@ func allowedTextExtensions() map[string]bool {
 	}
 }
 
-// allowedBinaryExtensions returns the set of binary document formats that
-// tinyRAG can extract text from (PDF, Office formats, etc.).
+// maxXMLFileSize is the maximum number of bytes read from a single XML entry
+// inside an Office document ZIP archive.
+const maxXMLFileSize = 20 * 1024 * 1024
+
+// minTextRunLength is the minimum number of consecutive printable ASCII
+// characters required to treat a run as a text fragment during PDF fallback extraction.
+const minTextRunLength = 4
 func allowedBinaryExtensions() map[string]bool {
 	return map[string]bool{
 		".pdf":  true,
@@ -262,8 +267,8 @@ func stripXMLTags(s string) string {
 		}
 	}
 	// Normalise runs of whitespace
-	re := strings.NewReplacer("\r\n", "\n", "\r", "\n")
-	out := re.Replace(b.String())
+	whitespaceReplacer := strings.NewReplacer("\r\n", "\n", "\r", "\n")
+	out := whitespaceReplacer.Replace(b.String())
 	// Collapse repeated blank lines
 	var lines []string
 	for _, l := range strings.Split(out, "\n") {
@@ -293,7 +298,7 @@ func extractXMLFromZip(data []byte, paths ...string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		raw, err := io.ReadAll(io.LimitReader(rc, 20*1024*1024))
+		raw, err := io.ReadAll(io.LimitReader(rc, maxXMLFileSize))
 		rc.Close()
 		if err != nil {
 			return "", err
@@ -335,7 +340,7 @@ func extractTextFromPDF(data []byte) (string, error) {
 	var sb strings.Builder
 	run := make([]byte, 0, 64)
 	flush := func() {
-		if len(run) >= 4 {
+		if len(run) >= minTextRunLength {
 			sb.Write(run)
 			sb.WriteByte('\n')
 		}

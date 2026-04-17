@@ -2,6 +2,9 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+// Maximum characters passed to the TTS endpoint to avoid overly long audio.
+const MAX_TTS_LENGTH = 4096;
+
 // ---------------------------------------------------------------------------
 // Utility helpers
 // - Keep small, well-tested helpers near the top for quick inspection.
@@ -531,7 +534,10 @@ const _translations = {
     tts_stop: 'Stopp',
     attach_image: 'Bild anhängen',
     remove_image: 'Bild entfernen',
-    vision_mode: 'Bildanalyse'
+    vision_mode: 'Bildanalyse',
+    image_label: '[Bild]',
+    processing: 'Wird bearbeitet…',
+    error: 'Fehler'
   },
   en: {
     loading: 'Loading…',
@@ -659,7 +665,10 @@ const _translations = {
     tts_stop: 'Stop',
     attach_image: 'Attach image',
     remove_image: 'Remove image',
-    vision_mode: 'Image analysis'
+    vision_mode: 'Image analysis',
+    image_label: '[image]',
+    processing: 'Processing…',
+    error: 'Error'
   }
 };
 
@@ -2416,7 +2425,7 @@ async function askChat(){
     const imageB64  = attachedImageBase64;
     const imageMime = attachedImageMime;
     clearAttachedImage();
-    const userLabel = q || '[Bild]';
+    const userLabel = q || t('image_label');
     addMessage('user', userLabel, new Date().toISOString());
     await askVision(q, imageB64, imageMime);
     return;
@@ -2425,7 +2434,7 @@ async function askChat(){
   addMessage('user', q, new Date().toISOString());
 
   // placeholder assistant msg
-  addMessage('assistant', '🔄 Wird bearbeitet...', new Date().toISOString());
+  addMessage('assistant', '🔄 ' + t('processing'), new Date().toISOString());
   // mark last assistant bubble as typing
   try{
     const bubbles = $$('#chatMessages .msg.assistant .bubble');
@@ -2815,7 +2824,7 @@ function speakText(text, onDone){
     .replace(/[#*_`~>|]/g,'')
     .replace(/!\[.*?\]\(.*?\)/g,'')
     .replace(/\[.*?\]\(.*?\)/g, m => m.replace(/\[|\]|\(.*?\)/g,''))
-    .replace(/\s+/g,' ').trim().slice(0, 4096);
+    .replace(/\s+/g,' ').trim().slice(0, MAX_TTS_LENGTH);
   if(window.speechSynthesis){
     const u = new SpeechSynthesisUtterance(clean);
     u.lang = uiLang === 'de' ? 'de-DE' : 'en-US';
@@ -2878,7 +2887,7 @@ function setAttachedImage(file){
 }
 
 async function askVision(question, imageBase64, mimeType){
-  addMessage('assistant', '🔄 Wird bearbeitet...', new Date().toISOString());
+  addMessage('assistant', '🔄 ' + t('processing'), new Date().toISOString());
   const bubbles = $$('#chatMessages .msg.assistant .bubble');
   if(bubbles.length){
     const b = bubbles[bubbles.length-1];
@@ -2892,7 +2901,7 @@ async function askVision(question, imageBase64, mimeType){
       body: JSON.stringify({question, image_base64: imageBase64, mime_type: mimeType,
         chat_id: currentChatId, persona_id: currentPersonaId})
     });
-    if(!resp.ok){ replaceAssistantLast('Fehler: '+(await resp.text())); return; }
+    if(!resp.ok){ replaceAssistantLast(t('error')+': '+(await resp.text())); return; }
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -2928,7 +2937,7 @@ async function askVision(question, imageBase64, mimeType){
         try{ const tok = JSON.parse(dataStr); if(typeof tok==='string'){ acc+=tok; replaceAssistantLast(acc); } }catch(e){}
       }
     }
-  }catch(e){ replaceAssistantLast('Fehler: '+(e.message||String(e))); }
+  }catch(e){ replaceAssistantLast(t('error')+': '+(e.message||String(e))); }
 }
 
 function initUpload(){

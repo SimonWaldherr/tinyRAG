@@ -1442,9 +1442,9 @@ type chatMsg struct {
 // visionContentPart represents a single part of a multimodal message
 // (either plain text or an image URL / base64 data URI).
 type visionContentPart struct {
-	Type     string            `json:"type"`               // "text" or "image_url"
-	Text     string            `json:"text,omitempty"`     // set when Type=="text"
-	ImageURL *visionImageURL   `json:"image_url,omitempty"` // set when Type=="image_url"
+	Type     string          `json:"type"`                // "text" or "image_url"
+	Text     string          `json:"text,omitempty"`      // set when Type=="text"
+	ImageURL *visionImageURL `json:"image_url,omitempty"` // set when Type=="image_url"
 }
 
 type visionImageURL struct {
@@ -6409,7 +6409,6 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"roles":      roleScopes,
 		})
 	}))
-
 
 	// POST /api/stt — Speech-to-Text proxy (Whisper)
 	// Accepts a multipart/form-data request with a "file" audio field.
