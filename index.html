@@ -123,7 +123,16 @@
           <span data-i18n="offline_mode">Offline</span>
         </label>
       </div>
+      <!-- Image attachment preview (hidden until an image is selected) -->
+      <div id="imagePreviewBar" class="image-preview-bar" style="display:none" aria-live="polite">
+        <img id="imagePreviewThumb" class="image-preview-thumb" src="" alt="Attached image preview">
+        <span id="imagePreviewName" class="image-preview-name"></span>
+        <button id="imagePreviewRemove" class="image-preview-remove" aria-label="Remove attached image">✕</button>
+      </div>
       <div class="chat-input-wrapper">
+        <button id="sttBtn" class="chat-icon-btn" aria-label="Record voice input" title="Spracheingabe" aria-pressed="false">🎤</button>
+        <button id="imageAttachBtn" class="chat-icon-btn" aria-label="Attach image for vision" title="Bild anhängen">🖼</button>
+        <input type="file" id="imageAttachInput" accept="image/*" style="display:none" aria-hidden="true">
         <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
         <button id="chatBtn" aria-label="Send message"><span data-i18n="send">Senden</span></button>
       </div>
@@ -214,7 +223,7 @@
       <label for="fileInput" data-i18n="upload_label">Textdatei hochladen</label>
       <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop zone for file upload">
         <p data-i18n="drop_zone_text">Datei hierher ziehen oder klicken</p>
-        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log" aria-label="File input">
+        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.pdf,.docx,.odt,.pptx,.xlsx" aria-label="File input">
       </div>
       <div id="uploadStatus" role="status" aria-live="polite"></div>
     </div>
