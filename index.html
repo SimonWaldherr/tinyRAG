@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <title>tinyRAG</title>
+  <title id="pageTitle">tinyRAG</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <style id="customCSS"></style>
 </head>
 <body data-theme="dark">
 
@@ -19,7 +20,10 @@
 <!-- Sidebar -->
 <aside class="sidebar" id="appSidebar" role="complementary" aria-label="Sidebar navigation">
   <div class="sidebar-header">
-    <h1>tinyRAG</h1>
+    <div class="sidebar-brand">
+      <img id="appLogoImg" class="app-logo" src="" alt="" style="display:none">
+      <h1 id="appNameHeading">tinyRAG</h1>
+    </div>
     <div class="sub" aria-live="polite"><span id="chunkCount" aria-label="Number of chunks">-</span> <span data-i18n="chunks_in_knowledge_base">Chunks in der Wissensbasis</span></div>
     <button class="new-chat-btn" id="newChatBtn" aria-label="Start new chat"><span data-i18n="new_chat">+ Neuer Chat</span></button>
   </div>
@@ -31,6 +35,11 @@
 
   <div id="sidebar-chats" class="sidebar-list" role="tabpanel" aria-labelledby="tab-chats"></div>
   <div id="sidebar-sources" class="sidebar-list" style="display:none" role="tabpanel" aria-labelledby="tab-sources"></div>
+  <!-- User session / logout bar (visible only when web UI auth is enabled) -->
+  <div id="userBar" class="user-bar" style="display:none" aria-label="User session">
+    <span id="userBarName" class="user-bar-name"></span>
+    <button id="logoutBtn" class="user-bar-logout" aria-label="Sign out">Sign out</button>
+  </div>
 </aside>
 
 <!-- Main -->
@@ -72,6 +81,11 @@
         <option value="openai">ChatGPT (OpenAI)</option>
         <option value="lmstudio">LM Studio (local)</option>
         <option value="ollama">Ollama (local)</option>
+        <option value="groq">Groq</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="mistral">Mistral AI</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="openrouter">OpenRouter</option>
         <option value="custom">Custom...</option>
       </select>
     </label>
@@ -223,7 +237,8 @@
       <label for="fileInput" data-i18n="upload_label">Textdatei hochladen</label>
       <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop zone for file upload">
         <p data-i18n="drop_zone_text">Datei hierher ziehen oder klicken</p>
-        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.pdf,.docx,.odt,.pptx,.xlsx" aria-label="File input">
+        <p class="hint upload-format-hint">Text: .txt .md .csv .json .xml .html .log .pdf .docx .odt u.a. — Bilder (Vision-Modell erforderlich): .jpg .png .gif .webp</p>
+        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.htm,.yaml,.yml,.toml,.ini,.cfg,.conf,.sql,.go,.py,.js,.ts,.rs,.c,.h,.cpp,.java,.pdf,.docx,.odt,.pptx,.xlsx,.jpg,.jpeg,.png,.gif,.webp" aria-label="File input">
       </div>
       <div id="uploadStatus" role="status" aria-live="polite"></div>
     </div>
@@ -270,6 +285,8 @@
       <button class="settings-tab" data-settings-tab="modules" role="tab" aria-selected="false" aria-controls="settings-modules" id="stab-modules"><span data-i18n="modules">Module</span></button>
       <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas"><span data-i18n="personas">Personas</span></button>
       <button class="settings-tab" data-settings-tab="admin" role="tab" aria-selected="false" aria-controls="settings-admin" id="stab-admin"><span>Admin</span></button>
+      <button class="settings-tab" data-settings-tab="branding" role="tab" aria-selected="false" aria-controls="settings-branding" id="stab-branding"><span>Branding</span></button>
+      <button class="settings-tab" data-settings-tab="auth" role="tab" aria-selected="false" aria-controls="settings-auth" id="stab-auth"><span>Auth &amp; Security</span></button>
     </div>
 
     <!-- Tab: General -->
@@ -484,6 +501,118 @@
       <h3 style="margin-top:24px">API-Routen</h3>
       <p class="hint">`Enabled` sperrt eine Route komplett. `Public` erlaubt Aufrufe ohne API-Key. Standardmaessig bleiben bestehende UI-Routen offen.</p>
       <div id="adminRouteList" class="api-list" role="list" aria-label="API route list"><p class="muted">Lade…</p></div>
+    </div>
+
+    <!-- Tab: Branding (white-label) -->
+    <div id="settings-branding" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-branding">
+      <h3>White-Label / Branding</h3>
+      <p class="hint">Customize the application name, logo, and appearance for your organization.</p>
+
+      <label for="brandAppName">Application Name</label>
+      <input id="brandAppName" type="text" placeholder="tinyRAG" aria-label="Application name">
+
+      <label for="brandLogoURL">Logo URL</label>
+      <input id="brandLogoURL" type="text" placeholder="https://... or data:image/..." aria-label="Logo URL">
+      <p class="hint">Absolute URL or base64 data URI of your logo image. Displayed in the sidebar.</p>
+
+      <label for="brandCustomCSS">Custom CSS</label>
+      <textarea id="brandCustomCSS" rows="6" placeholder=":root { --accent: #e74c3c; }" aria-label="Custom CSS" style="font-family:monospace;font-size:.85rem"></textarea>
+      <p class="hint">CSS injected into every page. Use CSS custom properties to override colours.</p>
+
+      <div class="actions-row" style="margin-top:14px">
+        <button class="btn-primary" id="btnSaveBranding" aria-label="Save branding">Speichern</button>
+        <div class="tool-status" id="brandingStatus"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Auth & Security -->
+    <div id="settings-auth" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-auth">
+      <h3>Web UI Authentication</h3>
+      <p class="hint">
+        When enabled, users must log in to access the interface. Disable for single-user or local-only deployments.
+      </p>
+      <label class="inline-check" for="authEnabled">
+        <input type="checkbox" id="authEnabled">
+        <span>Enable Web UI Login</span>
+      </label>
+
+      <label for="authSessionTTL" style="margin-top:12px">Session Lifetime (seconds)</label>
+      <input id="authSessionTTL" type="number" min="300" value="86400" aria-label="Session TTL in seconds">
+
+      <div class="actions-row" style="margin-top:14px">
+        <button class="btn-primary" id="btnSaveAuth" aria-label="Save auth settings">Speichern</button>
+        <div class="tool-status" id="authStatus"></div>
+      </div>
+
+      <hr style="margin:20px 0;border-color:var(--border)">
+      <h3>Web UI Users</h3>
+      <p class="hint">Local login accounts. LDAP users are authenticated via LDAP and are not listed here.</p>
+      <div id="webUserList" class="api-list" role="list" aria-label="Web UI user list"><p class="muted">Lade…</p></div>
+
+      <h4 style="margin-top:16px">New User</h4>
+      <label for="newWebUserName">Username</label>
+      <input id="newWebUserName" type="text" placeholder="alice" aria-label="Username">
+      <label for="newWebUserPass">Password (min. 8 characters)</label>
+      <input id="newWebUserPass" type="password" placeholder="••••••••" aria-label="Password">
+      <label for="newWebUserRole">Role</label>
+      <select id="newWebUserRole" aria-label="User role">
+        <option value="viewer">Viewer</option>
+        <option value="admin">Admin</option>
+      </select>
+      <div class="actions-row" style="margin-top:10px">
+        <button class="btn-primary" id="btnAddWebUser" aria-label="Create web UI user">User anlegen</button>
+        <div class="tool-status" id="webUserStatus"></div>
+      </div>
+
+      <hr style="margin:20px 0;border-color:var(--border)">
+      <h3>LDAP / Active Directory (optional)</h3>
+      <p class="hint">When enabled, users not found in the local list can authenticate via LDAP. Local accounts take precedence.</p>
+      <label class="inline-check" for="ldapEnabled">
+        <input type="checkbox" id="ldapEnabled">
+        <span>Enable LDAP Authentication</span>
+      </label>
+
+      <div id="ldapFields" style="margin-top:14px">
+        <label for="ldapServer">Server (hostname or IP)</label>
+        <input id="ldapServer" type="text" placeholder="ldap.example.com" aria-label="LDAP server">
+
+        <label for="ldapPort">Port</label>
+        <input id="ldapPort" type="number" value="389" min="1" max="65535" aria-label="LDAP port">
+
+        <label class="inline-check" for="ldapUseTLS" style="margin:8px 0">
+          <input type="checkbox" id="ldapUseTLS">
+          <span>Use LDAPS (TLS)</span>
+        </label>
+        <label class="inline-check" for="ldapStartTLS" style="margin:8px 0">
+          <input type="checkbox" id="ldapStartTLS">
+          <span>Use STARTTLS</span>
+        </label>
+
+        <label for="ldapBaseDN">Base DN</label>
+        <input id="ldapBaseDN" type="text" placeholder="dc=example,dc=com" aria-label="LDAP base DN">
+
+        <label for="ldapBindDN">Service Account DN (for user search)</label>
+        <input id="ldapBindDN" type="text" placeholder="cn=service,dc=example,dc=com" aria-label="LDAP bind DN">
+
+        <label for="ldapBindPass">Service Account Password</label>
+        <input id="ldapBindPass" type="password" placeholder="leave blank to keep current" aria-label="LDAP bind password">
+
+        <label for="ldapUserAttr">Username Attribute</label>
+        <input id="ldapUserAttr" type="text" placeholder="uid" value="uid" aria-label="LDAP username attribute">
+        <p class="hint">Use <code>uid</code> for POSIX LDAP, <code>sAMAccountName</code> for Active Directory.</p>
+
+        <label for="ldapFilter">Additional Search Filter (optional)</label>
+        <input id="ldapFilter" type="text" placeholder="(memberOf=cn=rag-users,...)" aria-label="LDAP extra filter">
+
+        <label for="ldapAdminGroup">Admin Group DN (optional)</label>
+        <input id="ldapAdminGroup" type="text" placeholder="cn=rag-admins,ou=groups,dc=example,dc=com" aria-label="LDAP admin group DN">
+        <p class="hint">Members of this group receive the <em>admin</em> role; all other LDAP users get <em>viewer</em>.</p>
+      </div>
+
+      <div class="actions-row" style="margin-top:14px">
+        <button class="btn-primary" id="btnSaveLDAP" aria-label="Save LDAP settings">LDAP Speichern</button>
+        <div class="tool-status" id="ldapStatus"></div>
+      </div>
     </div>
 
   </div>

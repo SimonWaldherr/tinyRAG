@@ -10,6 +10,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -36,6 +38,8 @@ import (
 	_ "embed"
 
 	tinysql "github.com/SimonWaldherr/tinySQL"
+	ldap "github.com/go-ldap/ldap/v3"
+	bcrypt "golang.org/x/crypto/bcrypt"
 	nanogo "simonwaldherr.de/go/nanogo/interp"
 	smallr "simonwaldherr.de/go/smallr"
 )
@@ -67,6 +71,75 @@ var styleCSS string
 
 //go:embed app.js
 var appJS string
+
+// loginPageHTML is a minimal self-contained login page served at /login.
+// Two %s placeholders: (1) page title / (2) app name shown as heading.
+const loginPageHTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>%s – Login</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
+    .card{background:#fff;border-radius:12px;padding:40px 36px;width:100%%;max-width:360px;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+    h1{font-size:1.4rem;font-weight:700;margin-bottom:6px;color:#111}
+    .subtitle{color:#666;font-size:.9rem;margin-bottom:28px}
+    label{display:block;font-size:.85rem;font-weight:500;margin-bottom:4px;color:#444}
+    input{width:100%%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:.95rem;outline:none;transition:border-color .15s}
+    input:focus{border-color:#6366f1}
+    .field{margin-bottom:18px}
+    button{width:100%%;padding:11px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:opacity .15s}
+    button:hover{opacity:.88}
+    #err{color:#dc2626;font-size:.85rem;margin-top:12px;display:none}
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>%s</h1>
+  <p class="subtitle">Sign in to continue</p>
+  <form id="loginForm">
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit">Sign in</button>
+    <p id="err"></p>
+  </form>
+</div>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('err');
+  errEl.style.display = 'none';
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password})
+    });
+    if (res.ok) {
+      const params = new URLSearchParams(window.location.search);
+      window.location.href = params.get('next') || '/';
+    } else {
+      errEl.textContent = 'Invalid username or password.';
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.textContent = 'Network error. Please try again.';
+    errEl.style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>`
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings (persisted as JSON)
@@ -117,6 +190,47 @@ type appSettings struct {
 	// AllowTinyGo enables compilation and execution of TinyGo programs.
 	// Default: false for security reasons.
 	AllowTinyGo bool `json:"allow_tinygo"`
+
+	// ── Branding (white-label) ────────────────────────────────────────────────
+	// AppName replaces "tinyRAG" throughout the UI. Empty → "tinyRAG".
+	AppName string `json:"app_name"`
+	// AppLogoURL is shown in the sidebar header. Can be an absolute URL or a
+	// base64 data-URI. Empty → default tinyRAG wordmark.
+	AppLogoURL string `json:"app_logo_url"`
+	// CustomCSS is injected verbatim into <style> at page load.
+	CustomCSS string `json:"custom_css"`
+
+	// ── Web-UI authentication (optional) ─────────────────────────────────────
+	// WebUIAuth enables the login screen. When false (default) the UI is
+	// accessible without credentials (single-user / local mode).
+	WebUIAuth bool `json:"web_ui_auth"`
+	// WebUIUsers is the list of local login accounts. Each user has a
+	// username, salted-SHA256 password hash, and a role ("admin"/"viewer").
+	WebUIUsers []webUIUser `json:"web_ui_users"`
+	// SessionTTLSeconds is the lifetime of a session cookie. Default: 86400 (24 h).
+	SessionTTLSeconds int `json:"session_ttl_seconds"`
+
+	// ── LDAP (optional) ───────────────────────────────────────────────────────
+	// When LDAPEnabled is true, the login form also accepts LDAP credentials.
+	// Local WebUIUsers are tried first; LDAP is used as a fallback.
+	LDAPEnabled  bool   `json:"ldap_enabled"`
+	LDAPServer   string `json:"ldap_server"`              // hostname or IP
+	LDAPPort     int    `json:"ldap_port"`                // default 389 (636 for TLS)
+	LDAPUseTLS   bool   `json:"ldap_use_tls"`             // LDAPS
+	LDAPStartTLS bool   `json:"ldap_start_tls"`           // STARTTLS over plain connection
+	LDAPBaseDN   string `json:"ldap_base_dn"`             // e.g. "dc=example,dc=com"
+	LDAPBindDN   string `json:"ldap_bind_dn"`             // service-account DN for user search
+	LDAPBindPass string `json:"ldap_bind_pass,omitempty"` // service-account password
+	// LDAPUserAttr is the attribute used to match the username, e.g. "uid" (POSIX)
+	// or "sAMAccountName" (Active Directory).
+	LDAPUserAttr string `json:"ldap_user_attr"`
+	// LDAPFilter is an additional LDAP filter appended to the user search,
+	// e.g. "(memberOf=cn=rag-users,ou=groups,dc=example,dc=com)".
+	// Leave empty for no extra filter.
+	LDAPFilter string `json:"ldap_filter"`
+	// LDAPAdminGroup is the DN of a group whose members receive admin role.
+	// Leave empty to assign "viewer" role to all LDAP users by default.
+	LDAPAdminGroup string `json:"ldap_admin_group"`
 }
 
 // settingsStore provides a thread-safe wrapper around persisted
@@ -129,6 +243,9 @@ type settingsStore struct {
 
 // package-level settings store (initialized in main)
 var settings *settingsStore
+
+// sessions holds all active web-UI browser sessions.
+var sessions = newSessionStore()
 
 // normalizeBaseURL trims and normalizes an LLM base URL, removing
 // trailing slashes and an optional "/v1" suffix.
@@ -238,7 +355,7 @@ func canRoleUseTool(role, tool string) bool {
 		return p.CanRunCode
 	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news", "wikidata", "github":
 		return p.CanWebFetch
-	case "local_search", "datetime", "calculate", "llm":
+	case "local_search", "datetime", "calculate", "llm", "vector_query", "sql_query":
 		return true
 	default:
 		// Unknown tool IDs (e.g. custom APIs) are treated as external fetches.
@@ -348,6 +465,191 @@ type adminAPIUser struct {
 	APIKeyHash  string `json:"api_key_hash,omitempty"`
 	APIKeyLast4 string `json:"api_key_last4,omitempty"`
 	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web-UI authentication types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// webUIUser represents a local (non-API) user who can log into the web UI.
+type webUIUser struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash,omitempty"` // bcrypt hash
+	Role         string `json:"role"`                    // "admin" or "viewer"
+	Enabled      bool   `json:"enabled"`
+	CreatedAt    string `json:"created_at,omitempty"`
+}
+
+// webUISession holds information about an active browser session.
+type webUISession struct {
+	Token     string
+	UserID    string
+	Username  string
+	Role      string
+	ExpiresAt time.Time
+}
+
+// sessionStore is an in-memory store of active web-UI sessions keyed by token.
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]*webUISession
+}
+
+func newSessionStore() *sessionStore {
+	s := &sessionStore{sessions: make(map[string]*webUISession)}
+	go s.sweepLoop()
+	return s
+}
+
+func (ss *sessionStore) create(userID, username, role string, ttl time.Duration) *webUISession {
+	token := generateSessionToken()
+	sess := &webUISession{
+		Token:     token,
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+	ss.mu.Lock()
+	ss.sessions[token] = sess
+	ss.mu.Unlock()
+	return sess
+}
+
+func (ss *sessionStore) get(token string) (*webUISession, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	s, ok := ss.sessions[token]
+	if !ok || time.Now().After(s.ExpiresAt) {
+		delete(ss.sessions, token)
+		return nil, false
+	}
+	return s, true
+}
+
+func (ss *sessionStore) delete(token string) {
+	ss.mu.Lock()
+	delete(ss.sessions, token)
+	ss.mu.Unlock()
+}
+
+// sweepLoop periodically removes expired sessions.
+func (ss *sessionStore) sweepLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		ss.mu.Lock()
+		now := time.Now()
+		for tok, s := range ss.sessions {
+			if now.After(s.ExpiresAt) {
+				delete(ss.sessions, tok)
+			}
+		}
+		ss.mu.Unlock()
+	}
+}
+
+// generateSessionToken returns a random 32-byte hex token.
+func generateSessionToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("rand.Read: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// hashWebUIPassword returns a bcrypt hash of the password.
+func hashWebUIPassword(password string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(h), nil
+}
+
+// verifyWebUIPassword checks a plaintext password against a stored bcrypt hash.
+func verifyWebUIPassword(user webUIUser, password string) bool {
+	if user.PasswordHash == "" {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) == nil
+}
+
+// ldapAuthenticate attempts to authenticate username+password against LDAP.
+// Returns the user's inferred role ("admin"/"viewer") and nil error on success.
+func ldapAuthenticate(s appSettings, username, password string) (string, error) {
+	if !s.LDAPEnabled || s.LDAPServer == "" {
+		return "", fmt.Errorf("LDAP not configured")
+	}
+	addr := fmt.Sprintf("%s:%d", s.LDAPServer, s.LDAPPort)
+	if s.LDAPPort == 0 {
+		if s.LDAPUseTLS {
+			addr = s.LDAPServer + ":636"
+		} else {
+			addr = s.LDAPServer + ":389"
+		}
+	}
+	var conn *ldap.Conn
+	var err error
+	tlsCfg := &tls.Config{ServerName: s.LDAPServer} //nolint:gosec // user-configured server; InsecureSkipVerify intentionally left false
+	if s.LDAPUseTLS {
+		conn, err = ldap.DialTLS("tcp", addr, tlsCfg)
+	} else {
+		conn, err = ldap.DialURL("ldap://" + addr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("LDAP dial: %w", err)
+	}
+	defer conn.Close()
+	if s.LDAPStartTLS && !s.LDAPUseTLS {
+		if err = conn.StartTLS(tlsCfg); err != nil {
+			return "", fmt.Errorf("LDAP StartTLS: %w", err)
+		}
+	}
+	// Bind with service account to search for user DN
+	if s.LDAPBindDN != "" {
+		if err = conn.Bind(s.LDAPBindDN, s.LDAPBindPass); err != nil {
+			return "", fmt.Errorf("LDAP service bind: %w", err)
+		}
+	}
+	userAttr := s.LDAPUserAttr
+	if userAttr == "" {
+		userAttr = "uid"
+	}
+	filterStr := fmt.Sprintf("(%s=%s)", userAttr, ldap.EscapeFilter(username))
+	if s.LDAPFilter != "" {
+		filterStr = fmt.Sprintf("(&%s%s)", filterStr, s.LDAPFilter)
+	}
+	searchReq := ldap.NewSearchRequest(
+		s.LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
+		2, 10, false, filterStr,
+		[]string{"dn", "memberOf"},
+		nil,
+	)
+	res, err := conn.Search(searchReq)
+	if err != nil {
+		return "", fmt.Errorf("LDAP search: %w", err)
+	}
+	if len(res.Entries) == 0 {
+		return "", fmt.Errorf("LDAP user not found")
+	}
+	userDN := res.Entries[0].DN
+	// Bind as the found user to verify password
+	if err = conn.Bind(userDN, password); err != nil {
+		return "", fmt.Errorf("LDAP bind as user: %w", err)
+	}
+	// Determine role from group membership
+	role := "viewer"
+	if s.LDAPAdminGroup != "" {
+		for _, attr := range res.Entries[0].GetAttributeValues("memberOf") {
+			if strings.EqualFold(attr, s.LDAPAdminGroup) {
+				role = "admin"
+				break
+			}
+		}
+	}
+	return role, nil
 }
 
 type apiRouteRule struct {
@@ -535,6 +837,97 @@ func localAdminOnly(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// sessionFromRequest extracts the active session from the request's
+// "session_token" cookie. Returns nil when not found or expired.
+func sessionFromRequest(r *http.Request) *webUISession {
+	c, err := r.Cookie("session_token")
+	if err != nil || c.Value == "" {
+		return nil
+	}
+	sess, ok := sessions.get(c.Value)
+	if !ok {
+		return nil
+	}
+	return sess
+}
+
+// isHTTPS reports whether the request was made over a secure (TLS) connection,
+// either directly or via a trusted reverse proxy that sets X-Forwarded-Proto.
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// newSessionCookie builds a "session_token" cookie with the Secure flag set
+// only when the request arrived over HTTPS.
+func newSessionCookie(r *http.Request, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     "session_token",
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// webUIAuthMiddleware wraps a handler so that it requires a valid web-UI
+// session when WebUIAuth is enabled. API requests carrying a Bearer token
+// bypass the check. If auth is disabled the handler is called directly.
+func webUIAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			next(w, r)
+			return
+		}
+		// Allow API-key authenticated requests through
+		if auth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			next(w, r)
+			return
+		}
+		if xkey := strings.TrimSpace(r.Header.Get("X-API-Key")); xkey != "" {
+			next(w, r)
+			return
+		}
+		if sess := sessionFromRequest(r); sess != nil {
+			next(w, r)
+			return
+		}
+		// For non-API paths redirect to login; for API paths return 401
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.Error(w, "login required", 401)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	}
+}
+
+// requireAdminSession checks that the caller has an active admin session
+// (role == "admin") when WebUIAuth is enabled. Used for admin-only UI operations.
+func requireAdminSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			next(w, r)
+			return
+		}
+		sess := sessionFromRequest(r)
+		if sess == nil {
+			http.Error(w, "login required", 401)
+			return
+		}
+		if sess.Role != "admin" {
+			http.Error(w, "admin access required", 403)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // defaultSettingsFromFlags builds initial `appSettings` from CLI flags
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
@@ -562,6 +955,14 @@ func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang strin
 		AllowNanoGo:          false,
 		AllowShellExec:       false,
 		AllowTinyGo:          false,
+		AppName:              "",
+		AppLogoURL:           "",
+		CustomCSS:            "",
+		WebUIAuth:            false,
+		WebUIUsers:           []webUIUser{},
+		SessionTTLSeconds:    86400,
+		LDAPEnabled:          false,
+		LDAPUserAttr:         "uid",
 	}
 }
 
@@ -750,6 +1151,10 @@ func searchWikipedia(query, lang string) ([]map[string]string, error) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic web scraper
 // ─────────────────────────────────────────────────────────────────────────────
+
+// maxToolResultRows caps the number of rows returned by sql_query and the
+// maximum k value for vector_query to keep LLM context windows manageable.
+const maxToolResultRows = 50
 
 var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 var multiSpaceRe = regexp.MustCompile(`\s{3,}`)
@@ -1055,26 +1460,55 @@ func fetchStackOverflow(query string) (string, error) {
 
 func fetchMultiWebSearch(query string) (string, error) {
 	variants := expandExternalSearchQueries(query)
+	// expandExternalSearchQueries always returns at least one element, but guard defensively
+	if len(variants) == 0 {
+		variants = []string{query}
+	}
 	var parts []string
 	var errs []string
 
+	// 1. DuckDuckGo: try up to 2 query variants
 	for i, variant := range variants {
-		if i >= 3 {
+		if i >= 2 {
 			break
 		}
 		if text, err := fetchDuckDuckGo(variant); err == nil && strings.TrimSpace(text) != "" {
 			parts = append(parts, fmt.Sprintf("DuckDuckGo [%s]\n%s", variant, text))
+			break // one good DDG result is enough
 		} else if err != nil {
 			errs = append(errs, "ddg("+variant+"): "+err.Error())
 		}
 	}
 
+	// 2. MetaGer: best for German-language and privacy-sensitive queries
+	if text, err := fetchMetaGer(buildEngineQuery(query, "metager")); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "metager: "+err.Error())
+	}
+
+	// 3. Ecosia: additional perspective (Bing-backed, eco-focused)
+	if text, err := fetchEcosia(buildEngineQuery(query, "ecosia")); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "ecosia: "+err.Error())
+	}
+
+	// 4. Brave: independent index, different from DDG/Bing for controversial/niche queries
+	if text, err := fetchBraveSearch(buildEngineQuery(query, "brave")); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "brave: "+err.Error())
+	}
+
+	// 5. Wikidata for structured entity data
 	if text, err := fetchWikidata(variants[0]); err == nil && strings.TrimSpace(text) != "" {
 		parts = append(parts, text)
 	} else if err != nil {
 		errs = append(errs, "wikidata: "+err.Error())
 	}
 
+	// 6. For technical queries: GitHub + StackOverflow
 	if looksTechnicalQuery(query) {
 		if text, err := fetchGitHub(variants[0]); err == nil && strings.TrimSpace(text) != "" {
 			parts = append(parts, text)
@@ -1095,6 +1529,206 @@ func fetchMultiWebSearch(query string) (string, error) {
 		return "", fmt.Errorf("Errors: %s", strings.Join(errs, " | "))
 	}
 	return strings.Join(parts, "\n\n---\n\n"), nil
+}
+
+// buildEngineQuery builds an optimized search query string for a specific
+// search engine, adding appropriate operators, language hints, and filters.
+//
+//   - "metager"  — adds German-language hints for German queries
+//   - "ecosia"   — same as base but with eco/environmental context stripped
+//   - "brave"    — strips time-sensitive words for better index recall
+//   - default    — returns the base query unchanged
+func buildEngineQuery(query, engine string) string {
+	base := strings.TrimSpace(query)
+	if base == "" {
+		return query
+	}
+	// Detect query language heuristic (German contains umlauts or common words)
+	isGerman := strings.ContainsAny(base, "äöüÄÖÜß") ||
+		hasAnyWord(base, []string{"und", "der", "die", "das", "ist", "von", "für", "mit", "was", "wie", "wer"})
+
+	switch engine {
+	case "metager":
+		// MetaGer indexes many German and European sources; prefix with language hint
+		if isGerman {
+			return base // MetaGer already defaults to German sources
+		}
+		return base
+	case "ecosia":
+		// Ecosia is Bing-backed; strip question words to get a cleaner keyword query
+		base = stripQuestionWords(base)
+		return base
+	case "brave":
+		// Brave has its own index; remove news-biasing modifiers for recall
+		base = strings.TrimPrefix(base, `news "`)
+		base = strings.TrimSuffix(base, `"`)
+		return strings.TrimSpace(base)
+	default:
+		return base
+	}
+}
+
+// hasAnyWord reports whether s contains any of words as whole tokens (case-insensitive).
+// It tokenizes s on whitespace and compares lowercased tokens against the target words.
+func hasAnyWord(s string, words []string) bool {
+	wordSet := make(map[string]bool, len(words))
+	for _, w := range words {
+		wordSet[strings.ToLower(w)] = true
+	}
+	// Strip trailing punctuation from each token before comparing
+	punctRe := regexp.MustCompile(`[^\p{L}\p{N}]+$`)
+	for _, tok := range strings.Fields(s) {
+		clean := strings.ToLower(punctRe.ReplaceAllString(tok, ""))
+		if wordSet[clean] {
+			return true
+		}
+	}
+	return false
+}
+
+// stripQuestionWords removes common question-word prefixes from a query
+// so that search engines receive clean keyword queries.
+func stripQuestionWords(q string) string {
+	prefixes := []string{
+		"was ist ", "wer ist ", "wie ist ", "wo ist ", "wann ist ", "warum ist ", "welche ",
+		"what is ", "who is ", "where is ", "when is ", "why is ", "which ",
+		"qu'est-ce que ", "qui est ", "où est ", "quand est ",
+	}
+	low := strings.ToLower(q)
+	for _, p := range prefixes {
+		if strings.HasPrefix(low, p) {
+			return q[len(p):]
+		}
+	}
+	return q
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional search engines: MetaGer, Ecosia, Brave
+// ─────────────────────────────────────────────────────────────────────────────
+
+// fetchMetaGer scrapes the MetaGer meta-search engine results page.
+// MetaGer is a privacy-respecting German meta-search engine that aggregates
+// results from Bing, Yandex, and others without tracking.
+func fetchMetaGer(query string) (string, error) {
+	u := fmt.Sprintf("https://metager.de/meta/meta.ger3?eingabe=%s&s=0&bfe=on", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept-Language", "de,en;q=0.9")
+	client := newHTTPClient(20 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("MetaGer fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	// Extract title + snippet pairs from the result HTML
+	titleRe := regexp.MustCompile(`(?i)<h2[^>]*class="[^"]*result-title[^"]*"[^>]*>.*?<a[^>]*>(.*?)</a>`)
+	snippetRe := regexp.MustCompile(`(?i)<p[^>]*class="[^"]*result-description[^"]*"[^>]*>(.*?)</p>`)
+	titles := titleRe.FindAllStringSubmatch(string(body), 8)
+	snippets := snippetRe.FindAllStringSubmatch(string(body), 8)
+	var parts []string
+	for i, t := range titles {
+		title := html.UnescapeString(htmlTagRe.ReplaceAllString(t[1], ""))
+		title = strings.TrimSpace(title)
+		if title == "" {
+			continue
+		}
+		entry := "• " + title
+		if i < len(snippets) {
+			snip := html.UnescapeString(htmlTagRe.ReplaceAllString(snippets[i][1], ""))
+			snip = strings.TrimSpace(snip)
+			if snip != "" {
+				entry += "\n  " + snip
+			}
+		}
+		parts = append(parts, entry)
+		if len(parts) >= 6 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("MetaGer returned no results for %q", query)
+	}
+	return fmt.Sprintf("MetaGer-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(parts, "\n\n")), nil
+}
+
+// fetchEcosia scrapes Ecosia search result snippets for the given query.
+// Ecosia is an environmentally-focused search engine powered by Bing.
+func fetchEcosia(query string) (string, error) {
+	u := fmt.Sprintf("https://www.ecosia.org/search?method=index&q=%s", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept-Language", "de,en;q=0.9")
+	client := newHTTPClient(20 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Ecosia fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	snippetRe := regexp.MustCompile(`(?i)<p[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</p>`)
+	matches := snippetRe.FindAllStringSubmatch(string(body), 8)
+	var parts []string
+	for _, m := range matches {
+		s := html.UnescapeString(htmlTagRe.ReplaceAllString(m[1], ""))
+		s = strings.TrimSpace(s)
+		if s != "" {
+			parts = append(parts, "- "+s)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("Ecosia returned no results for %q", query)
+	}
+	return fmt.Sprintf("Ecosia-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(parts, "\n")), nil
+}
+
+// fetchBraveSearch fetches results from the Brave Search HTML endpoint.
+// Brave Search is an independent search index that does not rely on Google/Bing.
+func fetchBraveSearch(query string) (string, error) {
+	u := fmt.Sprintf("https://search.brave.com/search?q=%s&source=web", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept-Language", "de,en;q=0.9")
+	client := newHTTPClient(20 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Brave fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	descRe := regexp.MustCompile(`(?i)<p[^>]*class="[^"]*snippet-description[^"]*"[^>]*>(.*?)</p>`)
+	matches := descRe.FindAllStringSubmatch(string(body), 8)
+	var parts []string
+	for _, m := range matches {
+		s := html.UnescapeString(htmlTagRe.ReplaceAllString(m[1], ""))
+		s = strings.TrimSpace(s)
+		if s != "" {
+			parts = append(parts, "- "+s)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("Brave Search returned no results for %q", query)
+	}
+	return fmt.Sprintf("Brave-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(parts, "\n")), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1334,7 +1968,7 @@ func (c *lmClient) listModels(baseOverride string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create models request: %w", err)
 	}
-	if c.apiKey != "" && strings.Contains(base, "api.openai.com") {
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := newHTTPClient(10 * time.Second).Do(req)
@@ -1388,7 +2022,7 @@ func (c *lmClient) embed(texts []string) ([][]float64, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" && strings.Contains(c.base, "api.openai.com") {
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
@@ -1433,10 +2067,109 @@ type chatReq struct {
 	Stream   bool      `json:"stream"`
 }
 
+// contentPart is a single element in a multimodal message content array,
+// used for vision-capable models (text + image_url parts).
+type contentPart struct {
+	Type     string           `json:"type"`
+	Text     string           `json:"text,omitempty"`
+	ImageURL *imageURLContent `json:"image_url,omitempty"`
+}
+
+// imageURLContent carries the URL (data URI or https) and optional detail level
+// for an image_url content part.
+type imageURLContent struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"` // "low", "high", or "auto"
+}
+
 // chatMsg represents a single chat message with a role and content.
+// Content is a plain string for text-only messages.  When ContentParts is
+// non-empty the message is multimodal and its JSON representation uses an
+// array of contentPart objects instead of a string, as required by the
+// OpenAI vision API.
 type chatMsg struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role         string        `json:"role"`
+	Content      string        `json:"content,omitempty"`
+	ContentParts []contentPart `json:"-"` // set for vision messages; excluded from JSON struct tags so MarshalJSON controls serialisation
+}
+
+// MarshalJSON serialises chatMsg to the wire format expected by
+// OpenAI-compatible APIs.  Text-only messages produce {"role":"…","content":"…"};
+// multimodal messages produce {"role":"…","content":[…]}.
+func (m chatMsg) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Role    string      `json:"role"`
+		Content interface{} `json:"content"`
+	}
+	if len(m.ContentParts) > 0 {
+		return json.Marshal(wire{Role: m.Role, Content: m.ContentParts})
+	}
+	return json.Marshal(wire{Role: m.Role, Content: m.Content})
+}
+
+// isVisionModel reports whether a model ID is likely to support image inputs.
+// The check is heuristic and covers the most common vision-capable families.
+func isVisionModel(model string) bool {
+	ml := strings.ToLower(model)
+	return strings.Contains(ml, "vision") ||
+		strings.Contains(ml, "-vl") ||
+		strings.Contains(ml, "vl-") ||
+		strings.Contains(ml, "llava") ||
+		strings.Contains(ml, "pixtral") ||
+		strings.Contains(ml, "gpt-4o") ||
+		strings.Contains(ml, "gpt-4-turbo") ||
+		strings.Contains(ml, "claude-3") ||
+		strings.Contains(ml, "claude-opus") ||
+		strings.Contains(ml, "claude-sonnet") ||
+		strings.Contains(ml, "gemini") ||
+		strings.Contains(ml, "internvl") ||
+		strings.Contains(ml, "cogvlm") ||
+		strings.Contains(ml, "minicpm") ||
+		strings.Contains(ml, "moondream") ||
+		strings.Contains(ml, "phi-3-vision") ||
+		strings.Contains(ml, "phi4") ||
+		strings.Contains(ml, "qwen2-vl") ||
+		strings.Contains(ml, "smolvlm")
+}
+
+// imageDataURI builds a base64-encoded data URI from raw image bytes and a MIME type.
+func imageDataURI(data []byte, mimeType string) string {
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// describeImageWithVision calls a vision-capable LLM to generate a text
+// description of an image that can be stored in the RAG knowledge base.
+func describeImageWithVision(ctx context.Context, lm lmProvider, imageData []byte, mimeType, filename string) (string, error) {
+	dataURI := imageDataURI(imageData, mimeType)
+	msg := chatMsg{
+		Role: "user",
+		ContentParts: []contentPart{
+			{
+				Type: "text",
+				Text: fmt.Sprintf(
+					"Describe the content of this image (%s) in detail. "+
+						"Include all visible text, diagrams, tables, charts, and any other "+
+						"information that would be useful in a knowledge base. "+
+						"Be thorough and precise.",
+					filename,
+				),
+			},
+			{
+				Type:     "image_url",
+				ImageURL: &imageURLContent{URL: dataURI, Detail: "high"},
+			},
+		},
+	}
+	systemPrompt := "You are an image analysis assistant. Describe images accurately and extract all textual and visual information in a structured way."
+	var buf bytes.Buffer
+	if err := lm.chatStream(ctx, systemPrompt, []chatMsg{msg}, &buf); err != nil {
+		return "", fmt.Errorf("vision description failed: %w", err)
+	}
+	desc := strings.TrimSpace(buf.String())
+	if desc == "" {
+		return "", fmt.Errorf("vision model returned an empty description for %q", filename)
+	}
+	return desc, nil
 }
 
 // visionContentPart represents a single part of a multimodal message
@@ -1658,7 +2391,7 @@ func (c *lmClient) chatStreamDetailed(ctx context.Context, system string, msgs [
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" && strings.Contains(c.base, "api.openai.com") {
+	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	resp, err := c.http.Do(req)
@@ -2577,6 +3310,16 @@ var builtinTools = []toolDef{
 		ParamHint:   "Suchbegriff für die Vektorsuche",
 	},
 	{
+		Name:        "vector_query",
+		Description: "Führt eine präzise Vektorähnlichkeitssuche in der Wissensbasis aus. Gut für semantisch verwandte Konzepte, Synonymsuchen oder wenn `local_search` nicht die gewünschten Treffer liefert. Unterstützt optionale Parameter: 'k:10 threshold:0.7 <Suchbegriff>'.",
+		ParamHint:   "[k:N] [threshold:F] Suchbegriff (z.B. 'k:8 threshold:0.65 Lagertemperatur')",
+	},
+	{
+		Name:        "sql_query",
+		Description: "Führt eine schreibgeschützte SQL-SELECT-Abfrage direkt auf der tinySQL-Wissensbasis aus. Nützlich für genaue Textsuchen, Filterung nach Artikel/Quelle oder Aggregationen. Nur SELECT erlaubt. Verfügbare Tabelle: chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embed_model TEXT, role_scope TEXT).",
+		ParamHint:   "SQL SELECT-Statement (z.B. 'SELECT article, content FROM chunks WHERE content LIKE \"%Temperatur%\" LIMIT 5')",
+	},
+	{
 		Name:        "datetime",
 		Description: "Gibt das aktuelle System-Datum und die Uhrzeit zurück. Gut für zeitliche Einordnungen.",
 		ParamHint:   "Leer lassen oder 'now'",
@@ -2614,7 +3357,7 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 		}
 	}
 	switch tr.Tool {
-	case "calculate", "local_search", "datetime":
+	case "calculate", "local_search", "datetime", "vector_query", "sql_query":
 		return true
 	case "nanogo", "exec_code":
 		return s.AllowNanoGo || s.AllowCodeExec
@@ -2653,6 +3396,126 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			text = sb.String()
 			source = "rag_local:" + tr.Query
 		}
+	case "vector_query":
+		// Parse optional k:N and threshold:F prefixes from the query string
+		k := s.K
+		threshold := 0.6
+		rawQ := strings.TrimSpace(tr.Query)
+		for {
+			if rest, ok := strings.CutPrefix(rawQ, "k:"); ok {
+				fields := strings.Fields(rest)
+				if len(fields) > 0 {
+				if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= maxToolResultRows {
+						k = n
+						rawQ = strings.TrimSpace(rest[len(fields[0]):])
+						continue
+					}
+				}
+			}
+			if rest, ok := strings.CutPrefix(rawQ, "threshold:"); ok {
+				fields := strings.Fields(rest)
+				if len(fields) > 0 {
+					if f, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil && f >= 0 && f <= 1 {
+						threshold = f
+						rawQ = strings.TrimSpace(rest[len(fields[0]):])
+						continue
+					}
+				}
+			}
+			break
+		}
+		if rawQ == "" {
+			rawQ = tr.Query
+		}
+		hits, err := rag.searchJSON(rawQ, k)
+		if err != nil {
+			fetchErr = err
+		} else {
+			var filtered []searchResult
+			for _, h := range hits {
+				// searchJSON returns neighbor-context chunks with Score=-1;
+				// those are always included regardless of threshold because
+				// they provide narrative context for a nearby primary hit.
+				if h.Score < 0 || h.Score >= threshold {
+					filtered = append(filtered, h)
+				}
+			}
+			if len(filtered) == 0 {
+				text = fmt.Sprintf("Keine Treffer über Schwellwert %.2f für: %s", threshold, rawQ)
+				source = "vector_query:" + rawQ
+			} else {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("Vektor-Suche '%s' (k=%d, threshold=%.2f): %d Treffer\n\n", rawQ, k, threshold, len(filtered)))
+				for i, h := range filtered {
+					label := fmt.Sprintf("%.2f", h.Score)
+					if h.Score < 0 {
+						label = "Kontext" // neighbor chunk, no independent similarity score
+					}
+					sb.WriteString(fmt.Sprintf("[%d | Score: %s]\n%s\n\n", i+1, label, h.Content))
+				}
+				text = sb.String()
+				source = "vector_query:" + rawQ
+			}
+		}
+	case "sql_query":
+		// Strip SQL block comments (/* … */) and line comments (-- …) before checking
+		// to prevent bypass via /* INSERT */ or -- INSERT tricks.
+		trimmed := stripSQLComments(strings.TrimSpace(tr.Query))
+		upper := strings.ToUpper(trimmed)
+		if !strings.HasPrefix(upper, "SELECT") {
+			fetchErr = fmt.Errorf("sql_query: only SELECT statements are allowed")
+			break
+		}
+		// Block DML/DDL and dangerous administrative keywords even inside SELECT
+		// (e.g. subqueries, CTEs that wrap forbidden operations).
+		forbidden := []string{
+			"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+			"TRUNCATE", "REPLACE", "ATTACH", "DETACH", "PRAGMA",
+		}
+		for _, kw := range forbidden {
+			// Use word-boundary check: keyword must be followed by whitespace or end
+			if idx := strings.Index(upper, kw); idx >= 0 {
+				// Verify it is a standalone keyword token (not a prefix of a longer word)
+				after := idx + len(kw)
+				isToken := after >= len(upper) || !isAlphaNumUnder(rune(upper[after]))
+				if isToken {
+					fetchErr = fmt.Errorf("sql_query: statement contains disallowed keyword %s", kw)
+					break
+				}
+			}
+		}
+		if fetchErr != nil {
+			break
+		}
+		stmt, err := tinysql.ParseSQL(trimmed)
+		if err != nil {
+			fetchErr = fmt.Errorf("sql_query parse: %w", err)
+			break
+		}
+		rag.dbMu.Lock()
+		rs, err := tinysql.Execute(context.Background(), rag.db, "default", stmt)
+		rag.dbMu.Unlock()
+		if err != nil {
+			fetchErr = fmt.Errorf("sql_query exec: %w", err)
+			break
+		}
+		if rs == nil || len(rs.Rows) == 0 {
+			text = "SQL-Abfrage ergab keine Zeilen."
+			source = "sql_query"
+			break
+		}
+		// Format result as a simple text table
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("SQL-Ergebnis (%d Zeilen):\n\n", len(rs.Rows)))
+		for i, row := range rs.Rows {
+			if i >= maxToolResultRows { // cap output for LLM context window safety
+				sb.WriteString(fmt.Sprintf("… (%d weitere Zeilen abgeschnitten)\n", len(rs.Rows)-i))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("Zeile %d: %v\n", i+1, row))
+		}
+		text = sb.String()
+		source = "sql_query"
 	case "datetime":
 		text = fmt.Sprintf("Aktuelles System-Datum und Uhrzeit: %s", time.Now().Format("2006-01-02 15:04:05 MST"))
 		source = "system:datetime"
@@ -3225,8 +4088,10 @@ func buildResponseInstructionsPrompt(deep bool, usageProfile string) string {
 	sb.WriteString("- Beginne mit der Frage: Reicht der lokale Kontext aus, ist er unsicher oder fehlt er?\n")
 	sb.WriteString("- Wenn der lokale Kontext ausreicht, antworte direkt und sage knapp, dass die Antwort auf der Wissensbasis beruht.\n")
 	sb.WriteString("- Wenn Informationen fehlen oder potenziell veraltet sind, nutze genau ein passendes Tool.\n")
-	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`; fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code- oder Library-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
-	sb.WriteString("- Bei technischen Artikeln, Produktcodes oder Teilenummern darfst du praezisere Suchanfragen bilden, z.B. Teilstrings, exakte Phrasen mit Anfuehrungszeichen oder Varianten wie `Technische Details <Begriff>`.\n")
+	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch` (nutzt DuckDuckGo, MetaGer, Ecosia, Brave gleichzeitig); fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code- oder Library-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
+	sb.WriteString("- Bei technischen Artikeln, Produktcodes oder Teilenummern darfst du praezisere Suchanfragen bilden, z.B. Teilstrings, exakte Phrasen mit Anfuehrungszeichen (\"Begriff\"), `Technische Details <Begriff>`, `<Begriff> Datenblatt` oder `<Begriff> specification`.\n")
+	sb.WriteString("- Wenn die semantische Standardsuche nicht ausreicht: nutze `vector_query` mit optionalen Parametern `k:N threshold:F Suchbegriff` fuer mehr Treffer oder niedrigeren Schwellwert.\n")
+	sb.WriteString("- Fuer Filtern, Zaehlen oder Durchsuchen der Wissensbasis nach konkreten Textstellen nutze `sql_query` mit einem SELECT auf der Tabelle `chunks` (Spalten: id, article, chunk_idx, content, embed_model, role_scope). Nur SELECT erlaubt!\n")
 	sb.WriteString("- Behaupte nie mehr Sicherheit, als der Kontext hergibt.\n")
 	sb.WriteString("- Erfinde keine Kontaktinformationen, URLs, APIs, Produktdetails, Roadmaps oder technische Interna.\n")
 	sb.WriteString("- Wenn ein Tool benutzt wurde, liefere danach genau eine ueberarbeitete finale Antwort, nicht zwei Versionen.\n")
@@ -4152,6 +5017,27 @@ func isAlphaToken(s string) bool {
 	return hasLetter(s) && !hasDigit(s)
 }
 
+// isAlphaNumUnder reports whether r is a letter, digit, or underscore —
+// used to identify whether a SQL keyword is a standalone token.
+func isAlphaNumUnder(r rune) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
+		(r >= '0' && r <= '9') || r == '_'
+}
+
+// sqlBlockCommentRe matches /* … */ SQL block comments (non-greedy).
+var sqlBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// sqlLineCommentRe matches -- … to end-of-line SQL line comments.
+var sqlLineCommentRe = regexp.MustCompile(`--[^\n]*`)
+
+// stripSQLComments removes SQL block comments (/* … */) and line comments (-- …)
+// from a SQL string so that hidden keywords cannot bypass validation.
+func stripSQLComments(q string) string {
+	q = sqlBlockCommentRe.ReplaceAllString(q, " ")
+	q = sqlLineCommentRe.ReplaceAllString(q, " ")
+	return strings.TrimSpace(q)
+}
+
 func stopwordSet() map[string]bool {
 	return map[string]bool{
 		"was": true, "weisst": true, "weißt": true, "du": true, "ueber": true, "über": true,
@@ -4244,7 +5130,7 @@ func expandRetrievalQueries(q string) []weightedSearchQuery {
 func expandExternalSearchQueries(q string) []string {
 	base := strings.TrimSpace(refineSearchQuery(q))
 	if base == "" {
-		return nil
+		return []string{q}
 	}
 	seen := map[string]bool{}
 	add := func(out *[]string, query string) {
@@ -4263,19 +5149,51 @@ func expandExternalSearchQueries(q string) []string {
 	var out []string
 	add(&out, base)
 	tokens := splitSearchTokens(base)
+
+	// Exact-phrase variant for short, multi-word queries
+	if len(tokens) >= 2 && len(tokens) <= 5 {
+		add(&out, `"`+base+`"`)
+	}
+
+	// Product-code / part-number: quote the first two tokens if either contains digits
 	if len(tokens) >= 2 && (hasDigit(tokens[0]) || hasDigit(tokens[1])) {
 		add(&out, `"`+tokens[0]+` `+tokens[1]+`"`)
 		add(&out, tokens[0]+" "+tokens[1])
 	}
+
+	// Technical queries: add language-appropriate detail/datasheet suffix variants
 	if looksTechnicalQuery(base) {
-		add(&out, "Technische Details "+base)
-		add(&out, `"`+base+`"`)
+		// Detect query language: German text uses umlauts or common German words
+		isGermanQuery := strings.ContainsAny(base, "äöüÄÖÜß") ||
+			hasAnyWord(base, []string{"und", "der", "die", "das", "von", "für", "mit"})
+		if isGermanQuery {
+			add(&out, "Technische Details "+base)
+			add(&out, base+" Datenblatt")
+		} else {
+			add(&out, base+" technical details")
+			add(&out, base+" specification")
+		}
 	}
+
+	// Add keyword-only variant (strip stopwords)
+	stopwords := stopwordSet()
+	var keywords []string
+	for _, tok := range tokens {
+		if !stopwords[strings.ToLower(tok)] && len(tok) > 2 {
+			keywords = append(keywords, tok)
+		}
+	}
+	if len(keywords) > 0 && len(keywords) < len(tokens) {
+		add(&out, strings.Join(keywords, " "))
+	}
+
+	// Add retrieval-style variants for good measure
 	for _, q := range expandRetrievalQueries(base) {
 		add(&out, q.Query)
 	}
-	if len(out) > 6 {
-		out = out[:6]
+
+	if len(out) > 8 {
+		out = out[:8]
 	}
 	return out
 }
@@ -4707,14 +5625,60 @@ type llmCheckResp struct {
 }
 
 // providerHintFromURL returns a human-friendly hint about the LLM
-// provider based on common port patterns in the base URL.
+// provider based on the base URL, using proper hostname matching where possible.
 func providerHintFromURL(base string) string {
-	if strings.Contains(base, "11434") {
+	parsed, parseErr := url.Parse(strings.TrimSpace(base))
+	if parseErr != nil {
+		parsed = &url.URL{}
+	}
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+
+	// Local endpoints identified by known host + port combinations.
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		if port == "11434" {
+			return "Ollama"
+		}
+		if port == "1234" {
+			return "LM Studio"
+		}
+		return "Local LLM"
+	}
+
+	// Remote providers matched by hostname suffix.
+	switch {
+	case host == "api.openai.com" || strings.HasSuffix(host, ".openai.com"):
+		return "OpenAI"
+	case host == "api.anthropic.com" || strings.HasSuffix(host, ".anthropic.com"):
+		return "Anthropic"
+	case strings.HasSuffix(host, ".googleapis.com") || host == "generativelanguage.googleapis.com":
+		return "Google Gemini"
+	case host == "api.mistral.ai" || strings.HasSuffix(host, ".mistral.ai"):
+		return "Mistral AI"
+	case host == "api.groq.com" || strings.HasSuffix(host, ".groq.com"):
+		return "Groq"
+	case host == "api.deepseek.com" || strings.HasSuffix(host, ".deepseek.com"):
+		return "DeepSeek"
+	case strings.HasSuffix(host, ".together.xyz") || strings.HasSuffix(host, ".together.ai"):
+		return "Together AI"
+	case host == "api.x.ai" || strings.HasSuffix(host, ".x.ai"):
+		return "xAI"
+	case strings.HasSuffix(host, ".cohere.com") || strings.HasSuffix(host, ".cohere.ai"):
+		return "Cohere"
+	case strings.HasSuffix(host, ".perplexity.ai"):
+		return "Perplexity"
+	case host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai"):
+		return "OpenRouter"
+	}
+
+	// Fallback: port-based hints for non-standard local deployments.
+	if port == "11434" {
 		return "Ollama"
 	}
-	if strings.Contains(base, "1234") {
+	if port == "1234" {
 		return "LM Studio"
 	}
+
 	return "OpenAI-compatible"
 }
 
@@ -4724,17 +5688,39 @@ func recommendModels(models []string) (chat []string, embed []string) {
 	// Heuristics only: highlight likely candidates.
 	for _, m := range models {
 		ml := strings.ToLower(m)
-		if strings.Contains(ml, "embed") || strings.Contains(ml, "embedding") {
+		if strings.Contains(ml, "embed") || strings.Contains(ml, "embedding") ||
+			strings.Contains(ml, "e5-") || strings.Contains(ml, "bge-") ||
+			strings.Contains(ml, "minilm") || strings.Contains(ml, "nomic") ||
+			strings.Contains(ml, "gte-") || strings.Contains(ml, "jina-embed") {
 			embed = append(embed, m)
 		}
 		// Common chat-ish hints
 		if strings.Contains(ml, "llama") ||
 			strings.Contains(ml, "mistral") ||
+			strings.Contains(ml, "mixtral") ||
 			strings.Contains(ml, "qwen") ||
 			strings.Contains(ml, "gemma") ||
 			strings.Contains(ml, "phi") ||
 			strings.Contains(ml, "gpt") ||
-			strings.Contains(ml, "ministral") {
+			strings.Contains(ml, "ministral") ||
+			strings.Contains(ml, "claude") ||
+			strings.Contains(ml, "gemini") ||
+			strings.Contains(ml, "command") ||
+			strings.Contains(ml, "deepseek") ||
+			strings.Contains(ml, "hermes") ||
+			strings.Contains(ml, "zephyr") ||
+			strings.Contains(ml, "falcon") ||
+			strings.Contains(ml, "vicuna") ||
+			strings.Contains(ml, "wizard") ||
+			strings.Contains(ml, "solar") ||
+			strings.Contains(ml, "openchat") ||
+			strings.Contains(ml, "dolphin") ||
+			strings.Contains(ml, "nous") ||
+			strings.Contains(ml, "llava") ||
+			strings.Contains(ml, "pixtral") ||
+			strings.Contains(ml, "smolvlm") ||
+			strings.Contains(ml, "internvl") ||
+			strings.Contains(ml, "moondream") {
 			chat = append(chat, m)
 		}
 	}
@@ -4866,18 +5852,18 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	adminGuard := func(h http.HandlerFunc) http.HandlerFunc { return routePolicyMiddleware(settings, h) }
 
 	// Static assets
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", webUIAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, indexHTML)
-	})
+	}))
 	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		fmt.Fprint(w, styleCSS)
 	})
-	mux.HandleFunc("/app.js", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/app.js", webUIAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		fmt.Fprint(w, appJS)
-	})
+	}))
 
 	// GET /api/settings — current settings
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -4903,6 +5889,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				"allow_nanogo":           s.AllowNanoGo,
 				// Do not return the API key itself; only expose whether one is configured
 				"openai_key_present": s.OpenAIKey != "",
+				// Branding (safe to expose publicly)
+				"app_name":     s.AppName,
+				"app_logo_url": s.AppLogoURL,
+				"custom_css":   s.CustomCSS,
+				// Auth capabilities (safe to expose so UI can show/hide login)
+				"web_ui_auth":  s.WebUIAuth,
+				"ldap_enabled": s.LDAPEnabled,
 			})
 			return
 
@@ -5411,13 +6404,15 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		reqID := newRequestID()
 		var req struct {
-			Question   string `json:"question"`
-			ChatID     string `json:"chat_id"`
-			Debug      bool   `json:"debug"`
-			Deep       bool   `json:"deep"`
-			Offline    bool   `json:"offline"`
-			AutoSearch bool   `json:"auto_search"`
-			PersonaID  string `json:"persona_id"`
+			Question    string `json:"question"`
+			ChatID      string `json:"chat_id"`
+			Debug       bool   `json:"debug"`
+			Deep        bool   `json:"deep"`
+			Offline     bool   `json:"offline"`
+			AutoSearch  bool   `json:"auto_search"`
+			PersonaID   string `json:"persona_id"`
+			ImageBase64 string `json:"image_base64"` // optional: base64-encoded image for vision models
+			ImageType   string `json:"image_type"`   // optional: MIME type, e.g. "image/jpeg"
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Question) == "" {
 			http.Error(w, "missing question", 400)
@@ -5636,7 +6631,25 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		for _, m := range history[start:] {
 			msgs = append(msgs, chatMsg{Role: m.Role, Content: m.Content})
 		}
-		msgs = append(msgs, chatMsg{Role: "user", Content: req.Question})
+
+		// Build the current user message – multimodal when an image is attached.
+		lastMsg := chatMsg{Role: "user", Content: req.Question}
+		if req.ImageBase64 != "" {
+			mimeType := strings.TrimSpace(req.ImageType)
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = "image/jpeg"
+			}
+			dataURI := "data:" + mimeType + ";base64," + req.ImageBase64
+			lastMsg = chatMsg{
+				Role: "user",
+				ContentParts: []contentPart{
+					{Type: "text", Text: req.Question},
+					{Type: "image_url", ImageURL: &imageURLContent{URL: dataURI, Detail: "auto"}},
+				},
+			}
+			log.Printf("REQ %s: vision message attached (mime=%s, b64_len=%d)", reqID, mimeType, len(req.ImageBase64))
+		}
+		msgs = append(msgs, lastMsg)
 
 		debugBase.HistoryMessages = len(msgs)
 		if req.Debug {
@@ -6388,12 +7401,52 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		// regular single-file upload
+		title := filepath.Base(header.Filename)
+		fileExt := strings.ToLower(filepath.Ext(filename))
+
+		// Image files: describe via vision model and ingest the description.
+		imageMIME := map[string]string{
+			".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+			".png": "image/png", ".gif": "image/gif",
+			".webp": "image/webp",
+		}
+		if mimeType, ok := imageMIME[fileExt]; ok {
+			if !isVisionModel(s.ChatModel) {
+				http.Error(w, fmt.Sprintf(
+					"image upload requires a vision-capable chat model; %q does not appear to support images. "+
+						"Switch to a vision model (e.g. gpt-4o, llava, claude-3-opus) in settings.",
+					s.ChatModel,
+				), 400)
+				return
+			}
+			desc, err := describeImageWithVision(r.Context(), rag.getLM(), data, mimeType, title)
+			if err != nil {
+				http.Error(w, "vision description failed: "+err.Error(), 500)
+				return
+			}
+			ingestText := fmt.Sprintf("Image: %s\n\n%s", title, desc)
+			chunks, _ := chunksForIngest(ingestText, s)
+			if err := rag.addChunksWithRoles(title+" (image)", chunks, em, roleScopes); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"file":   title,
+				"chars":  len(ingestText),
+				"chunks": len(chunks),
+				"total":  rag.docCountForRole(s.ActiveRole),
+				"image":  true,
+				"roles":  roleScopes,
+			})
+			return
+		}
+
 		text, err := extractTextFromFile(data, filename)
 		if err != nil {
 			http.Error(w, "could not extract text: "+err.Error(), 400)
 			return
 		}
-		title := filepath.Base(header.Filename)
 		chunks, redactions := chunksForIngest(text, s)
 		if err := rag.addChunksWithRoles(title, chunks, em, roleScopes); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -7073,6 +8126,426 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 	// Connector system routes
 	registerConnectorRoutes(mux, connectors, connectorExec)
+
+	// ── Web-UI Authentication endpoints ──────────────────────────────────────
+
+	// GET /login — login page (HTML); redirects to / when auth is off or already logged in.
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		if sess := sessionFromRequest(r); sess != nil {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		appName := s.AppName
+		if appName == "" {
+			appName = "tinyRAG"
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, loginPageHTML, html.EscapeString(appName), html.EscapeString(appName))
+	})
+
+	// POST /api/auth/login — exchange username+password for a session cookie.
+	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		req.Username = strings.TrimSpace(req.Username)
+		if req.Username == "" || req.Password == "" {
+			http.Error(w, "username and password required", 400)
+			return
+		}
+		s := settings.get()
+		ttl := time.Duration(s.SessionTTLSeconds) * time.Second
+		if ttl <= 0 {
+			ttl = 24 * time.Hour
+		}
+		// 1. Try local users
+		for _, u := range s.WebUIUsers {
+			if !u.Enabled || !strings.EqualFold(u.Username, req.Username) {
+				continue
+			}
+			if verifyWebUIPassword(u, req.Password) {
+				sess := sessions.create(u.ID, u.Username, u.Role, ttl)
+				http.SetCookie(w, newSessionCookie(r, sess.Token, int(ttl.Seconds())))
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"ok":       true,
+					"username": u.Username,
+					"role":     u.Role,
+				})
+				return
+			}
+			// Username matched but password wrong — stop here (no LDAP fallback for known local user)
+			http.Error(w, "invalid credentials", 401)
+			return
+		}
+		// 2. Try LDAP if enabled
+		if s.LDAPEnabled {
+			role, err := ldapAuthenticate(s, req.Username, req.Password)
+			if err == nil {
+				sess := sessions.create("ldap:"+req.Username, req.Username, role, ttl)
+				http.SetCookie(w, newSessionCookie(r, sess.Token, int(ttl.Seconds())))
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"ok":       true,
+					"username": req.Username,
+					"role":     role,
+				})
+				return
+			}
+			log.Printf("AUTH LDAP failed for %q: %v", req.Username, err)
+		}
+		http.Error(w, "invalid credentials", 401)
+	})
+
+	// POST /api/auth/logout — clear the session cookie.
+	mux.HandleFunc("/api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("session_token"); err == nil {
+			sessions.delete(c.Value)
+		}
+		http.SetCookie(w, newSessionCookie(r, "", -1))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+
+	// GET /api/auth/me — return current session info (or 401).
+	mux.HandleFunc("/api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "web_ui_auth": false})
+			return
+		}
+		sess := sessionFromRequest(r)
+		if sess == nil {
+			http.Error(w, "not authenticated", 401)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"authenticated": true,
+			"web_ui_auth":   true,
+			"username":      sess.Username,
+			"role":          sess.Role,
+			"expires_at":    sess.ExpiresAt.UTC().Format(time.RFC3339),
+		})
+	})
+
+	// ── Branding (admin-only) ────────────────────────────────────────────────
+
+	// POST /api/admin/branding — save white-label settings.
+	mux.HandleFunc("/api/admin/branding", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			AppName    string `json:"app_name"`
+			AppLogoURL string `json:"app_logo_url"`
+			CustomCSS  string `json:"custom_css"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		settings.mu.Lock()
+		settings.s.AppName = strings.TrimSpace(req.AppName)
+		settings.s.AppLogoURL = strings.TrimSpace(req.AppLogoURL)
+		settings.s.CustomCSS = req.CustomCSS
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+
+	// ── Web-UI user management (admin-only) ──────────────────────────────────
+
+	// GET /api/admin/webusers — list web UI users (hashes omitted).
+	mux.HandleFunc("/api/admin/webusers", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		s := settings.get()
+		out := make([]map[string]any, 0, len(s.WebUIUsers))
+		for _, u := range s.WebUIUsers {
+			out = append(out, map[string]any{
+				"id":         u.ID,
+				"username":   u.Username,
+				"role":       u.Role,
+				"enabled":    u.Enabled,
+				"created_at": u.CreatedAt,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+	}))
+
+	// POST /api/admin/webusers/create — create a new web UI user.
+	mux.HandleFunc("/api/admin/webusers/create", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		req.Username = strings.TrimSpace(req.Username)
+		if req.Username == "" || req.Password == "" {
+			http.Error(w, "username and password required", 400)
+			return
+		}
+		if len(req.Password) < 8 {
+			http.Error(w, "password must be at least 8 characters", 400)
+			return
+		}
+		role := req.Role
+		if role != "admin" && role != "viewer" {
+			role = "viewer"
+		}
+		pwHash, err := hashWebUIPassword(req.Password)
+		if err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		newUser := webUIUser{
+			ID:           fmt.Sprintf("wu-%d", time.Now().UnixNano()),
+			Username:     req.Username,
+			PasswordHash: pwHash,
+			Role:         role,
+			Enabled:      true,
+			CreatedAt:    time.Now().Format(time.RFC3339),
+		}
+		settings.mu.Lock()
+		// Reject duplicate usernames
+		for _, u := range settings.s.WebUIUsers {
+			if strings.EqualFold(u.Username, newUser.Username) {
+				settings.mu.Unlock()
+				http.Error(w, "username already exists", 409)
+				return
+			}
+		}
+		settings.s.WebUIUsers = append(settings.s.WebUIUsers, newUser)
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":       newUser.ID,
+			"username": newUser.Username,
+			"role":     newUser.Role,
+		})
+	}))
+
+	// POST /api/admin/webusers/save — update role / enabled flag.
+	mux.HandleFunc("/api/admin/webusers/save", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID      string `json:"id"`
+			Role    string `json:"role"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "id required", 400)
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		for i, u := range settings.s.WebUIUsers {
+			if u.ID != req.ID {
+				continue
+			}
+			if req.Role == "admin" || req.Role == "viewer" {
+				settings.s.WebUIUsers[i].Role = req.Role
+			}
+			settings.s.WebUIUsers[i].Enabled = req.Enabled
+			_ = settings.saveLocked()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		http.Error(w, "user not found", 404)
+	}))
+
+	// POST /api/admin/webusers/password — change a user's password.
+	mux.HandleFunc("/api/admin/webusers/password", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID       string `json:"id"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "id required", 400)
+			return
+		}
+		if len(req.Password) < 8 {
+			http.Error(w, "password must be at least 8 characters", 400)
+			return
+		}
+		pwHash, err := hashWebUIPassword(req.Password)
+		if err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		for i, u := range settings.s.WebUIUsers {
+			if u.ID != req.ID {
+				continue
+			}
+			settings.s.WebUIUsers[i].PasswordHash = pwHash
+			_ = settings.saveLocked()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		http.Error(w, "user not found", 404)
+	}))
+
+	// POST /api/admin/webusers/delete — remove a web UI user.
+	mux.HandleFunc("/api/admin/webusers/delete", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "id required", 400)
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		list := settings.s.WebUIUsers
+		for i, u := range list {
+			if u.ID != req.ID {
+				continue
+			}
+			settings.s.WebUIUsers = append(list[:i], list[i+1:]...)
+			_ = settings.saveLocked()
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ok":true}`)
+			return
+		}
+		http.Error(w, "user not found", 404)
+	}))
+
+	// POST /api/admin/auth — toggle WebUIAuth, update session TTL, and LDAP config.
+	mux.HandleFunc("/api/admin/auth", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			WebUIAuth         *bool  `json:"web_ui_auth"`
+			SessionTTLSeconds *int   `json:"session_ttl_seconds"`
+			LDAPEnabled       *bool  `json:"ldap_enabled"`
+			LDAPServer        string `json:"ldap_server"`
+			LDAPPort          *int   `json:"ldap_port"`
+			LDAPUseTLS        *bool  `json:"ldap_use_tls"`
+			LDAPStartTLS      *bool  `json:"ldap_start_tls"`
+			LDAPBaseDN        string `json:"ldap_base_dn"`
+			LDAPBindDN        string `json:"ldap_bind_dn"`
+			LDAPBindPass      string `json:"ldap_bind_pass"`
+			LDAPUserAttr      string `json:"ldap_user_attr"`
+			LDAPFilter        string `json:"ldap_filter"`
+			LDAPAdminGroup    string `json:"ldap_admin_group"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		settings.mu.Lock()
+		if req.WebUIAuth != nil {
+			settings.s.WebUIAuth = *req.WebUIAuth
+		}
+		if req.SessionTTLSeconds != nil && *req.SessionTTLSeconds > 0 {
+			settings.s.SessionTTLSeconds = *req.SessionTTLSeconds
+		}
+		if req.LDAPEnabled != nil {
+			settings.s.LDAPEnabled = *req.LDAPEnabled
+		}
+		if req.LDAPServer != "" {
+			settings.s.LDAPServer = strings.TrimSpace(req.LDAPServer)
+		}
+		if req.LDAPPort != nil {
+			settings.s.LDAPPort = *req.LDAPPort
+		}
+		if req.LDAPUseTLS != nil {
+			settings.s.LDAPUseTLS = *req.LDAPUseTLS
+		}
+		if req.LDAPStartTLS != nil {
+			settings.s.LDAPStartTLS = *req.LDAPStartTLS
+		}
+		if req.LDAPBaseDN != "" {
+			settings.s.LDAPBaseDN = req.LDAPBaseDN
+		}
+		if req.LDAPBindDN != "" {
+			settings.s.LDAPBindDN = req.LDAPBindDN
+		}
+		if req.LDAPBindPass != "" {
+			settings.s.LDAPBindPass = req.LDAPBindPass
+		}
+		if req.LDAPUserAttr != "" {
+			settings.s.LDAPUserAttr = req.LDAPUserAttr
+		}
+		settings.s.LDAPFilter = req.LDAPFilter
+		settings.s.LDAPAdminGroup = req.LDAPAdminGroup
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+
+	// GET /api/admin/auth — return current auth + LDAP settings (sensitive fields masked).
+	mux.HandleFunc("/api/admin/auth/get", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		s := settings.get()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"web_ui_auth":         s.WebUIAuth,
+			"session_ttl_seconds": s.SessionTTLSeconds,
+			"ldap_enabled":        s.LDAPEnabled,
+			"ldap_server":         s.LDAPServer,
+			"ldap_port":           s.LDAPPort,
+			"ldap_use_tls":        s.LDAPUseTLS,
+			"ldap_start_tls":      s.LDAPStartTLS,
+			"ldap_base_dn":        s.LDAPBaseDN,
+			"ldap_bind_dn":        s.LDAPBindDN,
+			"ldap_bind_pass_set":  s.LDAPBindPass != "",
+			"ldap_user_attr":      s.LDAPUserAttr,
+			"ldap_filter":         s.LDAPFilter,
+			"ldap_admin_group":    s.LDAPAdminGroup,
+		})
+	}))
 
 	fmt.Printf("Web interface: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
