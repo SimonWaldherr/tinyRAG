@@ -37,11 +37,11 @@ import (
 
 	_ "embed"
 
-	ldap "github.com/go-ldap/ldap/v3"
 	tinysql "github.com/SimonWaldherr/tinySQL"
+	ldap "github.com/go-ldap/ldap/v3"
+	bcrypt "golang.org/x/crypto/bcrypt"
 	nanogo "simonwaldherr.de/go/nanogo/interp"
 	smallr "simonwaldherr.de/go/smallr"
-	bcrypt "golang.org/x/crypto/bcrypt"
 )
 
 // --- Optimizations: caches and pools for performance-sensitive subsystems
@@ -1152,6 +1152,10 @@ func searchWikipedia(query, lang string) ([]map[string]string, error) {
 // Generic web scraper
 // ─────────────────────────────────────────────────────────────────────────────
 
+// maxToolResultRows caps the number of rows returned by sql_query and the
+// maximum k value for vector_query to keep LLM context windows manageable.
+const maxToolResultRows = 50
+
 var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 var multiSpaceRe = regexp.MustCompile(`\s{3,}`)
 
@@ -1456,6 +1460,7 @@ func fetchStackOverflow(query string) (string, error) {
 
 func fetchMultiWebSearch(query string) (string, error) {
 	variants := expandExternalSearchQueries(query)
+	// expandExternalSearchQueries always returns at least one element, but guard defensively
 	if len(variants) == 0 {
 		variants = []string{query}
 	}
@@ -1563,11 +1568,18 @@ func buildEngineQuery(query, engine string) string {
 	}
 }
 
-// hasAnyWord reports whether s contains any of words (case-insensitive, whole word).
+// hasAnyWord reports whether s contains any of words as whole tokens (case-insensitive).
+// It tokenizes s on whitespace and compares lowercased tokens against the target words.
 func hasAnyWord(s string, words []string) bool {
-	low := strings.ToLower(s)
+	wordSet := make(map[string]bool, len(words))
 	for _, w := range words {
-		if strings.Contains(" "+low+" ", " "+w+" ") {
+		wordSet[strings.ToLower(w)] = true
+	}
+	// Strip trailing punctuation from each token before comparing
+	punctRe := regexp.MustCompile(`[^\p{L}\p{N}]+$`)
+	for _, tok := range strings.Fields(s) {
+		clean := strings.ToLower(punctRe.ReplaceAllString(tok, ""))
+		if wordSet[clean] {
 			return true
 		}
 	}
@@ -3393,7 +3405,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			if rest, ok := strings.CutPrefix(rawQ, "k:"); ok {
 				fields := strings.Fields(rest)
 				if len(fields) > 0 {
-					if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= 50 {
+				if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= maxToolResultRows {
 						k = n
 						rawQ = strings.TrimSpace(rest[len(fields[0]):])
 						continue
@@ -3421,7 +3433,10 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		} else {
 			var filtered []searchResult
 			for _, h := range hits {
-				if h.Score < 0 || h.Score >= threshold { // score<0 means neighbor context
+				// searchJSON returns neighbor-context chunks with Score=-1;
+				// those are always included regardless of threshold because
+				// they provide narrative context for a nearby primary hit.
+				if h.Score < 0 || h.Score >= threshold {
 					filtered = append(filtered, h)
 				}
 			}
@@ -3434,7 +3449,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 				for i, h := range filtered {
 					label := fmt.Sprintf("%.2f", h.Score)
 					if h.Score < 0 {
-						label = "Kontext"
+						label = "Kontext" // neighbor chunk, no independent similarity score
 					}
 					sb.WriteString(fmt.Sprintf("[%d | Score: %s]\n%s\n\n", i+1, label, h.Content))
 				}
@@ -3443,18 +3458,30 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			}
 		}
 	case "sql_query":
-		// Allow only SELECT statements for safety
-		trimmed := strings.TrimSpace(tr.Query)
+		// Strip SQL block comments (/* … */) and line comments (-- …) before checking
+		// to prevent bypass via /* INSERT */ or -- INSERT tricks.
+		trimmed := stripSQLComments(strings.TrimSpace(tr.Query))
 		upper := strings.ToUpper(trimmed)
 		if !strings.HasPrefix(upper, "SELECT") {
 			fetchErr = fmt.Errorf("sql_query: only SELECT statements are allowed")
 			break
 		}
-		// Block dangerous keywords even inside SELECT (subqueries, CTEs, etc.)
-		for _, forbidden := range []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "REPLACE"} {
-			if strings.Contains(upper, forbidden) {
-				fetchErr = fmt.Errorf("sql_query: statement contains disallowed keyword %s", forbidden)
-				break
+		// Block DML/DDL and dangerous administrative keywords even inside SELECT
+		// (e.g. subqueries, CTEs that wrap forbidden operations).
+		forbidden := []string{
+			"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+			"TRUNCATE", "REPLACE", "ATTACH", "DETACH", "PRAGMA",
+		}
+		for _, kw := range forbidden {
+			// Use word-boundary check: keyword must be followed by whitespace or end
+			if idx := strings.Index(upper, kw); idx >= 0 {
+				// Verify it is a standalone keyword token (not a prefix of a longer word)
+				after := idx + len(kw)
+				isToken := after >= len(upper) || !isAlphaNumUnder(rune(upper[after]))
+				if isToken {
+					fetchErr = fmt.Errorf("sql_query: statement contains disallowed keyword %s", kw)
+					break
+				}
 			}
 		}
 		if fetchErr != nil {
@@ -3481,7 +3508,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("SQL-Ergebnis (%d Zeilen):\n\n", len(rs.Rows)))
 		for i, row := range rs.Rows {
-			if i >= 50 { // cap output for LLM context window safety
+			if i >= maxToolResultRows { // cap output for LLM context window safety
 				sb.WriteString(fmt.Sprintf("… (%d weitere Zeilen abgeschnitten)\n", len(rs.Rows)-i))
 				break
 			}
@@ -4990,6 +5017,27 @@ func isAlphaToken(s string) bool {
 	return hasLetter(s) && !hasDigit(s)
 }
 
+// isAlphaNumUnder reports whether r is a letter, digit, or underscore —
+// used to identify whether a SQL keyword is a standalone token.
+func isAlphaNumUnder(r rune) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
+		(r >= '0' && r <= '9') || r == '_'
+}
+
+// sqlBlockCommentRe matches /* … */ SQL block comments (non-greedy).
+var sqlBlockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// sqlLineCommentRe matches -- … to end-of-line SQL line comments.
+var sqlLineCommentRe = regexp.MustCompile(`--[^\n]*`)
+
+// stripSQLComments removes SQL block comments (/* … */) and line comments (-- …)
+// from a SQL string so that hidden keywords cannot bypass validation.
+func stripSQLComments(q string) string {
+	q = sqlBlockCommentRe.ReplaceAllString(q, " ")
+	q = sqlLineCommentRe.ReplaceAllString(q, " ")
+	return strings.TrimSpace(q)
+}
+
 func stopwordSet() map[string]bool {
 	return map[string]bool{
 		"was": true, "weisst": true, "weißt": true, "du": true, "ueber": true, "über": true,
@@ -5113,11 +5161,18 @@ func expandExternalSearchQueries(q string) []string {
 		add(&out, tokens[0]+" "+tokens[1])
 	}
 
-	// Technical queries: add "Technische Details" prefix and exact phrase
+	// Technical queries: add language-appropriate detail/datasheet suffix variants
 	if looksTechnicalQuery(base) {
-		add(&out, "Technische Details "+base)
-		add(&out, base+" Datenblatt")
-		add(&out, base+" specification")
+		// Detect query language: German text uses umlauts or common German words
+		isGermanQuery := strings.ContainsAny(base, "äöüÄÖÜß") ||
+			hasAnyWord(base, []string{"und", "der", "die", "das", "von", "für", "mit"})
+		if isGermanQuery {
+			add(&out, "Technische Details "+base)
+			add(&out, base+" Datenblatt")
+		} else {
+			add(&out, base+" technical details")
+			add(&out, base+" specification")
+		}
 	}
 
 	// Add keyword-only variant (strip stopwords)
