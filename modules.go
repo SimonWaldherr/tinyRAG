@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -229,6 +231,189 @@ func allowedTextExtensions() map[string]bool {
 	}
 }
 
+// maxXMLFileSize is the maximum number of bytes read from a single XML entry
+// inside an Office document ZIP archive.
+const maxXMLFileSize = 20 * 1024 * 1024
+
+// minTextRunLength is the minimum number of consecutive printable ASCII
+// characters required to treat a run as a text fragment during PDF fallback extraction.
+const minTextRunLength = 4
+
+func allowedBinaryExtensions() map[string]bool {
+	return map[string]bool{
+		".pdf":  true,
+		".docx": true,
+		".odt":  true,
+		".pptx": true,
+		".odp":  true,
+		".xlsx": true,
+		".ods":  true,
+	}
+}
+
+// stripXMLTags removes all XML/HTML tags from s and collapses whitespace,
+// returning only the human-readable text content.
+func stripXMLTags(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+			b.WriteByte(' ')
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	// Normalise runs of whitespace
+	whitespaceReplacer := strings.NewReplacer("\r\n", "\n", "\r", "\n")
+	out := whitespaceReplacer.Replace(b.String())
+	// Collapse repeated blank lines
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(l)
+		lines = append(lines, t)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// extractXMLFromZip opens a ZIP archive from data and returns the concatenated
+// text content of all entries whose name matches one of the given paths.
+func extractXMLFromZip(data []byte, paths ...string) (string, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("not a valid ZIP archive: %w", err)
+	}
+	pathSet := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		pathSet[p] = true
+	}
+	var sb strings.Builder
+	for _, f := range zr.File {
+		if !pathSet[f.Name] {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		raw, err := io.ReadAll(io.LimitReader(rc, maxXMLFileSize))
+		rc.Close()
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(stripXMLTags(string(raw)))
+		sb.WriteByte('\n')
+	}
+	return strings.TrimSpace(sb.String()), nil
+}
+
+// extractTextFromPDF tries to extract text from a PDF byte slice.
+// It first attempts the external pdftotext tool (poppler-utils);
+// if unavailable it falls back to a simple heuristic that scans the
+// raw PDF binary for printable ASCII runs (adequate for simple PDFs).
+func extractTextFromPDF(data []byte) (string, error) {
+	// Try pdftotext if available.
+	if bin, err := exec.LookPath("pdftotext"); err == nil {
+		tmp, err := os.CreateTemp("", "tinyrag-*.pdf")
+		if err != nil {
+			return "", err
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if _, err := tmp.Write(data); err != nil {
+			tmp.Close()
+			return "", err
+		}
+		tmp.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, bin, "-nopgbrk", "-enc", "UTF-8", tmpPath, "-").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+
+	// Fallback: scan for printable UTF-8 text runs inside the PDF binary.
+	// This works reasonably well for unencrypted PDFs with embedded plain text.
+	var sb strings.Builder
+	run := make([]byte, 0, 64)
+	flush := func() {
+		if len(run) >= minTextRunLength {
+			sb.Write(run)
+			sb.WriteByte('\n')
+		}
+		run = run[:0]
+	}
+	for _, b := range data {
+		if b >= 0x20 && b < 0x7f {
+			run = append(run, b)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	text := sb.String()
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("could not extract text from PDF (install pdftotext for better results)")
+	}
+	return text, nil
+}
+
+// extractTextFromFile extracts readable text from data according to the file
+// extension. For plain-text types the bytes are returned as-is; for binary
+// document formats (PDF, DOCX, ODT …) specialised parsers are used.
+func extractTextFromFile(data []byte, filename string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".pdf":
+		return extractTextFromPDF(data)
+	case ".docx", ".pptx", ".xlsx":
+		// Office Open XML: a ZIP containing XML parts.
+		var xmlPaths []string
+		switch ext {
+		case ".docx":
+			xmlPaths = []string{"word/document.xml"}
+		case ".pptx":
+			// Collect slide XML files dynamically.
+			zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				return "", fmt.Errorf("invalid PPTX: %w", err)
+			}
+			for _, f := range zr.File {
+				if strings.HasPrefix(f.Name, "ppt/slides/slide") && strings.HasSuffix(f.Name, ".xml") {
+					xmlPaths = append(xmlPaths, f.Name)
+				}
+			}
+		case ".xlsx":
+			xmlPaths = []string{"xl/sharedStrings.xml"}
+		}
+		text, err := extractXMLFromZip(data, xmlPaths...)
+		if err != nil {
+			return "", fmt.Errorf("could not parse %s: %w", ext, err)
+		}
+		if strings.TrimSpace(text) == "" {
+			return "", fmt.Errorf("no text found in %s document", ext)
+		}
+		return text, nil
+	case ".odt", ".odp", ".ods":
+		// OpenDocument: a ZIP containing content.xml.
+		text, err := extractXMLFromZip(data, "content.xml")
+		if err != nil {
+			return "", fmt.Errorf("could not parse %s: %w", ext, err)
+		}
+		if strings.TrimSpace(text) == "" {
+			return "", fmt.Errorf("no text found in %s document", ext)
+		}
+		return text, nil
+	default:
+		// Treat as plain text (UTF-8).
+		return string(data), nil
+	}
+}
+
 func readFileForRAG(path string, maxBytes int64) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -240,12 +425,16 @@ func readFileForRAG(path string, maxBytes int64) (string, error) {
 	if info.Size() > maxBytes {
 		return "", fmt.Errorf("file too large (%d bytes)", info.Size())
 	}
-	if !allowedTextExtensions()[strings.ToLower(filepath.Ext(path))] {
+	ext := strings.ToLower(filepath.Ext(path))
+	if !allowedTextExtensions()[ext] && !allowedBinaryExtensions()[ext] {
 		return "", fmt.Errorf("unsupported file type: %s", filepath.Ext(path))
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
+	}
+	if allowedBinaryExtensions()[ext] {
+		return extractTextFromFile(b, path)
 	}
 	return string(b), nil
 }

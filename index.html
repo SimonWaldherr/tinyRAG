@@ -128,17 +128,18 @@
           <span data-i18n="offline_mode">Offline</span>
         </label>
       </div>
-      <div class="chat-input-wrapper">
-        <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
-        <label class="attach-img-btn" for="chatImageInput" title="Bild anhängen (für Vision-Modelle)" aria-label="Bild anhängen">
-          <span aria-hidden="true">🖼</span>
-          <input type="file" id="chatImageInput" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" aria-hidden="true">
-        </label>
-        <button id="chatBtn" aria-label="Send message"><span data-i18n="send">Senden</span></button>
+      <!-- Image attachment preview (hidden until an image is selected) -->
+      <div id="imagePreviewBar" class="image-preview-bar" style="display:none" aria-live="polite">
+        <img id="imagePreviewThumb" class="image-preview-thumb" src="" alt="Attached image preview">
+        <span id="imagePreviewName" class="image-preview-name"></span>
+        <button id="imagePreviewRemove" class="image-preview-remove" aria-label="Remove attached image">✕</button>
       </div>
-      <div id="chatImagePreview" class="chat-image-preview" style="display:none" aria-label="Attached image preview">
-        <img id="chatImageThumb" alt="Attached image" style="max-height:80px;border-radius:6px;">
-        <button id="chatImageClear" class="img-clear-btn" aria-label="Remove attached image" title="Bild entfernen">✕</button>
+      <div class="chat-input-wrapper">
+        <button id="sttBtn" class="chat-icon-btn" aria-label="Record voice input" title="Spracheingabe" aria-pressed="false">🎤</button>
+        <button id="imageAttachBtn" class="chat-icon-btn" aria-label="Attach image for vision" title="Bild anhängen">🖼</button>
+        <input type="file" id="imageAttachInput" accept="image/*" style="display:none" aria-hidden="true">
+        <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
+        <button id="chatBtn" aria-label="Send message"><span data-i18n="send">Senden</span></button>
       </div>
       <div class="chat-footer">
         <span data-i18n="chat_disclaimer">tinyRAG can make mistakes. Check important info.</span>
@@ -227,8 +228,8 @@
       <label for="fileInput" data-i18n="upload_label">Textdatei hochladen</label>
       <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop zone for file upload">
         <p data-i18n="drop_zone_text">Datei hierher ziehen oder klicken</p>
-        <p class="hint upload-format-hint">Text: .txt .md .csv .json .xml .html .log u.a. — Bilder (Vision-Modell erforderlich): .jpg .png .gif .webp</p>
-        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.htm,.yaml,.yml,.toml,.ini,.cfg,.conf,.sql,.go,.py,.js,.ts,.rs,.c,.h,.cpp,.java,.jpg,.jpeg,.png,.gif,.webp" aria-label="File input">
+        <p class="hint upload-format-hint">Text: .txt .md .csv .json .xml .html .log .pdf .docx .odt u.a. — Bilder (Vision-Modell erforderlich): .jpg .png .gif .webp</p>
+        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.htm,.yaml,.yml,.toml,.ini,.cfg,.conf,.sql,.go,.py,.js,.ts,.rs,.c,.h,.cpp,.java,.pdf,.docx,.odt,.pptx,.xlsx,.jpg,.jpeg,.png,.gif,.webp" aria-label="File input">
       </div>
       <div id="uploadStatus" role="status" aria-live="polite"></div>
     </div>
