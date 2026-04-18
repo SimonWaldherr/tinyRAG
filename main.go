@@ -355,7 +355,7 @@ func canRoleUseTool(role, tool string) bool {
 		return p.CanRunCode
 	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news", "wikidata", "github":
 		return p.CanWebFetch
-	case "local_search", "datetime", "calculate", "llm":
+	case "local_search", "datetime", "calculate", "llm", "vector_query", "sql_query":
 		return true
 	default:
 		// Unknown tool IDs (e.g. custom APIs) are treated as external fetches.
@@ -1456,26 +1456,54 @@ func fetchStackOverflow(query string) (string, error) {
 
 func fetchMultiWebSearch(query string) (string, error) {
 	variants := expandExternalSearchQueries(query)
+	if len(variants) == 0 {
+		variants = []string{query}
+	}
 	var parts []string
 	var errs []string
 
+	// 1. DuckDuckGo: try up to 2 query variants
 	for i, variant := range variants {
-		if i >= 3 {
+		if i >= 2 {
 			break
 		}
 		if text, err := fetchDuckDuckGo(variant); err == nil && strings.TrimSpace(text) != "" {
 			parts = append(parts, fmt.Sprintf("DuckDuckGo [%s]\n%s", variant, text))
+			break // one good DDG result is enough
 		} else if err != nil {
 			errs = append(errs, "ddg("+variant+"): "+err.Error())
 		}
 	}
 
+	// 2. MetaGer: best for German-language and privacy-sensitive queries
+	if text, err := fetchMetaGer(buildEngineQuery(query, "metager")); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "metager: "+err.Error())
+	}
+
+	// 3. Ecosia: additional perspective (Bing-backed, eco-focused)
+	if text, err := fetchEcosia(buildEngineQuery(query, "ecosia")); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "ecosia: "+err.Error())
+	}
+
+	// 4. Brave: independent index, different from DDG/Bing for controversial/niche queries
+	if text, err := fetchBraveSearch(buildEngineQuery(query, "brave")); err == nil && strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	} else if err != nil {
+		errs = append(errs, "brave: "+err.Error())
+	}
+
+	// 5. Wikidata for structured entity data
 	if text, err := fetchWikidata(variants[0]); err == nil && strings.TrimSpace(text) != "" {
 		parts = append(parts, text)
 	} else if err != nil {
 		errs = append(errs, "wikidata: "+err.Error())
 	}
 
+	// 6. For technical queries: GitHub + StackOverflow
 	if looksTechnicalQuery(query) {
 		if text, err := fetchGitHub(variants[0]); err == nil && strings.TrimSpace(text) != "" {
 			parts = append(parts, text)
@@ -1496,6 +1524,199 @@ func fetchMultiWebSearch(query string) (string, error) {
 		return "", fmt.Errorf("Errors: %s", strings.Join(errs, " | "))
 	}
 	return strings.Join(parts, "\n\n---\n\n"), nil
+}
+
+// buildEngineQuery builds an optimized search query string for a specific
+// search engine, adding appropriate operators, language hints, and filters.
+//
+//   - "metager"  — adds German-language hints for German queries
+//   - "ecosia"   — same as base but with eco/environmental context stripped
+//   - "brave"    — strips time-sensitive words for better index recall
+//   - default    — returns the base query unchanged
+func buildEngineQuery(query, engine string) string {
+	base := strings.TrimSpace(query)
+	if base == "" {
+		return query
+	}
+	// Detect query language heuristic (German contains umlauts or common words)
+	isGerman := strings.ContainsAny(base, "äöüÄÖÜß") ||
+		hasAnyWord(base, []string{"und", "der", "die", "das", "ist", "von", "für", "mit", "was", "wie", "wer"})
+
+	switch engine {
+	case "metager":
+		// MetaGer indexes many German and European sources; prefix with language hint
+		if isGerman {
+			return base // MetaGer already defaults to German sources
+		}
+		return base
+	case "ecosia":
+		// Ecosia is Bing-backed; strip question words to get a cleaner keyword query
+		base = stripQuestionWords(base)
+		return base
+	case "brave":
+		// Brave has its own index; remove news-biasing modifiers for recall
+		base = strings.TrimPrefix(base, `news "`)
+		base = strings.TrimSuffix(base, `"`)
+		return strings.TrimSpace(base)
+	default:
+		return base
+	}
+}
+
+// hasAnyWord reports whether s contains any of words (case-insensitive, whole word).
+func hasAnyWord(s string, words []string) bool {
+	low := strings.ToLower(s)
+	for _, w := range words {
+		if strings.Contains(" "+low+" ", " "+w+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// stripQuestionWords removes common question-word prefixes from a query
+// so that search engines receive clean keyword queries.
+func stripQuestionWords(q string) string {
+	prefixes := []string{
+		"was ist ", "wer ist ", "wie ist ", "wo ist ", "wann ist ", "warum ist ", "welche ",
+		"what is ", "who is ", "where is ", "when is ", "why is ", "which ",
+		"qu'est-ce que ", "qui est ", "où est ", "quand est ",
+	}
+	low := strings.ToLower(q)
+	for _, p := range prefixes {
+		if strings.HasPrefix(low, p) {
+			return q[len(p):]
+		}
+	}
+	return q
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional search engines: MetaGer, Ecosia, Brave
+// ─────────────────────────────────────────────────────────────────────────────
+
+// fetchMetaGer scrapes the MetaGer meta-search engine results page.
+// MetaGer is a privacy-respecting German meta-search engine that aggregates
+// results from Bing, Yandex, and others without tracking.
+func fetchMetaGer(query string) (string, error) {
+	u := fmt.Sprintf("https://metager.de/meta/meta.ger3?eingabe=%s&s=0&bfe=on", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept-Language", "de,en;q=0.9")
+	client := newHTTPClient(20 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("MetaGer fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	// Extract title + snippet pairs from the result HTML
+	titleRe := regexp.MustCompile(`(?i)<h2[^>]*class="[^"]*result-title[^"]*"[^>]*>.*?<a[^>]*>(.*?)</a>`)
+	snippetRe := regexp.MustCompile(`(?i)<p[^>]*class="[^"]*result-description[^"]*"[^>]*>(.*?)</p>`)
+	titles := titleRe.FindAllStringSubmatch(string(body), 8)
+	snippets := snippetRe.FindAllStringSubmatch(string(body), 8)
+	var parts []string
+	for i, t := range titles {
+		title := html.UnescapeString(htmlTagRe.ReplaceAllString(t[1], ""))
+		title = strings.TrimSpace(title)
+		if title == "" {
+			continue
+		}
+		entry := "• " + title
+		if i < len(snippets) {
+			snip := html.UnescapeString(htmlTagRe.ReplaceAllString(snippets[i][1], ""))
+			snip = strings.TrimSpace(snip)
+			if snip != "" {
+				entry += "\n  " + snip
+			}
+		}
+		parts = append(parts, entry)
+		if len(parts) >= 6 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("MetaGer returned no results for %q", query)
+	}
+	return fmt.Sprintf("MetaGer-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(parts, "\n\n")), nil
+}
+
+// fetchEcosia scrapes Ecosia search result snippets for the given query.
+// Ecosia is an environmentally-focused search engine powered by Bing.
+func fetchEcosia(query string) (string, error) {
+	u := fmt.Sprintf("https://www.ecosia.org/search?method=index&q=%s", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept-Language", "de,en;q=0.9")
+	client := newHTTPClient(20 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Ecosia fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	snippetRe := regexp.MustCompile(`(?i)<p[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</p>`)
+	matches := snippetRe.FindAllStringSubmatch(string(body), 8)
+	var parts []string
+	for _, m := range matches {
+		s := html.UnescapeString(htmlTagRe.ReplaceAllString(m[1], ""))
+		s = strings.TrimSpace(s)
+		if s != "" {
+			parts = append(parts, "- "+s)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("Ecosia returned no results for %q", query)
+	}
+	return fmt.Sprintf("Ecosia-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(parts, "\n")), nil
+}
+
+// fetchBraveSearch fetches results from the Brave Search HTML endpoint.
+// Brave Search is an independent search index that does not rely on Google/Bing.
+func fetchBraveSearch(query string) (string, error) {
+	u := fmt.Sprintf("https://search.brave.com/search?q=%s&source=web", url.QueryEscape(query))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
+	req.Header.Set("Accept-Language", "de,en;q=0.9")
+	client := newHTTPClient(20 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Brave fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	descRe := regexp.MustCompile(`(?i)<p[^>]*class="[^"]*snippet-description[^"]*"[^>]*>(.*?)</p>`)
+	matches := descRe.FindAllStringSubmatch(string(body), 8)
+	var parts []string
+	for _, m := range matches {
+		s := html.UnescapeString(htmlTagRe.ReplaceAllString(m[1], ""))
+		s = strings.TrimSpace(s)
+		if s != "" {
+			parts = append(parts, "- "+s)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("Brave Search returned no results for %q", query)
+	}
+	return fmt.Sprintf("Brave-Suchergebnisse für \"%s\":\n\n%s", query, strings.Join(parts, "\n")), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3077,6 +3298,16 @@ var builtinTools = []toolDef{
 		ParamHint:   "Suchbegriff für die Vektorsuche",
 	},
 	{
+		Name:        "vector_query",
+		Description: "Führt eine präzise Vektorähnlichkeitssuche in der Wissensbasis aus. Gut für semantisch verwandte Konzepte, Synonymsuchen oder wenn `local_search` nicht die gewünschten Treffer liefert. Unterstützt optionale Parameter: 'k:10 threshold:0.7 <Suchbegriff>'.",
+		ParamHint:   "[k:N] [threshold:F] Suchbegriff (z.B. 'k:8 threshold:0.65 Lagertemperatur')",
+	},
+	{
+		Name:        "sql_query",
+		Description: "Führt eine schreibgeschützte SQL-SELECT-Abfrage direkt auf der tinySQL-Wissensbasis aus. Nützlich für genaue Textsuchen, Filterung nach Artikel/Quelle oder Aggregationen. Nur SELECT erlaubt. Verfügbare Tabelle: chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embed_model TEXT, role_scope TEXT).",
+		ParamHint:   "SQL SELECT-Statement (z.B. 'SELECT article, content FROM chunks WHERE content LIKE \"%Temperatur%\" LIMIT 5')",
+	},
+	{
 		Name:        "datetime",
 		Description: "Gibt das aktuelle System-Datum und die Uhrzeit zurück. Gut für zeitliche Einordnungen.",
 		ParamHint:   "Leer lassen oder 'now'",
@@ -3114,7 +3345,7 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 		}
 	}
 	switch tr.Tool {
-	case "calculate", "local_search", "datetime":
+	case "calculate", "local_search", "datetime", "vector_query", "sql_query":
 		return true
 	case "nanogo", "exec_code":
 		return s.AllowNanoGo || s.AllowCodeExec
@@ -3153,6 +3384,111 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			text = sb.String()
 			source = "rag_local:" + tr.Query
 		}
+	case "vector_query":
+		// Parse optional k:N and threshold:F prefixes from the query string
+		k := s.K
+		threshold := 0.6
+		rawQ := strings.TrimSpace(tr.Query)
+		for {
+			if rest, ok := strings.CutPrefix(rawQ, "k:"); ok {
+				fields := strings.Fields(rest)
+				if len(fields) > 0 {
+					if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= 50 {
+						k = n
+						rawQ = strings.TrimSpace(rest[len(fields[0]):])
+						continue
+					}
+				}
+			}
+			if rest, ok := strings.CutPrefix(rawQ, "threshold:"); ok {
+				fields := strings.Fields(rest)
+				if len(fields) > 0 {
+					if f, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil && f >= 0 && f <= 1 {
+						threshold = f
+						rawQ = strings.TrimSpace(rest[len(fields[0]):])
+						continue
+					}
+				}
+			}
+			break
+		}
+		if rawQ == "" {
+			rawQ = tr.Query
+		}
+		hits, err := rag.searchJSON(rawQ, k)
+		if err != nil {
+			fetchErr = err
+		} else {
+			var filtered []searchResult
+			for _, h := range hits {
+				if h.Score < 0 || h.Score >= threshold { // score<0 means neighbor context
+					filtered = append(filtered, h)
+				}
+			}
+			if len(filtered) == 0 {
+				text = fmt.Sprintf("Keine Treffer über Schwellwert %.2f für: %s", threshold, rawQ)
+				source = "vector_query:" + rawQ
+			} else {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("Vektor-Suche '%s' (k=%d, threshold=%.2f): %d Treffer\n\n", rawQ, k, threshold, len(filtered)))
+				for i, h := range filtered {
+					label := fmt.Sprintf("%.2f", h.Score)
+					if h.Score < 0 {
+						label = "Kontext"
+					}
+					sb.WriteString(fmt.Sprintf("[%d | Score: %s]\n%s\n\n", i+1, label, h.Content))
+				}
+				text = sb.String()
+				source = "vector_query:" + rawQ
+			}
+		}
+	case "sql_query":
+		// Allow only SELECT statements for safety
+		trimmed := strings.TrimSpace(tr.Query)
+		upper := strings.ToUpper(trimmed)
+		if !strings.HasPrefix(upper, "SELECT") {
+			fetchErr = fmt.Errorf("sql_query: only SELECT statements are allowed")
+			break
+		}
+		// Block dangerous keywords even inside SELECT (subqueries, CTEs, etc.)
+		for _, forbidden := range []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "REPLACE"} {
+			if strings.Contains(upper, forbidden) {
+				fetchErr = fmt.Errorf("sql_query: statement contains disallowed keyword %s", forbidden)
+				break
+			}
+		}
+		if fetchErr != nil {
+			break
+		}
+		stmt, err := tinysql.ParseSQL(trimmed)
+		if err != nil {
+			fetchErr = fmt.Errorf("sql_query parse: %w", err)
+			break
+		}
+		rag.dbMu.Lock()
+		rs, err := tinysql.Execute(context.Background(), rag.db, "default", stmt)
+		rag.dbMu.Unlock()
+		if err != nil {
+			fetchErr = fmt.Errorf("sql_query exec: %w", err)
+			break
+		}
+		if rs == nil || len(rs.Rows) == 0 {
+			text = "SQL-Abfrage ergab keine Zeilen."
+			source = "sql_query"
+			break
+		}
+		// Format result as a simple text table
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("SQL-Ergebnis (%d Zeilen):\n\n", len(rs.Rows)))
+		for i, row := range rs.Rows {
+			if i >= 50 { // cap output for LLM context window safety
+				sb.WriteString(fmt.Sprintf("… (%d weitere Zeilen abgeschnitten)\n", len(rs.Rows)-i))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("Zeile %d: %v\n", i+1, row))
+		}
+		text = sb.String()
+		source = "sql_query"
 	case "datetime":
 		text = fmt.Sprintf("Aktuelles System-Datum und Uhrzeit: %s", time.Now().Format("2006-01-02 15:04:05 MST"))
 		source = "system:datetime"
@@ -3725,8 +4061,10 @@ func buildResponseInstructionsPrompt(deep bool, usageProfile string) string {
 	sb.WriteString("- Beginne mit der Frage: Reicht der lokale Kontext aus, ist er unsicher oder fehlt er?\n")
 	sb.WriteString("- Wenn der lokale Kontext ausreicht, antworte direkt und sage knapp, dass die Antwort auf der Wissensbasis beruht.\n")
 	sb.WriteString("- Wenn Informationen fehlen oder potenziell veraltet sind, nutze genau ein passendes Tool.\n")
-	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`; fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code- oder Library-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
-	sb.WriteString("- Bei technischen Artikeln, Produktcodes oder Teilenummern darfst du praezisere Suchanfragen bilden, z.B. Teilstrings, exakte Phrasen mit Anfuehrungszeichen oder Varianten wie `Technische Details <Begriff>`.\n")
+	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch` (nutzt DuckDuckGo, MetaGer, Ecosia, Brave gleichzeitig); fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code- oder Library-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
+	sb.WriteString("- Bei technischen Artikeln, Produktcodes oder Teilenummern darfst du praezisere Suchanfragen bilden, z.B. Teilstrings, exakte Phrasen mit Anfuehrungszeichen (\"Begriff\"), `Technische Details <Begriff>`, `<Begriff> Datenblatt` oder `<Begriff> specification`.\n")
+	sb.WriteString("- Wenn die semantische Standardsuche nicht ausreicht: nutze `vector_query` mit optionalen Parametern `k:N threshold:F Suchbegriff` fuer mehr Treffer oder niedrigeren Schwellwert.\n")
+	sb.WriteString("- Fuer Filtern, Zaehlen oder Durchsuchen der Wissensbasis nach konkreten Textstellen nutze `sql_query` mit einem SELECT auf der Tabelle `chunks` (Spalten: id, article, chunk_idx, content, embed_model, role_scope). Nur SELECT erlaubt!\n")
 	sb.WriteString("- Behaupte nie mehr Sicherheit, als der Kontext hergibt.\n")
 	sb.WriteString("- Erfinde keine Kontaktinformationen, URLs, APIs, Produktdetails, Roadmaps oder technische Interna.\n")
 	sb.WriteString("- Wenn ein Tool benutzt wurde, liefere danach genau eine ueberarbeitete finale Antwort, nicht zwei Versionen.\n")
@@ -4744,7 +5082,7 @@ func expandRetrievalQueries(q string) []weightedSearchQuery {
 func expandExternalSearchQueries(q string) []string {
 	base := strings.TrimSpace(refineSearchQuery(q))
 	if base == "" {
-		return nil
+		return []string{q}
 	}
 	seen := map[string]bool{}
 	add := func(out *[]string, query string) {
@@ -4763,19 +5101,44 @@ func expandExternalSearchQueries(q string) []string {
 	var out []string
 	add(&out, base)
 	tokens := splitSearchTokens(base)
+
+	// Exact-phrase variant for short, multi-word queries
+	if len(tokens) >= 2 && len(tokens) <= 5 {
+		add(&out, `"`+base+`"`)
+	}
+
+	// Product-code / part-number: quote the first two tokens if either contains digits
 	if len(tokens) >= 2 && (hasDigit(tokens[0]) || hasDigit(tokens[1])) {
 		add(&out, `"`+tokens[0]+` `+tokens[1]+`"`)
 		add(&out, tokens[0]+" "+tokens[1])
 	}
+
+	// Technical queries: add "Technische Details" prefix and exact phrase
 	if looksTechnicalQuery(base) {
 		add(&out, "Technische Details "+base)
-		add(&out, `"`+base+`"`)
+		add(&out, base+" Datenblatt")
+		add(&out, base+" specification")
 	}
+
+	// Add keyword-only variant (strip stopwords)
+	stopwords := stopwordSet()
+	var keywords []string
+	for _, tok := range tokens {
+		if !stopwords[strings.ToLower(tok)] && len(tok) > 2 {
+			keywords = append(keywords, tok)
+		}
+	}
+	if len(keywords) > 0 && len(keywords) < len(tokens) {
+		add(&out, strings.Join(keywords, " "))
+	}
+
+	// Add retrieval-style variants for good measure
 	for _, q := range expandRetrievalQueries(base) {
 		add(&out, q.Query)
 	}
-	if len(out) > 6 {
-		out = out[:6]
+
+	if len(out) > 8 {
+		out = out[:8]
 	}
 	return out
 }

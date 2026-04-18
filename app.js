@@ -2522,8 +2522,8 @@ async function logoutUser(){
 }
 
 // Tool suggestion UI (adapted from original tinyRAG)
-var toolIcons={wikipedia:'\u{1F4D6}',duckduckgo:'\u{1F50E}',wiktionary:'\u{1F4DD}',stackoverflow:'\u{1F4BB}',websearch:'\u{1F50D}',news:'\u{1F4F0}',calculate:'\u{1F522}',nanogo:'\u{1F680}'};
-var toolLabels={wikipedia:'Wikipedia',duckduckgo:'DuckDuckGo',wiktionary:'Wiktionary',stackoverflow:'StackOverflow',websearch:'Websuche',news:'News',calculate:'Rechnen',nanogo:'Go-Code'};
+var toolIcons={wikipedia:'\u{1F4D6}',duckduckgo:'\u{1F50E}',wiktionary:'\u{1F4DD}',stackoverflow:'\u{1F4BB}',websearch:'\u{1F50D}',news:'\u{1F4F0}',calculate:'\u{1F522}',nanogo:'\u{1F680}',vector_query:'\u{1F9E0}',sql_query:'\u{1F5C4}'};
+var toolLabels={wikipedia:'Wikipedia',duckduckgo:'DuckDuckGo',wiktionary:'Wiktionary',stackoverflow:'StackOverflow',websearch:'Websuche',news:'News',calculate:'Rechnen',nanogo:'Go-Code',vector_query:'Vektorsuche',sql_query:'SQL-Abfrage'};
 var cachedCustomAPIs=[];
 var cachedModules=[];
 var cachedPersonas=[];
