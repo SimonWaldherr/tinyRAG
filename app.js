@@ -1322,6 +1322,8 @@ async function initSettingsUI(){
   await loadModules();
   await loadPersonas();
   await loadAdmin();
+  await loadBranding(s);
+  await loadAuthSettings();
 
   // Update OpenAI badge visibility in main UI
   updateOpenAIBadge(s);
@@ -2281,6 +2283,242 @@ async function addSamplePersonas(){
   }finally{
     setLoading('#btnAddSamplePersonas', false);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Branding / white-label support
+// ─────────────────────────────────────────────────────────────────────────────
+
+// applyBranding applies branding from settings to the live UI.
+function applyBranding(s){
+  const appName = (s && s.app_name) ? s.app_name : 'tinyRAG';
+  // Page title
+  document.title = appName;
+  const titleEl = document.getElementById('pageTitle');
+  if(titleEl) titleEl.textContent = appName;
+  // Sidebar heading
+  const heading = document.getElementById('appNameHeading');
+  if(heading) heading.textContent = appName;
+  // Logo
+  const logo = document.getElementById('appLogoImg');
+  if(logo){
+    if(s && s.app_logo_url){
+      logo.src = s.app_logo_url;
+      logo.style.display = '';
+    } else {
+      logo.style.display = 'none';
+    }
+  }
+  // Custom CSS injection
+  const cssEl = document.getElementById('customCSS');
+  if(cssEl && s && s.custom_css) cssEl.textContent = s.custom_css;
+}
+
+// loadBranding fills the branding settings form and applies live branding.
+async function loadBranding(s){
+  // s is the already-fetched settings object (optional, will reload if null)
+  if(!s){
+    try{ s = await apiGet('/api/settings'); }catch(e){ return; }
+  }
+  applyBranding(s);
+  if($('#brandAppName')) $('#brandAppName').value = s.app_name || '';
+  if($('#brandLogoURL')) $('#brandLogoURL').value = s.app_logo_url || '';
+  if($('#brandCustomCSS')) $('#brandCustomCSS').value = s.custom_css || '';
+}
+
+// saveBranding POSTs branding fields to /api/admin/branding.
+async function saveBranding(){
+  const payload = {
+    app_name:    ($('#brandAppName')    || {}).value || '',
+    app_logo_url:($('#brandLogoURL')   || {}).value || '',
+    custom_css:  ($('#brandCustomCSS') || {}).value || '',
+  };
+  const st = $('#brandingStatus');
+  try{
+    await apiPost('/api/admin/branding', payload);
+    applyBranding(payload);
+    setStatus(st, 'Gespeichert', 'ok');
+  }catch(e){
+    setStatus(st, 'Fehler: '+(e.message||String(e)), 'err');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web-UI Authentication management
+// ─────────────────────────────────────────────────────────────────────────────
+
+// initSessionUI checks the /api/auth/me endpoint and shows/hides the user bar.
+async function initSessionUI(){
+  try{
+    const me = await apiGet('/api/auth/me');
+    const bar = $('#userBar');
+    if(bar && me.web_ui_auth){
+      bar.style.display = 'flex';
+      const nameEl = $('#userBarName');
+      if(nameEl) nameEl.textContent = me.username + (me.role === 'admin' ? ' (admin)' : '');
+    }
+  }catch(e){
+    // 401 means auth is enabled but no session — /login redirect handled by server
+  }
+}
+
+// loadAuthSettings fetches auth config and fills the Auth tab form.
+async function loadAuthSettings(){
+  try{
+    const cfg = await apiGet('/api/admin/auth/get');
+    if($('#authEnabled'))     $('#authEnabled').checked          = !!cfg.web_ui_auth;
+    if($('#authSessionTTL'))  $('#authSessionTTL').value         = cfg.session_ttl_seconds || 86400;
+    if($('#ldapEnabled'))     $('#ldapEnabled').checked          = !!cfg.ldap_enabled;
+    if($('#ldapServer'))      $('#ldapServer').value             = cfg.ldap_server || '';
+    if($('#ldapPort'))        $('#ldapPort').value               = cfg.ldap_port || 389;
+    if($('#ldapUseTLS'))      $('#ldapUseTLS').checked           = !!cfg.ldap_use_tls;
+    if($('#ldapStartTLS'))    $('#ldapStartTLS').checked         = !!cfg.ldap_start_tls;
+    if($('#ldapBaseDN'))      $('#ldapBaseDN').value             = cfg.ldap_base_dn || '';
+    if($('#ldapBindDN'))      $('#ldapBindDN').value             = cfg.ldap_bind_dn || '';
+    if($('#ldapUserAttr'))    $('#ldapUserAttr').value           = cfg.ldap_user_attr || 'uid';
+    if($('#ldapFilter'))      $('#ldapFilter').value             = cfg.ldap_filter || '';
+    if($('#ldapAdminGroup'))  $('#ldapAdminGroup').value         = cfg.ldap_admin_group || '';
+    if($('#ldapBindPass') && cfg.ldap_bind_pass_set){
+      $('#ldapBindPass').placeholder = '(configured, leave blank to keep)';
+    }
+    await loadWebUsers();
+  }catch(e){
+    // Might be 401 if not admin — silently ignore
+  }
+}
+
+// saveAuthSettings saves web UI auth + session TTL.
+async function saveAuthSettings(){
+  const st = $('#authStatus');
+  const payload = {
+    web_ui_auth:         !!($('#authEnabled')    || {}).checked,
+    session_ttl_seconds: parseInt(($('#authSessionTTL') || {}).value || '86400', 10),
+  };
+  try{
+    await apiPost('/api/admin/auth', payload);
+    setStatus(st, 'Gespeichert', 'ok');
+  }catch(e){
+    setStatus(st, 'Fehler: '+(e.message||String(e)), 'err');
+  }
+}
+
+// saveLDAPSettings saves LDAP configuration.
+async function saveLDAPSettings(){
+  const st = $('#ldapStatus');
+  const payload = {
+    ldap_enabled:    !!($('#ldapEnabled')    || {}).checked,
+    ldap_server:     ($('#ldapServer')       || {}).value || '',
+    ldap_port:       parseInt(($('#ldapPort') || {}).value || '389', 10),
+    ldap_use_tls:    !!($('#ldapUseTLS')     || {}).checked,
+    ldap_start_tls:  !!($('#ldapStartTLS')   || {}).checked,
+    ldap_base_dn:    ($('#ldapBaseDN')        || {}).value || '',
+    ldap_bind_dn:    ($('#ldapBindDN')        || {}).value || '',
+    ldap_bind_pass:  ($('#ldapBindPass')      || {}).value || '',
+    ldap_user_attr:  ($('#ldapUserAttr')      || {}).value || 'uid',
+    ldap_filter:     ($('#ldapFilter')        || {}).value || '',
+    ldap_admin_group:($('#ldapAdminGroup')    || {}).value || '',
+  };
+  try{
+    await apiPost('/api/admin/auth', payload);
+    setStatus(st, 'LDAP-Konfiguration gespeichert', 'ok');
+  }catch(e){
+    setStatus(st, 'Fehler: '+(e.message||String(e)), 'err');
+  }
+}
+
+// loadWebUsers fetches and renders local web UI users.
+async function loadWebUsers(){
+  const box = $('#webUserList');
+  if(!box) return;
+  let list;
+  try{
+    list = await apiGet('/api/admin/webusers');
+  }catch(e){
+    box.innerHTML = '<p class="muted">Nicht verfügbar (Admin-Session erforderlich)</p>';
+    return;
+  }
+  if(!list.length){
+    box.innerHTML = '<p class="muted">Keine lokalen Web-UI-User vorhanden.</p>';
+    return;
+  }
+  box.innerHTML = '';
+  list.forEach(u => {
+    const div = document.createElement('div');
+    div.className = 'api-item';
+    div.innerHTML = `
+      <div style="width:100%">
+        <div class="name" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+          <span>${escHtml(u.username)}</span>
+          <label class="inline-check" style="margin:0">
+            <input type="checkbox" class="wu-enabled" ${u.enabled ? 'checked' : ''}>
+            <span>Enabled</span>
+          </label>
+        </div>
+        <div class="desc">ID: ${escHtml(u.id)} · Rolle: ${escHtml(u.role)} · Erstellt: ${escHtml(u.created_at || '')}</div>
+        <div class="actions-row" style="margin-top:8px">
+          <select class="wu-role" aria-label="User role">
+            <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+            <option value="admin"  ${u.role === 'admin'  ? 'selected' : ''}>Admin</option>
+          </select>
+          <input type="password" class="wu-pass" placeholder="New password (min 8 chars)" style="width:180px">
+          <button class="tool-btn wu-save">Speichern</button>
+          <button class="tool-btn wu-chpass">Passwort setzen</button>
+          <button class="tool-btn danger wu-delete">Löschen</button>
+        </div>
+        <div class="tool-status wu-status" style="margin-top:6px"></div>
+      </div>`;
+    const roleEl    = div.querySelector('.wu-role');
+    const enabledEl = div.querySelector('.wu-enabled');
+    const passEl    = div.querySelector('.wu-pass');
+    const statusEl  = div.querySelector('.wu-status');
+    div.querySelector('.wu-save').addEventListener('click', async ()=>{
+      try{
+        await apiPost('/api/admin/webusers/save', {id: u.id, role: roleEl.value, enabled: !!enabledEl.checked});
+        setStatus(statusEl, 'Gespeichert', 'ok');
+        await loadWebUsers();
+      }catch(e){ setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err'); }
+    });
+    div.querySelector('.wu-chpass').addEventListener('click', async ()=>{
+      const pw = passEl.value;
+      if(pw.length < 8){ setStatus(statusEl, 'Passwort muss mind. 8 Zeichen haben', 'err'); return; }
+      try{
+        await apiPost('/api/admin/webusers/password', {id: u.id, password: pw});
+        passEl.value = '';
+        setStatus(statusEl, 'Passwort geändert', 'ok');
+      }catch(e){ setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err'); }
+    });
+    div.querySelector('.wu-delete').addEventListener('click', async ()=>{
+      if(!confirm('User "'+u.username+'" löschen?')) return;
+      try{
+        await apiPost('/api/admin/webusers/delete', {id: u.id});
+        await loadWebUsers();
+      }catch(e){ setStatus(statusEl, 'Fehler: '+(e.message||String(e)), 'err'); }
+    });
+    box.appendChild(div);
+  });
+}
+
+// addWebUser creates a new local web UI user.
+async function addWebUser(){
+  const name = ($('#newWebUserName') || {}).value?.trim() || '';
+  const pass = ($('#newWebUserPass') || {}).value || '';
+  const role = ($('#newWebUserRole') || {}).value || 'viewer';
+  const st   = $('#webUserStatus');
+  if(!name || !pass){ setStatus(st, 'Username und Passwort erforderlich', 'err'); return; }
+  if(pass.length < 8){ setStatus(st, 'Passwort muss mind. 8 Zeichen haben', 'err'); return; }
+  try{
+    await apiPost('/api/admin/webusers/create', {username: name, password: pass, role});
+    if($('#newWebUserName')) $('#newWebUserName').value = '';
+    if($('#newWebUserPass')) $('#newWebUserPass').value = '';
+    setStatus(st, 'User angelegt', 'ok');
+    await loadWebUsers();
+  }catch(e){ setStatus(st, 'Fehler: '+(e.message||String(e)), 'err'); }
+}
+
+// logoutUser clears the session and redirects to /login.
+async function logoutUser(){
+  try{ await fetch('/api/auth/logout', {method:'POST'}); }catch(e){}
+  window.location.href = '/login';
 }
 
 // Tool suggestion UI (adapted from original tinyRAG)
@@ -3308,6 +3546,25 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#btnAddPersona').addEventListener('click', addPersona);
   const btnAddAdminUser = $('#btnAddAdminUser'); if(btnAddAdminUser) btnAddAdminUser.addEventListener('click', addAdminUser);
   const btnSamples = $('#btnAddSamplePersonas'); if(btnSamples) btnSamples.addEventListener('click', addSamplePersonas);
+
+  // Branding
+  const btnSaveBranding = $('#btnSaveBranding');
+  if(btnSaveBranding) btnSaveBranding.addEventListener('click', saveBranding);
+
+  // Auth & Security tab
+  const btnSaveAuth = $('#btnSaveAuth');
+  if(btnSaveAuth) btnSaveAuth.addEventListener('click', saveAuthSettings);
+  const btnSaveLDAP = $('#btnSaveLDAP');
+  if(btnSaveLDAP) btnSaveLDAP.addEventListener('click', saveLDAPSettings);
+  const btnAddWebUser = $('#btnAddWebUser');
+  if(btnAddWebUser) btnAddWebUser.addEventListener('click', addWebUser);
+
+  // Logout button (sidebar)
+  const logoutBtn = $('#logoutBtn');
+  if(logoutBtn) logoutBtn.addEventListener('click', logoutUser);
+
+  // Check session state and show user bar if applicable
+  await initSessionUI();
 
   await refreshStats();
   // Check backend LLM status and show popup if not available

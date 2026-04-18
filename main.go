@@ -36,6 +36,7 @@ import (
 
 	_ "embed"
 
+	ldap "github.com/go-ldap/ldap/v3"
 	tinysql "github.com/SimonWaldherr/tinySQL"
 	nanogo "simonwaldherr.de/go/nanogo/interp"
 	smallr "simonwaldherr.de/go/smallr"
@@ -68,6 +69,75 @@ var styleCSS string
 
 //go:embed app.js
 var appJS string
+
+// loginPageHTML is a minimal self-contained login page served at /login.
+// Two %s placeholders: (1) page title / (2) app name shown as heading.
+const loginPageHTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>%s – Login</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,sans-serif;background:#f0f2f5;display:flex;align-items:center;justify-content:center;min-height:100vh}
+    .card{background:#fff;border-radius:12px;padding:40px 36px;width:100%%;max-width:360px;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+    h1{font-size:1.4rem;font-weight:700;margin-bottom:6px;color:#111}
+    .subtitle{color:#666;font-size:.9rem;margin-bottom:28px}
+    label{display:block;font-size:.85rem;font-weight:500;margin-bottom:4px;color:#444}
+    input{width:100%%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:.95rem;outline:none;transition:border-color .15s}
+    input:focus{border-color:#6366f1}
+    .field{margin-bottom:18px}
+    button{width:100%%;padding:11px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:opacity .15s}
+    button:hover{opacity:.88}
+    #err{color:#dc2626;font-size:.85rem;margin-top:12px;display:none}
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>%s</h1>
+  <p class="subtitle">Sign in to continue</p>
+  <form id="loginForm">
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit">Sign in</button>
+    <p id="err"></p>
+  </form>
+</div>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('err');
+  errEl.style.display = 'none';
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password})
+    });
+    if (res.ok) {
+      const params = new URLSearchParams(window.location.search);
+      window.location.href = params.get('next') || '/';
+    } else {
+      errEl.textContent = 'Invalid username or password.';
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.textContent = 'Network error. Please try again.';
+    errEl.style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>`
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings (persisted as JSON)
@@ -118,6 +188,47 @@ type appSettings struct {
 	// AllowTinyGo enables compilation and execution of TinyGo programs.
 	// Default: false for security reasons.
 	AllowTinyGo bool `json:"allow_tinygo"`
+
+	// ── Branding (white-label) ────────────────────────────────────────────────
+	// AppName replaces "tinyRAG" throughout the UI. Empty → "tinyRAG".
+	AppName string `json:"app_name"`
+	// AppLogoURL is shown in the sidebar header. Can be an absolute URL or a
+	// base64 data-URI. Empty → default tinyRAG wordmark.
+	AppLogoURL string `json:"app_logo_url"`
+	// CustomCSS is injected verbatim into <style> at page load.
+	CustomCSS string `json:"custom_css"`
+
+	// ── Web-UI authentication (optional) ─────────────────────────────────────
+	// WebUIAuth enables the login screen. When false (default) the UI is
+	// accessible without credentials (single-user / local mode).
+	WebUIAuth bool `json:"web_ui_auth"`
+	// WebUIUsers is the list of local login accounts. Each user has a
+	// username, salted-SHA256 password hash, and a role ("admin"/"viewer").
+	WebUIUsers []webUIUser `json:"web_ui_users"`
+	// SessionTTLSeconds is the lifetime of a session cookie. Default: 86400 (24 h).
+	SessionTTLSeconds int `json:"session_ttl_seconds"`
+
+	// ── LDAP (optional) ───────────────────────────────────────────────────────
+	// When LDAPEnabled is true, the login form also accepts LDAP credentials.
+	// Local WebUIUsers are tried first; LDAP is used as a fallback.
+	LDAPEnabled  bool   `json:"ldap_enabled"`
+	LDAPServer   string `json:"ldap_server"`    // hostname or IP
+	LDAPPort     int    `json:"ldap_port"`      // default 389 (636 for TLS)
+	LDAPUseTLS   bool   `json:"ldap_use_tls"`   // LDAPS
+	LDAPStartTLS bool   `json:"ldap_start_tls"` // STARTTLS over plain connection
+	LDAPBaseDN   string `json:"ldap_base_dn"`   // e.g. "dc=example,dc=com"
+	LDAPBindDN   string `json:"ldap_bind_dn"`   // service-account DN for user search
+	LDAPBindPass string `json:"ldap_bind_pass,omitempty"` // service-account password
+	// LDAPUserAttr is the attribute used to match the username, e.g. "uid" (POSIX)
+	// or "sAMAccountName" (Active Directory).
+	LDAPUserAttr string `json:"ldap_user_attr"`
+	// LDAPFilter is an additional LDAP filter appended to the user search,
+	// e.g. "(memberOf=cn=rag-users,ou=groups,dc=example,dc=com)".
+	// Leave empty for no extra filter.
+	LDAPFilter string `json:"ldap_filter"`
+	// LDAPAdminGroup is the DN of a group whose members receive admin role.
+	// Leave empty to assign "viewer" role to all LDAP users by default.
+	LDAPAdminGroup string `json:"ldap_admin_group"`
 }
 
 // settingsStore provides a thread-safe wrapper around persisted
@@ -130,6 +241,9 @@ type settingsStore struct {
 
 // package-level settings store (initialized in main)
 var settings *settingsStore
+
+// sessions holds all active web-UI browser sessions.
+var sessions = newSessionStore()
 
 // normalizeBaseURL trims and normalizes an LLM base URL, removing
 // trailing slashes and an optional "/v1" suffix.
@@ -351,6 +465,194 @@ type adminAPIUser struct {
 	CreatedAt   string `json:"created_at,omitempty"`
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Web-UI authentication types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// webUIUser represents a local (non-API) user who can log into the web UI.
+type webUIUser struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash,omitempty"` // hex(sha256(salt+password))
+	PasswordSalt string `json:"password_salt,omitempty"` // hex random 16 bytes
+	Role         string `json:"role"`                    // "admin" or "viewer"
+	Enabled      bool   `json:"enabled"`
+	CreatedAt    string `json:"created_at,omitempty"`
+}
+
+// webUISession holds information about an active browser session.
+type webUISession struct {
+	Token     string
+	UserID    string
+	Username  string
+	Role      string
+	ExpiresAt time.Time
+}
+
+// sessionStore is an in-memory store of active web-UI sessions keyed by token.
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]*webUISession
+}
+
+func newSessionStore() *sessionStore {
+	s := &sessionStore{sessions: make(map[string]*webUISession)}
+	go s.sweepLoop()
+	return s
+}
+
+func (ss *sessionStore) create(userID, username, role string, ttl time.Duration) *webUISession {
+	token := generateSessionToken()
+	sess := &webUISession{
+		Token:     token,
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+	ss.mu.Lock()
+	ss.sessions[token] = sess
+	ss.mu.Unlock()
+	return sess
+}
+
+func (ss *sessionStore) get(token string) (*webUISession, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	s, ok := ss.sessions[token]
+	if !ok || time.Now().After(s.ExpiresAt) {
+		delete(ss.sessions, token)
+		return nil, false
+	}
+	return s, true
+}
+
+func (ss *sessionStore) delete(token string) {
+	ss.mu.Lock()
+	delete(ss.sessions, token)
+	ss.mu.Unlock()
+}
+
+// sweepLoop periodically removes expired sessions.
+func (ss *sessionStore) sweepLoop() {
+	for range time.Tick(5 * time.Minute) {
+		ss.mu.Lock()
+		now := time.Now()
+		for tok, s := range ss.sessions {
+			if now.After(s.ExpiresAt) {
+				delete(ss.sessions, tok)
+			}
+		}
+		ss.mu.Unlock()
+	}
+}
+
+// generateSessionToken returns a random 32-byte hex token.
+func generateSessionToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("rand.Read: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// hashWebUIPassword returns hex(sha256(salt + password)).
+func hashWebUIPassword(salt, password string) string {
+	h := sha256.Sum256([]byte(salt + password))
+	return hex.EncodeToString(h[:])
+}
+
+// makeWebUIPasswordSalt generates a new random 16-byte salt (hex encoded).
+func makeWebUIPasswordSalt() (string, error) {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	return hex.EncodeToString(b), err
+}
+
+// verifyWebUIPassword checks a plaintext password against stored hash+salt.
+func verifyWebUIPassword(user webUIUser, password string) bool {
+	if user.PasswordHash == "" {
+		return false
+	}
+	expected := hashWebUIPassword(user.PasswordSalt, password)
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(user.PasswordHash)) == 1
+}
+
+// ldapAuthenticate attempts to authenticate username+password against LDAP.
+// Returns the user's inferred role ("admin"/"viewer") and nil error on success.
+func ldapAuthenticate(s appSettings, username, password string) (string, error) {
+	if !s.LDAPEnabled || s.LDAPServer == "" {
+		return "", fmt.Errorf("LDAP not configured")
+	}
+	addr := fmt.Sprintf("%s:%d", s.LDAPServer, s.LDAPPort)
+	if s.LDAPPort == 0 {
+		if s.LDAPUseTLS {
+			addr = s.LDAPServer + ":636"
+		} else {
+			addr = s.LDAPServer + ":389"
+		}
+	}
+	var conn *ldap.Conn
+	var err error
+	if s.LDAPUseTLS {
+		conn, err = ldap.DialTLS("tcp", addr, nil)
+	} else {
+		conn, err = ldap.DialURL("ldap://" + addr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("LDAP dial: %w", err)
+	}
+	defer conn.Close()
+	if s.LDAPStartTLS && !s.LDAPUseTLS {
+		if err = conn.StartTLS(nil); err != nil {
+			return "", fmt.Errorf("LDAP StartTLS: %w", err)
+		}
+	}
+	// Bind with service account to search for user DN
+	if s.LDAPBindDN != "" {
+		if err = conn.Bind(s.LDAPBindDN, s.LDAPBindPass); err != nil {
+			return "", fmt.Errorf("LDAP service bind: %w", err)
+		}
+	}
+	userAttr := s.LDAPUserAttr
+	if userAttr == "" {
+		userAttr = "uid"
+	}
+	filterStr := fmt.Sprintf("(%s=%s)", userAttr, ldap.EscapeFilter(username))
+	if s.LDAPFilter != "" {
+		filterStr = fmt.Sprintf("(&%s%s)", filterStr, s.LDAPFilter)
+	}
+	searchReq := ldap.NewSearchRequest(
+		s.LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
+		2, 10, false, filterStr,
+		[]string{"dn", "memberOf"},
+		nil,
+	)
+	res, err := conn.Search(searchReq)
+	if err != nil {
+		return "", fmt.Errorf("LDAP search: %w", err)
+	}
+	if len(res.Entries) == 0 {
+		return "", fmt.Errorf("LDAP user not found")
+	}
+	userDN := res.Entries[0].DN
+	// Bind as the found user to verify password
+	if err = conn.Bind(userDN, password); err != nil {
+		return "", fmt.Errorf("LDAP bind as user: %w", err)
+	}
+	// Determine role from group membership
+	role := "viewer"
+	if s.LDAPAdminGroup != "" {
+		for _, attr := range res.Entries[0].GetAttributeValues("memberOf") {
+			if strings.EqualFold(attr, s.LDAPAdminGroup) {
+				role = "admin"
+				break
+			}
+		}
+	}
+	return role, nil
+}
+
 type apiRouteRule struct {
 	Path        string `json:"path"`
 	MatchType   string `json:"match_type"`
@@ -536,6 +838,74 @@ func localAdminOnly(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// sessionFromRequest extracts the active session from the request's
+// "session_token" cookie. Returns nil when not found or expired.
+func sessionFromRequest(r *http.Request) *webUISession {
+	c, err := r.Cookie("session_token")
+	if err != nil || c.Value == "" {
+		return nil
+	}
+	sess, ok := sessions.get(c.Value)
+	if !ok {
+		return nil
+	}
+	return sess
+}
+
+// webUIAuthMiddleware wraps a handler so that it requires a valid web-UI
+// session when WebUIAuth is enabled. API requests carrying a Bearer token
+// bypass the check. If auth is disabled the handler is called directly.
+func webUIAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			next(w, r)
+			return
+		}
+		// Allow API-key authenticated requests through
+		if auth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			next(w, r)
+			return
+		}
+		if xkey := strings.TrimSpace(r.Header.Get("X-API-Key")); xkey != "" {
+			next(w, r)
+			return
+		}
+		if sess := sessionFromRequest(r); sess != nil {
+			next(w, r)
+			return
+		}
+		// For non-API paths redirect to login; for API paths return 401
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.Error(w, "login required", 401)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	}
+}
+
+// requireAdminSession checks that the caller has an active admin session
+// (role == "admin") when WebUIAuth is enabled. Used for admin-only UI operations.
+func requireAdminSession(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			next(w, r)
+			return
+		}
+		sess := sessionFromRequest(r)
+		if sess == nil {
+			http.Error(w, "login required", 401)
+			return
+		}
+		if sess.Role != "admin" {
+			http.Error(w, "admin access required", 403)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // defaultSettingsFromFlags builds initial `appSettings` from CLI flags
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
@@ -563,6 +933,14 @@ func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang strin
 		AllowNanoGo:          false,
 		AllowShellExec:       false,
 		AllowTinyGo:          false,
+		AppName:              "",
+		AppLogoURL:           "",
+		CustomCSS:            "",
+		WebUIAuth:            false,
+		WebUIUsers:           []webUIUser{},
+		SessionTTLSeconds:    86400,
+		LDAPEnabled:          false,
+		LDAPUserAttr:         "uid",
 	}
 }
 
@@ -5034,18 +5412,18 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	adminGuard := func(h http.HandlerFunc) http.HandlerFunc { return routePolicyMiddleware(settings, h) }
 
 	// Static assets
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", webUIAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, indexHTML)
-	})
+	}))
 	mux.HandleFunc("/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		fmt.Fprint(w, styleCSS)
 	})
-	mux.HandleFunc("/app.js", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/app.js", webUIAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		fmt.Fprint(w, appJS)
-	})
+	}))
 
 	// GET /api/settings — current settings
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
@@ -5071,6 +5449,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				"allow_nanogo":           s.AllowNanoGo,
 				// Do not return the API key itself; only expose whether one is configured
 				"openai_key_present": s.OpenAIKey != "",
+				// Branding (safe to expose publicly)
+				"app_name":     s.AppName,
+				"app_logo_url": s.AppLogoURL,
+				"custom_css":   s.CustomCSS,
+				// Auth capabilities (safe to expose so UI can show/hide login)
+				"web_ui_auth":  s.WebUIAuth,
+				"ldap_enabled": s.LDAPEnabled,
 			})
 			return
 
@@ -7301,6 +7686,449 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 	// Connector system routes
 	registerConnectorRoutes(mux, connectors, connectorExec)
+
+	// ── Web-UI Authentication endpoints ──────────────────────────────────────
+
+	// GET /login — login page (HTML); redirects to / when auth is off or already logged in.
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		if sess := sessionFromRequest(r); sess != nil {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		appName := s.AppName
+		if appName == "" {
+			appName = "tinyRAG"
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, loginPageHTML, html.EscapeString(appName), html.EscapeString(appName))
+	})
+
+	// POST /api/auth/login — exchange username+password for a session cookie.
+	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		req.Username = strings.TrimSpace(req.Username)
+		if req.Username == "" || req.Password == "" {
+			http.Error(w, "username and password required", 400)
+			return
+		}
+		s := settings.get()
+		ttl := time.Duration(s.SessionTTLSeconds) * time.Second
+		if ttl <= 0 {
+			ttl = 24 * time.Hour
+		}
+		// 1. Try local users
+		for _, u := range s.WebUIUsers {
+			if !u.Enabled || !strings.EqualFold(u.Username, req.Username) {
+				continue
+			}
+			if verifyWebUIPassword(u, req.Password) {
+				sess := sessions.create(u.ID, u.Username, u.Role, ttl)
+				http.SetCookie(w, &http.Cookie{
+					Name:     "session_token",
+					Value:    sess.Token,
+					Path:     "/",
+					MaxAge:   int(ttl.Seconds()),
+					HttpOnly: true,
+					SameSite: http.SameSiteLaxMode,
+				})
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"ok":       true,
+					"username": u.Username,
+					"role":     u.Role,
+				})
+				return
+			}
+			// Username matched but password wrong — stop here (no LDAP fallback for known local user)
+			http.Error(w, "invalid credentials", 401)
+			return
+		}
+		// 2. Try LDAP if enabled
+		if s.LDAPEnabled {
+			role, err := ldapAuthenticate(s, req.Username, req.Password)
+			if err == nil {
+				sess := sessions.create("ldap:"+req.Username, req.Username, role, ttl)
+				http.SetCookie(w, &http.Cookie{
+					Name:     "session_token",
+					Value:    sess.Token,
+					Path:     "/",
+					MaxAge:   int(ttl.Seconds()),
+					HttpOnly: true,
+					SameSite: http.SameSiteLaxMode,
+				})
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"ok":       true,
+					"username": req.Username,
+					"role":     role,
+				})
+				return
+			}
+			log.Printf("AUTH LDAP failed for %q: %v", req.Username, err)
+		}
+		http.Error(w, "invalid credentials", 401)
+	})
+
+	// POST /api/auth/logout — clear the session cookie.
+	mux.HandleFunc("/api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("session_token"); err == nil {
+			sessions.delete(c.Value)
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session_token",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+
+	// GET /api/auth/me — return current session info (or 401).
+	mux.HandleFunc("/api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		if !s.WebUIAuth {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "web_ui_auth": false})
+			return
+		}
+		sess := sessionFromRequest(r)
+		if sess == nil {
+			http.Error(w, "not authenticated", 401)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"authenticated": true,
+			"web_ui_auth":   true,
+			"username":      sess.Username,
+			"role":          sess.Role,
+			"expires_at":    sess.ExpiresAt.UTC().Format(time.RFC3339),
+		})
+	})
+
+	// ── Branding (admin-only) ────────────────────────────────────────────────
+
+	// POST /api/admin/branding — save white-label settings.
+	mux.HandleFunc("/api/admin/branding", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			AppName    string `json:"app_name"`
+			AppLogoURL string `json:"app_logo_url"`
+			CustomCSS  string `json:"custom_css"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		settings.mu.Lock()
+		settings.s.AppName = strings.TrimSpace(req.AppName)
+		settings.s.AppLogoURL = strings.TrimSpace(req.AppLogoURL)
+		settings.s.CustomCSS = req.CustomCSS
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+
+	// ── Web-UI user management (admin-only) ──────────────────────────────────
+
+	// GET /api/admin/webusers — list web UI users (hashes omitted).
+	mux.HandleFunc("/api/admin/webusers", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		s := settings.get()
+		out := make([]map[string]any, 0, len(s.WebUIUsers))
+		for _, u := range s.WebUIUsers {
+			out = append(out, map[string]any{
+				"id":         u.ID,
+				"username":   u.Username,
+				"role":       u.Role,
+				"enabled":    u.Enabled,
+				"created_at": u.CreatedAt,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+	}))
+
+	// POST /api/admin/webusers/create — create a new web UI user.
+	mux.HandleFunc("/api/admin/webusers/create", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		req.Username = strings.TrimSpace(req.Username)
+		if req.Username == "" || req.Password == "" {
+			http.Error(w, "username and password required", 400)
+			return
+		}
+		if len(req.Password) < 8 {
+			http.Error(w, "password must be at least 8 characters", 400)
+			return
+		}
+		role := req.Role
+		if role != "admin" && role != "viewer" {
+			role = "viewer"
+		}
+		salt, err := makeWebUIPasswordSalt()
+		if err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		newUser := webUIUser{
+			ID:           fmt.Sprintf("wu-%d", time.Now().UnixNano()),
+			Username:     req.Username,
+			PasswordHash: hashWebUIPassword(salt, req.Password),
+			PasswordSalt: salt,
+			Role:         role,
+			Enabled:      true,
+			CreatedAt:    time.Now().Format(time.RFC3339),
+		}
+		settings.mu.Lock()
+		// Reject duplicate usernames
+		for _, u := range settings.s.WebUIUsers {
+			if strings.EqualFold(u.Username, newUser.Username) {
+				settings.mu.Unlock()
+				http.Error(w, "username already exists", 409)
+				return
+			}
+		}
+		settings.s.WebUIUsers = append(settings.s.WebUIUsers, newUser)
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":       newUser.ID,
+			"username": newUser.Username,
+			"role":     newUser.Role,
+		})
+	}))
+
+	// POST /api/admin/webusers/save — update role / enabled flag.
+	mux.HandleFunc("/api/admin/webusers/save", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID      string `json:"id"`
+			Role    string `json:"role"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "id required", 400)
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		for i, u := range settings.s.WebUIUsers {
+			if u.ID != req.ID {
+				continue
+			}
+			if req.Role == "admin" || req.Role == "viewer" {
+				settings.s.WebUIUsers[i].Role = req.Role
+			}
+			settings.s.WebUIUsers[i].Enabled = req.Enabled
+			_ = settings.saveLocked()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		http.Error(w, "user not found", 404)
+	}))
+
+	// POST /api/admin/webusers/password — change a user's password.
+	mux.HandleFunc("/api/admin/webusers/password", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID       string `json:"id"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "id required", 400)
+			return
+		}
+		if len(req.Password) < 8 {
+			http.Error(w, "password must be at least 8 characters", 400)
+			return
+		}
+		salt, err := makeWebUIPasswordSalt()
+		if err != nil {
+			http.Error(w, "internal error", 500)
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		for i, u := range settings.s.WebUIUsers {
+			if u.ID != req.ID {
+				continue
+			}
+			settings.s.WebUIUsers[i].PasswordHash = hashWebUIPassword(salt, req.Password)
+			settings.s.WebUIUsers[i].PasswordSalt = salt
+			_ = settings.saveLocked()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+			return
+		}
+		http.Error(w, "user not found", 404)
+	}))
+
+	// POST /api/admin/webusers/delete — remove a web UI user.
+	mux.HandleFunc("/api/admin/webusers/delete", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "id required", 400)
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		list := settings.s.WebUIUsers
+		for i, u := range list {
+			if u.ID != req.ID {
+				continue
+			}
+			settings.s.WebUIUsers = append(list[:i], list[i+1:]...)
+			_ = settings.saveLocked()
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ok":true}`)
+			return
+		}
+		http.Error(w, "user not found", 404)
+	}))
+
+	// POST /api/admin/auth — toggle WebUIAuth, update session TTL, and LDAP config.
+	mux.HandleFunc("/api/admin/auth", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		var req struct {
+			WebUIAuth         *bool  `json:"web_ui_auth"`
+			SessionTTLSeconds *int   `json:"session_ttl_seconds"`
+			LDAPEnabled       *bool  `json:"ldap_enabled"`
+			LDAPServer        string `json:"ldap_server"`
+			LDAPPort          *int   `json:"ldap_port"`
+			LDAPUseTLS        *bool  `json:"ldap_use_tls"`
+			LDAPStartTLS      *bool  `json:"ldap_start_tls"`
+			LDAPBaseDN        string `json:"ldap_base_dn"`
+			LDAPBindDN        string `json:"ldap_bind_dn"`
+			LDAPBindPass      string `json:"ldap_bind_pass"`
+			LDAPUserAttr      string `json:"ldap_user_attr"`
+			LDAPFilter        string `json:"ldap_filter"`
+			LDAPAdminGroup    string `json:"ldap_admin_group"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		settings.mu.Lock()
+		if req.WebUIAuth != nil {
+			settings.s.WebUIAuth = *req.WebUIAuth
+		}
+		if req.SessionTTLSeconds != nil && *req.SessionTTLSeconds > 0 {
+			settings.s.SessionTTLSeconds = *req.SessionTTLSeconds
+		}
+		if req.LDAPEnabled != nil {
+			settings.s.LDAPEnabled = *req.LDAPEnabled
+		}
+		if req.LDAPServer != "" {
+			settings.s.LDAPServer = strings.TrimSpace(req.LDAPServer)
+		}
+		if req.LDAPPort != nil {
+			settings.s.LDAPPort = *req.LDAPPort
+		}
+		if req.LDAPUseTLS != nil {
+			settings.s.LDAPUseTLS = *req.LDAPUseTLS
+		}
+		if req.LDAPStartTLS != nil {
+			settings.s.LDAPStartTLS = *req.LDAPStartTLS
+		}
+		if req.LDAPBaseDN != "" {
+			settings.s.LDAPBaseDN = req.LDAPBaseDN
+		}
+		if req.LDAPBindDN != "" {
+			settings.s.LDAPBindDN = req.LDAPBindDN
+		}
+		if req.LDAPBindPass != "" {
+			settings.s.LDAPBindPass = req.LDAPBindPass
+		}
+		if req.LDAPUserAttr != "" {
+			settings.s.LDAPUserAttr = req.LDAPUserAttr
+		}
+		settings.s.LDAPFilter = req.LDAPFilter
+		settings.s.LDAPAdminGroup = req.LDAPAdminGroup
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+
+	// GET /api/admin/auth — return current auth + LDAP settings (sensitive fields masked).
+	mux.HandleFunc("/api/admin/auth/get", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "GET only", 405)
+			return
+		}
+		s := settings.get()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"web_ui_auth":         s.WebUIAuth,
+			"session_ttl_seconds": s.SessionTTLSeconds,
+			"ldap_enabled":        s.LDAPEnabled,
+			"ldap_server":         s.LDAPServer,
+			"ldap_port":           s.LDAPPort,
+			"ldap_use_tls":        s.LDAPUseTLS,
+			"ldap_start_tls":      s.LDAPStartTLS,
+			"ldap_base_dn":        s.LDAPBaseDN,
+			"ldap_bind_dn":        s.LDAPBindDN,
+			"ldap_bind_pass_set":  s.LDAPBindPass != "",
+			"ldap_user_attr":      s.LDAPUserAttr,
+			"ldap_filter":         s.LDAPFilter,
+			"ldap_admin_group":    s.LDAPAdminGroup,
+		})
+	}))
 
 	fmt.Printf("Web interface: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
