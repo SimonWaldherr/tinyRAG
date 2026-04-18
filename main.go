@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -40,6 +41,7 @@ import (
 	tinysql "github.com/SimonWaldherr/tinySQL"
 	nanogo "simonwaldherr.de/go/nanogo/interp"
 	smallr "simonwaldherr.de/go/smallr"
+	bcrypt "golang.org/x/crypto/bcrypt"
 )
 
 // --- Optimizations: caches and pools for performance-sensitive subsystems
@@ -212,12 +214,12 @@ type appSettings struct {
 	// When LDAPEnabled is true, the login form also accepts LDAP credentials.
 	// Local WebUIUsers are tried first; LDAP is used as a fallback.
 	LDAPEnabled  bool   `json:"ldap_enabled"`
-	LDAPServer   string `json:"ldap_server"`    // hostname or IP
-	LDAPPort     int    `json:"ldap_port"`      // default 389 (636 for TLS)
-	LDAPUseTLS   bool   `json:"ldap_use_tls"`   // LDAPS
-	LDAPStartTLS bool   `json:"ldap_start_tls"` // STARTTLS over plain connection
-	LDAPBaseDN   string `json:"ldap_base_dn"`   // e.g. "dc=example,dc=com"
-	LDAPBindDN   string `json:"ldap_bind_dn"`   // service-account DN for user search
+	LDAPServer   string `json:"ldap_server"`              // hostname or IP
+	LDAPPort     int    `json:"ldap_port"`                // default 389 (636 for TLS)
+	LDAPUseTLS   bool   `json:"ldap_use_tls"`             // LDAPS
+	LDAPStartTLS bool   `json:"ldap_start_tls"`           // STARTTLS over plain connection
+	LDAPBaseDN   string `json:"ldap_base_dn"`             // e.g. "dc=example,dc=com"
+	LDAPBindDN   string `json:"ldap_bind_dn"`             // service-account DN for user search
 	LDAPBindPass string `json:"ldap_bind_pass,omitempty"` // service-account password
 	// LDAPUserAttr is the attribute used to match the username, e.g. "uid" (POSIX)
 	// or "sAMAccountName" (Active Directory).
@@ -473,8 +475,7 @@ type adminAPIUser struct {
 type webUIUser struct {
 	ID           string `json:"id"`
 	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash,omitempty"` // hex(sha256(salt+password))
-	PasswordSalt string `json:"password_salt,omitempty"` // hex random 16 bytes
+	PasswordHash string `json:"password_hash,omitempty"` // bcrypt hash
 	Role         string `json:"role"`                    // "admin" or "viewer"
 	Enabled      bool   `json:"enabled"`
 	CreatedAt    string `json:"created_at,omitempty"`
@@ -535,7 +536,9 @@ func (ss *sessionStore) delete(token string) {
 
 // sweepLoop periodically removes expired sessions.
 func (ss *sessionStore) sweepLoop() {
-	for range time.Tick(5 * time.Minute) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
 		ss.mu.Lock()
 		now := time.Now()
 		for tok, s := range ss.sessions {
@@ -556,26 +559,21 @@ func generateSessionToken() string {
 	return hex.EncodeToString(b)
 }
 
-// hashWebUIPassword returns hex(sha256(salt + password)).
-func hashWebUIPassword(salt, password string) string {
-	h := sha256.Sum256([]byte(salt + password))
-	return hex.EncodeToString(h[:])
+// hashWebUIPassword returns a bcrypt hash of the password.
+func hashWebUIPassword(password string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(h), nil
 }
 
-// makeWebUIPasswordSalt generates a new random 16-byte salt (hex encoded).
-func makeWebUIPasswordSalt() (string, error) {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	return hex.EncodeToString(b), err
-}
-
-// verifyWebUIPassword checks a plaintext password against stored hash+salt.
+// verifyWebUIPassword checks a plaintext password against a stored bcrypt hash.
 func verifyWebUIPassword(user webUIUser, password string) bool {
 	if user.PasswordHash == "" {
 		return false
 	}
-	expected := hashWebUIPassword(user.PasswordSalt, password)
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(user.PasswordHash)) == 1
+	return bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) == nil
 }
 
 // ldapAuthenticate attempts to authenticate username+password against LDAP.
@@ -594,8 +592,9 @@ func ldapAuthenticate(s appSettings, username, password string) (string, error) 
 	}
 	var conn *ldap.Conn
 	var err error
+	tlsCfg := &tls.Config{ServerName: s.LDAPServer} //nolint:gosec // user-configured server; InsecureSkipVerify intentionally left false
 	if s.LDAPUseTLS {
-		conn, err = ldap.DialTLS("tcp", addr, nil)
+		conn, err = ldap.DialTLS("tcp", addr, tlsCfg)
 	} else {
 		conn, err = ldap.DialURL("ldap://" + addr)
 	}
@@ -604,7 +603,7 @@ func ldapAuthenticate(s appSettings, username, password string) (string, error) 
 	}
 	defer conn.Close()
 	if s.LDAPStartTLS && !s.LDAPUseTLS {
-		if err = conn.StartTLS(nil); err != nil {
+		if err = conn.StartTLS(tlsCfg); err != nil {
 			return "", fmt.Errorf("LDAP StartTLS: %w", err)
 		}
 	}
@@ -850,6 +849,29 @@ func sessionFromRequest(r *http.Request) *webUISession {
 		return nil
 	}
 	return sess
+}
+
+// isHTTPS reports whether the request was made over a secure (TLS) connection,
+// either directly or via a trusted reverse proxy that sets X-Forwarded-Proto.
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// newSessionCookie builds a "session_token" cookie with the Secure flag set
+// only when the request arrived over HTTPS.
+func newSessionCookie(r *http.Request, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     "session_token",
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	}
 }
 
 // webUIAuthMiddleware wraps a handler so that it requires a valid web-UI
@@ -7739,14 +7761,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			}
 			if verifyWebUIPassword(u, req.Password) {
 				sess := sessions.create(u.ID, u.Username, u.Role, ttl)
-				http.SetCookie(w, &http.Cookie{
-					Name:     "session_token",
-					Value:    sess.Token,
-					Path:     "/",
-					MaxAge:   int(ttl.Seconds()),
-					HttpOnly: true,
-					SameSite: http.SameSiteLaxMode,
-				})
+				http.SetCookie(w, newSessionCookie(r, sess.Token, int(ttl.Seconds())))
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{
 					"ok":       true,
@@ -7764,14 +7779,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			role, err := ldapAuthenticate(s, req.Username, req.Password)
 			if err == nil {
 				sess := sessions.create("ldap:"+req.Username, req.Username, role, ttl)
-				http.SetCookie(w, &http.Cookie{
-					Name:     "session_token",
-					Value:    sess.Token,
-					Path:     "/",
-					MaxAge:   int(ttl.Seconds()),
-					HttpOnly: true,
-					SameSite: http.SameSiteLaxMode,
-				})
+				http.SetCookie(w, newSessionCookie(r, sess.Token, int(ttl.Seconds())))
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{
 					"ok":       true,
@@ -7790,14 +7798,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if c, err := r.Cookie("session_token"); err == nil {
 			sessions.delete(c.Value)
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     "session_token",
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
+		http.SetCookie(w, newSessionCookie(r, "", -1))
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
 	})
@@ -7903,7 +7904,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if role != "admin" && role != "viewer" {
 			role = "viewer"
 		}
-		salt, err := makeWebUIPasswordSalt()
+		pwHash, err := hashWebUIPassword(req.Password)
 		if err != nil {
 			http.Error(w, "internal error", 500)
 			return
@@ -7911,8 +7912,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		newUser := webUIUser{
 			ID:           fmt.Sprintf("wu-%d", time.Now().UnixNano()),
 			Username:     req.Username,
-			PasswordHash: hashWebUIPassword(salt, req.Password),
-			PasswordSalt: salt,
+			PasswordHash: pwHash,
 			Role:         role,
 			Enabled:      true,
 			CreatedAt:    time.Now().Format(time.RFC3339),
@@ -7988,7 +7988,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, "password must be at least 8 characters", 400)
 			return
 		}
-		salt, err := makeWebUIPasswordSalt()
+		pwHash, err := hashWebUIPassword(req.Password)
 		if err != nil {
 			http.Error(w, "internal error", 500)
 			return
@@ -7999,8 +7999,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			if u.ID != req.ID {
 				continue
 			}
-			settings.s.WebUIUsers[i].PasswordHash = hashWebUIPassword(salt, req.Password)
-			settings.s.WebUIUsers[i].PasswordSalt = salt
+			settings.s.WebUIUsers[i].PasswordHash = pwHash
 			_ = settings.saveLocked()
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"ok": true})
