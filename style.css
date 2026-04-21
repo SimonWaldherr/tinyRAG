@@ -1850,3 +1850,48 @@ button { font-family: var(--font); cursor: pointer }
 }
 
 .user-bar-logout:hover { background: var(--accent-subtle); }
+
+/* ─── XML Inline Tool Cards ──────────────────────────────────────────────── */
+.xml-tool-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-subtle, #f0f4ff);
+  border: 1px solid var(--accent, #6366f1);
+  border-radius: 8px;
+  padding: 4px 10px;
+  margin: 4px 0;
+  font-size: 0.82rem;
+  color: var(--accent, #6366f1);
+  vertical-align: middle;
+  max-width: 100%;
+}
+.xml-tool-card .tool-icon { font-size: 1rem; }
+.xml-tool-card .tool-query {
+  color: var(--muted, #888);
+  font-size: 0.78rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xml-tool-card .tool-status-badge {
+  margin-left: auto;
+  font-size: 0.9rem;
+  animation: spin 1s linear infinite;
+}
+.xml-tool-card[data-status="done"] .tool-status-badge,
+.xml-tool-card[data-status="error"] .tool-status-badge {
+  animation: none;
+}
+.xml-tool-card.tool-done {
+  background: var(--ok-bg, #f0fdf4);
+  border-color: #22c55e;
+  color: #16a34a;
+}
+.xml-tool-card.tool-error {
+  background: #fef2f2;
+  border-color: #ef4444;
+  color: #dc2626;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -3250,6 +3250,16 @@ type toolDef struct {
 // builtinTools defines the available built-in tools for the LLM assistant.
 var builtinTools = []toolDef{
 	{
+		Name:        "rag_knowledge",
+		Description: "Durchsucht die lokale Wissensbasis (RAG-Datenbank) semantisch. Verwende dies, wenn interne Dokumente, Handbücher oder gespeichertes Wissen relevant ist.",
+		ParamHint:   "Suchbegriff für die Vektorsuche",
+	},
+	{
+		Name:        "url_fetch",
+		Description: "Lädt eine URL und gibt deren Plaintext zurück. Verwende dies, wenn der Nutzer eine spezifische URL erwähnt oder eine Webseite direkt ausgelesen werden soll.",
+		ParamHint:   "Vollständige URL (https://...)",
+	},
+	{
 		Name:        "wikipedia",
 		Description: "Sucht einen Wikipedia-Artikel und lädt dessen Volltext. Verwende dies für Fakten über Personen, Orte, Ereignisse, Wissenschaft etc.",
 		ParamHint:   "Artikelname (z.B. 'Sonnensystem', 'Albert_Einstein')",
@@ -3357,8 +3367,10 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 		}
 	}
 	switch tr.Tool {
-	case "calculate", "local_search", "datetime", "vector_query", "sql_query":
+	case "calculate", "local_search", "rag_knowledge", "datetime", "vector_query", "sql_query":
 		return true
+	case "url_fetch":
+		return autoSearch
 	case "nanogo", "exec_code":
 		return s.AllowNanoGo || s.AllowCodeExec
 	case "shell":
@@ -3381,6 +3393,41 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	var fetchErr error
 
 	switch tr.Tool {
+	case "rag_knowledge":
+		// New canonical name for internal RAG search
+		hits, err := rag.searchJSON(tr.Query, s.K)
+		if err != nil {
+			fetchErr = err
+		} else if len(hits) == 0 {
+			text = "Keine passenden lokalen Dokumente gefunden."
+			source = "rag_knowledge:" + tr.Query
+		} else {
+			var sb strings.Builder
+			for i, h := range hits {
+				sb.WriteString(fmt.Sprintf("Treffer %d (Score %.2f):\n%s\n\n", i+1, h.Score, h.Content))
+			}
+			text = sb.String()
+			source = "rag_knowledge:" + tr.Query
+		}
+	case "url_fetch":
+		// Fetch a URL and return plain text (model sees content, not the raw HTTP)
+		rawURL := strings.TrimSpace(tr.Query)
+		if rawURL == "" {
+			fetchErr = fmt.Errorf("url_fetch: empty URL")
+			break
+		}
+		fetched, err := fetchURL(rawURL)
+		if err != nil {
+			fetchErr = fmt.Errorf("url_fetch: %w", err)
+		} else {
+			// Trim to a safe size to avoid huge prompts
+			const maxURLFetchChars = 8000
+			if len(fetched) > maxURLFetchChars {
+				fetched = fetched[:maxURLFetchChars] + "\n[... Inhalt gekürzt ...]"
+			}
+			text = fetched
+			source = "url_fetch:" + rawURL
+		}
 	case "local_search":
 		hits, err := rag.searchJSON(tr.Query, s.K)
 		if err != nil {
@@ -3405,7 +3452,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			if rest, ok := strings.CutPrefix(rawQ, "k:"); ok {
 				fields := strings.Fields(rest)
 				if len(fields) > 0 {
-				if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= maxToolResultRows {
+					if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= maxToolResultRows {
 						k = n
 						rawQ = strings.TrimSpace(rest[len(fields[0]):])
 						continue
@@ -3634,6 +3681,24 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	}
 
 	return text, source, fetchErr
+}
+
+// executeToolRequestCtx is a context-aware wrapper around executeToolRequest.
+// It checks context cancellation before and after the tool call so that
+// the configured ToolTimeout in the StreamingEngine is honoured.
+func executeToolRequestCtx(ctx context.Context, tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", fmt.Errorf("tool %s: %w", tr.Tool, err)
+	}
+	text, source, err := executeToolRequest(tr, s, rag, customAPIs, modules)
+	if err != nil {
+		return text, source, err
+	}
+	// Check whether the context expired during execution.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", "", fmt.Errorf("tool %s timed out: %w", tr.Tool, ctxErr)
+	}
+	return text, source, nil
 }
 
 func filterToolsForRole(tools []toolDef, role string) []toolDef {
@@ -4068,11 +4133,21 @@ func buildContextPrompt(ctxText string) string {
 func buildToolingPrompt(tools []toolDef) string {
 	var sb strings.Builder
 	sb.WriteString("### Tool-Nutzung\n")
-	sb.WriteString("Wenn externe Informationen, Berechnungen oder Codeausfuehrung noetig sind, fordere genau ein Tool an.\n")
-	sb.WriteString("Der Tool-Request muss die LETZTE Zeile deiner Antwort sein, exakt in diesem Format und in genau einer Zeile:\n\n")
-	sb.WriteString("[TOOL_REQUEST]{\"tool\":\"websearch\",\"query\":\"Query\"}[/TOOL_REQUEST]\n\n")
-	sb.WriteString("Ersetze nur `tool` und `query`. Keine Backticks, kein Markdown-Block, keine zweite JSON-Struktur, keine Zusatzzeichen.\n")
-	sb.WriteString("Wenn kein Tool noetig ist, schreibe keinen Tool-Request.\n\n")
+	sb.WriteString("Wenn externe Informationen, Berechnungen oder Codeausfuehrung noetig sind, emittiere einen XML-Tool-Block.\n")
+	sb.WriteString("Das XML-Format ist strikt und muss exakt so aussehen (ein Block pro Tool-Aufruf):\n\n")
+	sb.WriteString("  <tool name=\"TOOL_NAME\"><query>INHALT</query></tool>\n\n")
+	sb.WriteString("Varianten je nach Tool:\n")
+	sb.WriteString("  <tool name=\"rag_knowledge\"><query>Suchbegriff</query></tool>\n")
+	sb.WriteString("  <tool name=\"url_fetch\"><url>https://example.com/seite</url></tool>\n")
+	sb.WriteString("  <tool name=\"nanogo\"><source>fmt.Println(2+2)</source></tool>\n\n")
+	sb.WriteString("Regeln:\n")
+	sb.WriteString("- Erklaere vor dem XML-Block in Klartext, welches Tool du verwendest und warum.\n")
+	sb.WriteString("- Der XML-Block darf mitten in deiner Antwort erscheinen – du musst nicht warten.\n")
+	sb.WriteString("- Kein Markdown-Code-Block um das XML, keine Backticks, keine zusaetzlichen Attribute.\n")
+	sb.WriteString("- Maximale Anzahl Tool-Aufrufe pro Antwort: 3.\n")
+	sb.WriteString("- Wenn kein Tool noetig ist, emittiere keinen XML-Block.\n")
+	sb.WriteString("- Behaupte nie, ein Tool verwendet zu haben, wenn du keinen XML-Block emittiert hast.\n")
+	sb.WriteString("- Wenn ein Tool fehlschlaegt, erklaere das offen ohne erfundene Daten.\n\n")
 
 	sb.WriteString("### Verfügbare Tools:\n")
 	for _, t := range tools {
@@ -4087,11 +4162,11 @@ func buildResponseInstructionsPrompt(deep bool, usageProfile string) string {
 	sb.WriteString("\n### Instruktionen:\n")
 	sb.WriteString("- Beginne mit der Frage: Reicht der lokale Kontext aus, ist er unsicher oder fehlt er?\n")
 	sb.WriteString("- Wenn der lokale Kontext ausreicht, antworte direkt und sage knapp, dass die Antwort auf der Wissensbasis beruht.\n")
-	sb.WriteString("- Wenn Informationen fehlen oder potenziell veraltet sind, nutze genau ein passendes Tool.\n")
-	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch` (nutzt DuckDuckGo, MetaGer, Ecosia, Brave gleichzeitig); fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code- oder Library-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
-	sb.WriteString("- Bei technischen Artikeln, Produktcodes oder Teilenummern darfst du praezisere Suchanfragen bilden, z.B. Teilstrings, exakte Phrasen mit Anfuehrungszeichen (\"Begriff\"), `Technische Details <Begriff>`, `<Begriff> Datenblatt` oder `<Begriff> specification`.\n")
-	sb.WriteString("- Wenn die semantische Standardsuche nicht ausreicht: nutze `vector_query` mit optionalen Parametern `k:N threshold:F Suchbegriff` fuer mehr Treffer oder niedrigeren Schwellwert.\n")
-	sb.WriteString("- Fuer Filtern, Zaehlen oder Durchsuchen der Wissensbasis nach konkreten Textstellen nutze `sql_query` mit einem SELECT auf der Tabelle `chunks` (Spalten: id, article, chunk_idx, content, embed_model, role_scope). Nur SELECT erlaubt!\n")
+	sb.WriteString("- Wenn Informationen fehlen oder potenziell veraltet sind, nutze ein passendes Tool via XML-Block.\n")
+	sb.WriteString("- Fuer allgemeine externe Recherche bevorzuge `websearch`; fuer aktuelle Ereignisse `news`; fuer strukturierte Entitaeten `wikidata`; fuer Code-Themen `github` und `stackoverflow`; fuer Rechenlogik `calculate` oder `nanogo`.\n")
+	sb.WriteString("- Um eine URL direkt abzurufen und als Plaintext zu erhalten, verwende `url_fetch` mit dem `<url>`-Element.\n")
+	sb.WriteString("- Fuer interne Wissensbasis-Suche nutze `rag_knowledge`; fuer praezise Vektorsuche `vector_query` (optional: k:N threshold:F Suchbegriff).\n")
+	sb.WriteString("- Fuer Filtern oder Durchsuchen der Wissensbasis nutze `sql_query` mit SELECT auf `chunks` (id, article, chunk_idx, content, embed_model, role_scope). Nur SELECT erlaubt!\n")
 	sb.WriteString("- Behaupte nie mehr Sicherheit, als der Kontext hergibt.\n")
 	sb.WriteString("- Erfinde keine Kontaktinformationen, URLs, APIs, Produktdetails, Roadmaps oder technische Interna.\n")
 	sb.WriteString("- Wenn ein Tool benutzt wurde, liefere danach genau eine ueberarbeitete finale Antwort, nicht zwei Versionen.\n")
@@ -6598,9 +6673,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 
-		// Normal mode: call LM with SSE streaming
-		pr, pw := io.Pipe()
-
+		// Normal mode: call LM with SSE streaming via StreamingEngine
 		allTools := filterToolsForRole(append(customAPIs.allTools(), modules.enabledTools()...), s.ActiveRole)
 		// build system prompt; in deep mode add research instructions
 		var systemPrompt string
@@ -6612,7 +6685,6 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		// Validate system prompt isn't absurdly long
 		if len(systemPrompt) > 32000 {
 			log.Printf("REQ %s: WARN system prompt too long (%d chars), truncating context", reqID, len(systemPrompt))
-			// Truncate context to first 5000 chars as fallback
 			if len(ctxText) > 5000 {
 				ctxText = ctxText[:5000] + "\n[... Kontext gekürzt ...]"
 				systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep, s)
@@ -6652,187 +6724,59 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		msgs = append(msgs, lastMsg)
 
 		debugBase.HistoryMessages = len(msgs)
+
+		// Apply routing heuristic for telemetry / future use
+		nq := normalizeQuery(req.Question)
+		route := routeQuery(nq, len(ctxText) > 0)
+		debugBase.Mode = string(route.Mode)
+
+		// Initialize telemetry
+		tel := newRequestTelemetry(reqID, conv.ID, req.Question)
+		tel.NormalizedQuery = nq.Lowercase
+		tel.QuestionLen = len(req.Question)
+		tel.SelectedMode = string(route.Mode)
+		tel.RouteReason = route.Reason
+		tel.RouteHints = route.Hints
+		tel.ContextChars = len(ctxText)
+
 		if req.Debug {
+			// Add routing info to debug payload
 			dbgJSON, _ := json.Marshal(debugBase)
 			fmt.Fprintf(w, "event: debug\ndata: %s\n\n", dbgJSON)
 			flusher.Flush()
-		}
-
-		var thinkBuf bytes.Buffer
-		streamErr := make(chan error, 1)
-		go func() {
-			err := rag.getLM().chatStreamDetailed(context.Background(), systemPrompt, msgs, pw, &thinkBuf)
-			streamErr <- err
-			if err != nil {
-				pw.CloseWithError(err)
-				log.Printf("REQ %s: LM chat stream failed: %v", reqID, err)
-			} else {
-				pw.Close()
-			}
-		}()
-
-		scanner := bufio.NewScanner(pr)
-		scanner.Split(bufio.ScanRunes)
-		tokenCount := 0
-		for scanner.Scan() {
-			tok := scanner.Text()
-			answer.WriteString(tok)
-			data, _ := json.Marshal(tok)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			// Emit route decision as a separate debug event
+			routeJSON, _ := json.Marshal(map[string]any{
+				"mode": route.Mode, "reason": route.Reason, "hints": route.Hints,
+			})
+			fmt.Fprintf(w, "event: route\ndata: %s\n\n", routeJSON)
 			flusher.Flush()
-			tokenCount++
 		}
 
-		// Check for scanner errors
-		if serr := scanner.Err(); serr != nil {
-			log.Printf("REQ %s: WARN LM chat stream scanner error: %v (tokens received: %d)", reqID, serr, tokenCount)
-			fmt.Fprintf(w, "data: %s\n\n", mustJSON("Fehler im LLM-Stream: "+serr.Error()))
-			fmt.Fprintf(w, "data: [DONE]\n\n")
-			flusher.Flush()
-			s = settings.get()
-			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
-			chats.addMessageWithMeta(conv.ID, "assistant", "Fehler im LLM-Stream: "+serr.Error(), "", s.ChatModel, modelMeta)
-			return
+		// Run the streaming engine
+		sw := &sseWriter{w: w, flusher: flusher}
+		engine := newStreamingEngine(rag.getLM(), rag, settings, customAPIs, modules)
+		engReq := EngineRequest{
+			RequestID:    reqID,
+			Question:     req.Question,
+			SystemPrompt: systemPrompt,
+			Messages:     msgs,
+			AutoSearch:   req.AutoSearch,
+			Debug:        req.Debug,
+		}
+		answerStr, engineErr := engine.Run(context.Background(), engReq, sw, tel)
+		tel.VisibleChars = len(answerStr)
+		if engineErr != nil {
+			tel.finalize(false, engineErr.Error())
+		} else {
+			tel.finalize(true, "")
 		}
 
-		// Check goroutine result
-		if err := <-streamErr; err != nil {
-			log.Printf("REQ %s: LM goroutine failed: %v (tokens before error: %d)", reqID, err, tokenCount)
-			if tokenCount == 0 {
-				// No tokens received at all
-				fmt.Fprintf(w, "data: %s\n\n", mustJSON("⚠️ LLM-Fehler: "+err.Error()))
-			}
-			fmt.Fprintf(w, "data: [DONE]\n\n")
-			flusher.Flush()
-			s = settings.get()
-			modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
-			if answer.Len() == 0 {
-				chats.addMessageWithMeta(conv.ID, "assistant", "LLM-Fehler: "+err.Error(), "", s.ChatModel, modelMeta)
-			} else {
-				answerStr := stripInternalThinking(answer.String())
-				thinkingStr := strings.TrimSpace(thinkBuf.String())
-				if tr, ok := extractToolRequest(answerStr); ok {
-					trJSON, _ := json.Marshal(tr)
-					fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
-					flusher.Flush()
-					answerStr = stripToolRequest(answerStr)
-				}
-				if thinkingStr != "" {
-					fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", mustJSON(thinkingStr))
-					flusher.Flush()
-				}
-				chats.addMessageWithMeta(conv.ID, "assistant", answerStr, thinkingStr, s.ChatModel, modelMeta)
-			}
-			return
-		}
+		log.Printf("REQ %s: Chat response complete: %d chars, continuations=%d, xml_blocks=%d",
+			reqID, len(answerStr), tel.ContinuationCount, tel.XMLBlocksEmitted)
 
-		if tokenCount == 0 {
-			log.Printf("REQ %s: WARN LM returned no tokens despite no error", reqID)
-		}
-
-		// Tool request marker handling
-		answerStr := stripInternalThinking(answer.String())
-		thinkingStr := strings.TrimSpace(thinkBuf.String())
-		if tr, ok := extractToolRequest(answerStr); ok {
-			trJSON, _ := json.Marshal(tr)
-			// Notify frontend that a tool was requested
-			fmt.Fprintf(w, "event: tool_request\ndata: %s\n\n", trJSON)
-			flusher.Flush()
-
-			// Decide whether to execute automatically based on policy
-			s = settings.get()
-			execAllowed := shouldAutoExecuteTool(s, tr, req.AutoSearch)
-
-			if execAllowed {
-				text, source, fetchErr := executeToolRequest(tr, s, rag, customAPIs, modules)
-
-				// Send tool result event and add to RAG if successful
-				if fetchErr != nil {
-					res := map[string]any{"tool": tr.Tool, "query": tr.Query, "error": fetchErr.Error()}
-					d, _ := json.Marshal(res)
-					fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
-					flusher.Flush()
-					log.Printf("REQ %s: tool %s failed: %v", reqID, tr.Tool, fetchErr)
-				} else {
-					res := map[string]any{"tool": tr.Tool, "query": tr.Query, "source": source, "output": text}
-					d, _ := json.Marshal(res)
-					fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
-					flusher.Flush()
-
-					// add to RAG as chunks so subsequent retrieval can use it
-					chunks, _ := chunksForIngest(text, s)
-					if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
-						log.Printf("REQ %s: failed to add tool result to RAG: %v", reqID, err)
-					} else {
-						log.Printf("REQ %s: tool result added to RAG: %s (%d chunks)", reqID, source, len(chunks))
-					}
-
-					// Ask the model to rewrite the full answer from the tool result instead of appending a duplicate continuation.
-					cleanAnswer := stripToolRequest(answerStr)
-					contMsgs := make([]chatMsg, 0, len(msgs)+2)
-					contMsgs = append(contMsgs, msgs...)
-					contMsgs = append(contMsgs, chatMsg{Role: "assistant", Content: cleanAnswer})
-					contMsgs = append(contMsgs, chatMsg{Role: "user", Content: fmt.Sprintf("Ich habe das Tool %s ausgefuehrt.\n\nTool-Ergebnis:\n%s\n\nErstelle jetzt eine einzige ueberarbeitete finale Antwort in der passenden Sprache gemaess den Systemregeln.\n\nZiel:\n- Beste moegliche Endfassung fuer den Nutzer.\n\nRegeln:\n- Nicht wiederholen oder anhaengen, sondern komplett ueberarbeiten.\n- Nutze lokale Wissensbasis und Tool-Ergebnis nur in dem Mass, wie sie belastbar sind.\n- Trenne klar zwischen lokalem Wissen und externer Recherche, wenn beides vorkommt.\n- Markiere unsichere, duenn belegte oder moeglicherweise veraltete Aussagen vorsichtig.\n- Wenn die Recherche wenig hergibt, sage das offen.\n- Schreibe kompakt, konkret und ohne Marketing-Sprache.\n- Keine TOOL_REQUEST-Marker und keine Meta-Erklaerungen ueber den internen Ablauf.\n", tr.Tool, text)})
-
-					// Stream continuation
-					pr2, pw2 := io.Pipe()
-					var thinkBuf2 bytes.Buffer
-					go func() {
-						err := rag.getLM().chatStreamDetailed(context.Background(), systemPrompt, contMsgs, pw2, &thinkBuf2)
-						if err != nil {
-							pw2.CloseWithError(err)
-							log.Printf("REQ %s: LM continuation failed: %v", reqID, err)
-						} else {
-							pw2.Close()
-						}
-					}()
-					sc2 := bufio.NewScanner(pr2)
-					sc2.Split(bufio.ScanRunes)
-					var contAnswer strings.Builder
-					for sc2.Scan() {
-						tok := sc2.Text()
-						contAnswer.WriteString(tok)
-						fmt.Fprintf(w, "data: %s\n\n", mustJSON(tok))
-						flusher.Flush()
-					}
-					if scErr := sc2.Err(); scErr != nil {
-						log.Printf("REQ %s: continuation scanner error: %v", reqID, scErr)
-					}
-					if rewritten := stripInternalThinking(contAnswer.String()); rewritten != "" {
-						answerStr = rewritten
-					} else {
-						answerStr = cleanAnswer
-					}
-					if strings.TrimSpace(thinkBuf2.String()) != "" {
-						if thinkingStr != "" {
-							thinkingStr += "\n\n"
-						}
-						thinkingStr += strings.TrimSpace(thinkBuf2.String())
-					}
-					// finished continuation
-					log.Printf("REQ %s: tool-driven continuation complete", reqID)
-				}
-			} else {
-				// Execution not allowed; inform frontend
-				res := map[string]any{"tool": tr.Tool, "query": tr.Query, "allowed": false}
-				d, _ := json.Marshal(res)
-				fmt.Fprintf(w, "event: tool_result\ndata: %s\n\n", d)
-				flusher.Flush()
-			}
-			answerStr = stripToolRequest(answerStr)
-		}
-
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
-
-		log.Printf("REQ %s: Chat response complete: %d chars, tokens_streamed=%d", reqID, len(answerStr), tokenCount)
 		s = settings.get()
 		modelMeta := map[string]string{"base_url": s.BaseURL, "chat_model": s.ChatModel}
-		if thinkingStr != "" {
-			fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", mustJSON(thinkingStr))
-			flusher.Flush()
-		}
-		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, thinkingStr, s.ChatModel, modelMeta)
+		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, "", s.ChatModel, modelMeta)
 	}))
 
 	// GET /api/tools — list available tools
