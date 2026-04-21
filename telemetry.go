@@ -25,9 +25,9 @@ type RequestTelemetry struct {
 	ChatID    string `json:"chat_id"`
 
 	// ── Input ────────────────────────────────────────────────────────────────
-	Question         string `json:"question"`
-	NormalizedQuery  string `json:"normalized_query"`
-	QuestionLen      int    `json:"question_len"`
+	Question        string `json:"question"`
+	NormalizedQuery string `json:"normalized_query"`
+	QuestionLen     int    `json:"question_len"`
 
 	// ── Routing ──────────────────────────────────────────────────────────────
 	SelectedMode string   `json:"selected_mode"`
@@ -39,12 +39,12 @@ type RequestTelemetry struct {
 	RAGChunks    int `json:"rag_chunks"`
 
 	// ── Streaming ─────────────────────────────────────────────────────────────
-	TokensStreamed    int `json:"tokens_streamed"`
-	VisibleChars      int `json:"visible_chars"`
+	TokensStreamed int `json:"tokens_streamed"`
+	VisibleChars   int `json:"visible_chars"`
 
 	// ── XML tool calls ────────────────────────────────────────────────────────
-	XMLBlocksEmitted  int `json:"xml_blocks_emitted"`
-	XMLParseErrors    int `json:"xml_parse_errors"`
+	XMLBlocksEmitted int `json:"xml_blocks_emitted"`
+	XMLParseErrors   int `json:"xml_parse_errors"`
 
 	// ── Tool execution ────────────────────────────────────────────────────────
 	ToolInvocations []ToolInvocationRecord `json:"tool_invocations,omitempty"`
@@ -54,8 +54,8 @@ type RequestTelemetry struct {
 	FallbackReason    string `json:"fallback_reason,omitempty"`
 
 	// ── Timing ────────────────────────────────────────────────────────────────
-	StartTime  time.Time     `json:"start_time"`
-	TotalMS    int64         `json:"total_ms"`
+	StartTime time.Time `json:"start_time"`
+	TotalMS   int64     `json:"total_ms"`
 
 	// ── Final state ───────────────────────────────────────────────────────────
 	Success bool   `json:"success"`
@@ -64,15 +64,15 @@ type RequestTelemetry struct {
 
 // ToolInvocationRecord captures one tool call's lifecycle.
 type ToolInvocationRecord struct {
-	ID          string    `json:"id"`
-	Tool        string    `json:"tool"`
-	Query       string    `json:"query"`
-	StartTime   time.Time `json:"start_time"`
-	EndTime     time.Time `json:"end_time"`
-	DurationMS  int64     `json:"duration_ms"`
-	ResultBytes int       `json:"result_bytes"`
-	Error       string    `json:"error,omitempty"`
-	Deduplicated bool     `json:"deduplicated,omitempty"`
+	ID           string    `json:"id"`
+	Tool         string    `json:"tool"`
+	Query        string    `json:"query"`
+	StartTime    time.Time `json:"start_time"`
+	EndTime      time.Time `json:"end_time"`
+	DurationMS   int64     `json:"duration_ms"`
+	ResultBytes  int       `json:"result_bytes"`
+	Error        string    `json:"error,omitempty"`
+	Deduplicated bool      `json:"deduplicated,omitempty"`
 }
 
 // newRequestTelemetry initializes a RequestTelemetry for a new request.
@@ -86,9 +86,12 @@ func newRequestTelemetry(reqID, chatID, question string) *RequestTelemetry {
 }
 
 // recordTool adds a completed tool invocation record.
+// Only non-deduplicated calls increment XMLBlocksEmitted.
 func (t *RequestTelemetry) recordTool(rec ToolInvocationRecord) {
 	t.ToolInvocations = append(t.ToolInvocations, rec)
-	t.XMLBlocksEmitted++
+	if !rec.Deduplicated {
+		t.XMLBlocksEmitted++
+	}
 }
 
 // finalize sets timing and emits the telemetry log line.

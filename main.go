@@ -3452,7 +3452,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			if rest, ok := strings.CutPrefix(rawQ, "k:"); ok {
 				fields := strings.Fields(rest)
 				if len(fields) > 0 {
-				if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= maxToolResultRows {
+					if n, err2 := strconv.Atoi(fields[0]); err2 == nil && n > 0 && n <= maxToolResultRows {
 						k = n
 						rawQ = strings.TrimSpace(rest[len(fields[0]):])
 						continue
@@ -3681,6 +3681,24 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	}
 
 	return text, source, fetchErr
+}
+
+// executeToolRequestCtx is a context-aware wrapper around executeToolRequest.
+// It checks context cancellation before and after the tool call so that
+// the configured ToolTimeout in the StreamingEngine is honoured.
+func executeToolRequestCtx(ctx context.Context, tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", fmt.Errorf("tool %s: %w", tr.Tool, err)
+	}
+	text, source, err := executeToolRequest(tr, s, rag, customAPIs, modules)
+	if err != nil {
+		return text, source, err
+	}
+	// Check whether the context expired during execution.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", "", fmt.Errorf("tool %s timed out: %w", tr.Tool, ctxErr)
+	}
+	return text, source, nil
 }
 
 func filterToolsForRole(tools []toolDef, role string) []toolDef {

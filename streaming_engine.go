@@ -70,11 +70,12 @@ func defaultEngineConfig() EngineConfig {
 
 // ToolResult holds the outcome of a single tool execution.
 type ToolResult struct {
-	Call     XMLToolCall
-	Text     string
-	Source   string
-	Error    error
-	Duration time.Duration
+	Call      XMLToolCall
+	Text      string
+	Source    string
+	Error     error
+	StartedAt time.Time
+	Duration  time.Duration
 }
 
 // EngineRequest captures all inputs for one /api/ask execution.
@@ -275,8 +276,10 @@ func (e *StreamingEngine) Run(
 
 		// Strip <tool> XML from the answer text before saving/using
 		visibleAnswer := stripXMLToolCalls(roundAnswer.String())
+		// thinkingStr is collected but currently discarded; future work can
+		// emit it as an SSE "reasoning" event if needed.
 		thinkingStr := strings.TrimSpace(thinkBuf.String())
-		_ = thinkingStr // used by caller via fullAnswer
+		_ = thinkingStr
 
 		fullAnswer.WriteString(visibleAnswer)
 
@@ -305,8 +308,8 @@ func (e *StreamingEngine) Run(
 					ID:         call.ID,
 					Tool:       call.Name,
 					Query:      call.Query,
-					StartTime:  time.Now().Add(-res.Duration),
-					EndTime:    time.Now(),
+					StartTime:  res.StartedAt,
+					EndTime:    res.StartedAt.Add(res.Duration),
 					DurationMS: res.Duration.Milliseconds(),
 				}
 				if res.Error != nil {
@@ -365,17 +368,17 @@ func (e *StreamingEngine) Run(
 // ─────────────────────────────────────────────────────────────────────────────
 
 // execTool runs the named tool and sends the result on resCh.
-// It applies the configured ToolTimeout.
+// It applies the configured ToolTimeout via a derived context.
+// The context is passed to executeToolRequest to support cancellation.
 func (e *StreamingEngine) execTool(ctx context.Context, call XMLToolCall, s appSettings, resCh chan<- ToolResult) {
-	start := time.Now()
+	startedAt := time.Now()
 	tctx, cancel := context.WithTimeout(ctx, e.cfg.ToolTimeout)
 	defer cancel()
-	_ = tctx
 
 	tr := toolRequest{Tool: call.Name, Query: call.Query}
 	rag := e.rag
-	text, source, err := executeToolRequest(tr, s, rag, e.customAPIs, e.modules)
-	duration := time.Since(start)
+	text, source, err := executeToolRequestCtx(tctx, tr, s, rag, e.customAPIs, e.modules)
+	duration := time.Since(startedAt)
 
 	if err != nil {
 		log.Printf("ENGINE tool error: id=%s name=%s: %v", call.ID, call.Name, err)
@@ -385,7 +388,7 @@ func (e *StreamingEngine) execTool(ctx context.Context, call XMLToolCall, s appS
 
 	resCh <- ToolResult{
 		Call: call, Text: text, Source: source,
-		Error: err, Duration: duration,
+		Error: err, StartedAt: startedAt, Duration: duration,
 	}
 }
 

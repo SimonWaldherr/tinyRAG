@@ -43,8 +43,8 @@ type RouteDecision struct {
 // NormalizedQuery is the cleaned, lower-cased version of the user question,
 // used internally by the router and planner.
 type NormalizedQuery struct {
-	Original  string `json:"original"`
-	Lowercase string `json:"lowercase"`
+	Original  string   `json:"original"`
+	Lowercase string   `json:"lowercase"`
 	Words     []string `json:"-"`
 }
 

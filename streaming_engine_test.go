@@ -194,7 +194,7 @@ func TestEngine_InvalidXMLHandledSafely(t *testing.T) {
 	_, err := eng.Run(context.Background(), EngineRequest{
 		RequestID: "test-3", Question: "test",
 		SystemPrompt: "sys",
-		Messages:  []chatMsg{{Role: "user", Content: "test"}},
+		Messages:     []chatMsg{{Role: "user", Content: "test"}},
 	}, sw, tel)
 
 	if err != nil {

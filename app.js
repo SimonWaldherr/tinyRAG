@@ -407,6 +407,9 @@ function stripXMLToolBlocks(raw){
   return raw.replace(/<tool\s[^>]*>[\s\S]*?<\/tool>/gi, '').trim();
 }
 
+// Maximum characters of source code to show in tool cards.
+const MAX_TOOL_SOURCE_PREVIEW = 80;
+
 /**
  * Replace <tool name="...">...</tool> XML blocks with styled status cards.
  * Extracted blocks are replaced with formatted HTML before markdown rendering.
@@ -421,7 +424,7 @@ function replaceXMLToolBlocksWithCards(raw){
     const sourceMatch = inner.match(/<source>([\s\S]*?)<\/source>/i);
     if(queryMatch) content = queryMatch[1].trim();
     else if(urlMatch) content = urlMatch[1].trim();
-    else if(sourceMatch) content = sourceMatch[1].trim().slice(0,80)+'…';
+    else if(sourceMatch) content = sourceMatch[1].trim().slice(0, MAX_TOOL_SOURCE_PREVIEW)+'…';
     const icon = toolIconFor(toolName);
     return `\n\n<div class="xml-tool-card" data-tool="${escHtml(toolName)}" data-status="running">` +
       `<span class="tool-icon">${icon}</span>` +
@@ -1115,19 +1118,28 @@ function replaceAssistantLast(text){
 
 /**
  * Replace assistant bubble content with pre-rendered HTML (for inline tool cards).
- * Used during streaming when XML tool blocks should show as cards, not raw XML.
+ * Saves existing tool cards, renders markdown on the non-tool text, then
+ * re-appends the cards so their status badges are preserved across re-renders.
  */
 function replaceAssistantLastHTML(htmlContent){
   const msgs = $$('#chatMessages .msg.assistant .bubble');
   if(msgs.length === 0) return;
   const bubble = msgs[msgs.length-1];
-  // Render as markdown but with XML blocks pre-replaced by cards
+  // Save existing tool status cards before overwriting innerHTML
+  const existingCards = Array.from(bubble.querySelectorAll('.xml-tool-card'))
+    .map(c => c.outerHTML);
+  // Render markdown on the text with XML blocks stripped
   const clean = stripInternalThinking(stripXMLToolBlocks(htmlContent));
-  const html = renderMarkdown(clean);
-  // Re-insert any tool cards (they were already replaced above)
-  bubble.innerHTML = html;
   bubble.dataset.raw = htmlContent;
+  bubble.innerHTML = renderMarkdown(clean);
   bubble.classList.toggle('plain', !window.marked);
+  // Re-append saved tool cards
+  if(existingCards.length){
+    const cardContainer = document.createElement('div');
+    cardContainer.className = 'xml-tool-cards-restored';
+    cardContainer.innerHTML = existingCards.join('');
+    bubble.appendChild(cardContainer);
+  }
   // Re-apply syntax highlighting
   if(window.hljs) bubble.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
   const wrap = $('#chatMessages');
@@ -1154,6 +1166,34 @@ function updateXMLToolCard(id, toolName, query, status){
       card.classList.toggle('tool-error', status === 'error');
     }
   });
+}
+
+/**
+ * Ensure a tool status card exists in the current bubble.
+ * If no card for this toolName exists, creates one and appends it.
+ */
+function ensureToolCard(id, toolName, query){
+  const bubbles = $$('#chatMessages .msg.assistant .bubble');
+  if(!bubbles.length) return;
+  const bubble = bubbles[bubbles.length-1];
+  // Check if a card already exists for this tool name
+  const existing = Array.from(bubble.querySelectorAll('.xml-tool-card'))
+    .find(c => c.dataset.tool === toolName);
+  if(existing) return;
+  // Insert a new card
+  const icon = toolIconFor(toolName);
+  const card = document.createElement('div');
+  card.className = 'xml-tool-card';
+  card.dataset.tool = toolName;
+  card.dataset.status = 'running';
+  card.dataset.id = id || '';
+  card.innerHTML = `<span class="tool-icon">${icon}</span>` +
+    `<strong>${escHtml(toolName)}</strong>` +
+    (query ? ` <span class="tool-query">${escHtml(String(query).slice(0, MAX_TOOL_SOURCE_PREVIEW))}</span>` : '') +
+    `<span class="tool-status-badge">⟳</span>`;
+  bubble.appendChild(card);
+  const wrap = $('#chatMessages');
+  wrap.scrollTop = wrap.scrollHeight;
 }
 
 function setAssistantLastThinking(thinking){
@@ -2923,8 +2963,10 @@ async function askChat(){
           try{
             const ts = JSON.parse(dataStr);
             if(ts.id && ts.tool){
-              // Update inline XML card to show running state
+              // First try to update an existing inline XML card
               updateXMLToolCard(ts.id, ts.tool, ts.query, 'running');
+              // If no card exists yet, insert one into the current bubble
+              ensureToolCard(ts.id, ts.tool, ts.query);
             }
           }catch(e){}
           continue;
@@ -2977,9 +3019,19 @@ async function askChat(){
                 bubble.textContent = '❌ Keine Antwort vom LLM erhalten';
                 hasError = true;
               }else{
-                // Strip complete or truncated [TOOL_REQUEST] markers before final rendering.
+                // Save existing tool status cards before re-rendering
+                const existingCards = Array.from(bubble.querySelectorAll('.xml-tool-card'))
+                  .map(c => c.outerHTML);
+                // Strip tool XML blocks and internal thinking before final markdown render
                 const cleaned = stripInternalThinking(stripToolRequestText(raw));
                 renderBubbleContent(bubble, cleaned);
+                // Re-append saved tool cards so status badges are preserved
+                if(existingCards.length){
+                  const cardContainer = document.createElement('div');
+                  cardContainer.className = 'xml-tool-cards-restored';
+                  cardContainer.innerHTML = existingCards.join('');
+                  bubble.appendChild(cardContainer);
+                }
               }
             }
           }catch(e){}
