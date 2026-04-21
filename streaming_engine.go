@@ -32,6 +32,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -213,7 +214,7 @@ func (e *StreamingEngine) Run(
 
 			// Launch tool calls concurrently as they complete
 			for _, call := range result.Calls {
-				dedupKey := call.Name + "|" + call.Query
+				dedupKey := toolDedupKey(call.Name, call.Query)
 				if seen[dedupKey] {
 					log.Printf("ENGINE[%s] dedup skip: %s(%s)", req.RequestID, call.Name, truncate(call.Query, 60))
 					tel.recordTool(ToolInvocationRecord{
@@ -437,4 +438,12 @@ func errStr(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// toolDedupKey returns a stable, collision-resistant key for a (name, query) pair.
+// Using a hash avoids false positives when a query legitimately contains the separator.
+func toolDedupKey(name, query string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s", name, query)
+	return fmt.Sprintf("%x", h.Sum(nil))
 }

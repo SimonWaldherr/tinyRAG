@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 // xmlToolOpen is the prefix we look for to detect a potential tool block.
@@ -93,12 +94,13 @@ func parseXMLBlock(block string) (XMLToolCall, bool) {
 }
 
 // newXMLCallID generates a short random identifier for a tool call.
+// Falls back to a hex-encoded current time nanoseconds on crypto/rand error.
 func newXMLCallID() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err == nil {
 		return "tc-" + hex.EncodeToString(b)
 	}
-	return fmt.Sprintf("tc-%d", len(b))
+	return fmt.Sprintf("tc-%016x", time.Now().UnixNano())
 }
 
 // truncate returns s truncated to at most n runes, with "…" appended if truncated.

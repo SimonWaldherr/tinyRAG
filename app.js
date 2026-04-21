@@ -424,7 +424,10 @@ function replaceXMLToolBlocksWithCards(raw){
     const sourceMatch = inner.match(/<source>([\s\S]*?)<\/source>/i);
     if(queryMatch) content = queryMatch[1].trim();
     else if(urlMatch) content = urlMatch[1].trim();
-    else if(sourceMatch) content = sourceMatch[1].trim().slice(0, MAX_TOOL_SOURCE_PREVIEW)+'…';
+    else if(sourceMatch){
+      const src = sourceMatch[1].trim();
+      content = src.length > MAX_TOOL_SOURCE_PREVIEW ? src.slice(0, MAX_TOOL_SOURCE_PREVIEW)+'…' : src;
+    }
     const icon = toolIconFor(toolName);
     return `\n\n<div class="xml-tool-card" data-tool="${escHtml(toolName)}" data-status="running">` +
       `<span class="tool-icon">${icon}</span>` +
@@ -1187,9 +1190,13 @@ function ensureToolCard(id, toolName, query){
   card.dataset.tool = toolName;
   card.dataset.status = 'running';
   card.dataset.id = id || '';
+  const queryStr = query ? String(query) : '';
+  const queryPreview = queryStr.length > MAX_TOOL_SOURCE_PREVIEW
+    ? queryStr.slice(0, MAX_TOOL_SOURCE_PREVIEW) + '…'
+    : queryStr;
   card.innerHTML = `<span class="tool-icon">${icon}</span>` +
     `<strong>${escHtml(toolName)}</strong>` +
-    (query ? ` <span class="tool-query">${escHtml(String(query).slice(0, MAX_TOOL_SOURCE_PREVIEW))}</span>` : '') +
+    (queryPreview ? ` <span class="tool-query">${escHtml(queryPreview)}</span>` : '') +
     `<span class="tool-status-badge">⟳</span>`;
   bubble.appendChild(card);
   const wrap = $('#chatMessages');
