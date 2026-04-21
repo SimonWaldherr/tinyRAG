@@ -382,14 +382,65 @@ function fillChatWithSearchHit(content){
 
 function stripToolRequestText(raw){
   if(!raw) return '';
+  // Strip legacy [TOOL_REQUEST]...[/TOOL_REQUEST] blocks
   const start = raw.indexOf('[TOOL_REQUEST]');
-  if(start === -1) return raw.trim();
-  const endMarker = '[/TOOL_REQUEST]';
-  const end = raw.indexOf(endMarker, start);
-  if(end === -1){
-    return raw.slice(0, start).trim();
+  if(start !== -1){
+    const endMarker = '[/TOOL_REQUEST]';
+    const end = raw.indexOf(endMarker, start);
+    if(end === -1){
+      raw = raw.slice(0, start).trim();
+    } else {
+      raw = (raw.slice(0, start) + raw.slice(end + endMarker.length)).trim();
+    }
   }
-  return (raw.slice(0, start) + raw.slice(end + endMarker.length)).trim();
+  // Strip XML <tool ...>...</tool> blocks
+  raw = stripXMLToolBlocks(raw);
+  return raw.trim();
+}
+
+/**
+ * Strip all <tool name="...">...</tool> XML blocks from text.
+ * Used before final markdown rendering so the raw XML is not shown to users.
+ */
+function stripXMLToolBlocks(raw){
+  if(!raw) return '';
+  return raw.replace(/<tool\s[^>]*>[\s\S]*?<\/tool>/gi, '').trim();
+}
+
+/**
+ * Replace <tool name="...">...</tool> XML blocks with styled status cards.
+ * Extracted blocks are replaced with formatted HTML before markdown rendering.
+ */
+function replaceXMLToolBlocksWithCards(raw){
+  if(!raw) return raw;
+  return raw.replace(/<tool\s+name="([^"]*)">([\s\S]*?)<\/tool>/gi, (match, toolName, inner) => {
+    // Extract the query/url/source content
+    let content = '';
+    const queryMatch = inner.match(/<query>([\s\S]*?)<\/query>/i);
+    const urlMatch = inner.match(/<url>([\s\S]*?)<\/url>/i);
+    const sourceMatch = inner.match(/<source>([\s\S]*?)<\/source>/i);
+    if(queryMatch) content = queryMatch[1].trim();
+    else if(urlMatch) content = urlMatch[1].trim();
+    else if(sourceMatch) content = sourceMatch[1].trim().slice(0,80)+'…';
+    const icon = toolIconFor(toolName);
+    return `\n\n<div class="xml-tool-card" data-tool="${escHtml(toolName)}" data-status="running">` +
+      `<span class="tool-icon">${icon}</span>` +
+      `<strong>${escHtml(toolName)}</strong>` +
+      (content ? ` <span class="tool-query">${escHtml(content)}</span>` : '') +
+      `<span class="tool-status-badge">⟳</span></div>\n\n`;
+  });
+}
+
+function toolIconFor(name){
+  const icons = {
+    rag_knowledge:'🔍', local_search:'🔍', vector_query:'🔍',
+    url_fetch:'🌐', wikipedia:'📖', websearch:'🌐',
+    duckduckgo:'🦆', stackoverflow:'💬', github:'🐙',
+    nanogo:'⚙️', tinygo:'⚙️', calculate:'🧮',
+    sql_query:'🗄️', datetime:'🕐', news:'📰',
+    wikidata:'🧩', wiktionary:'📚', shell:'💻',
+  };
+  return icons[name] || '🔧';
 }
 
 function stripInternalThinking(raw){
@@ -1060,6 +1111,49 @@ function replaceAssistantLast(text){
   bubble.classList.remove('typing');
   const wrap = $('#chatMessages');
   wrap.scrollTop = wrap.scrollHeight;
+}
+
+/**
+ * Replace assistant bubble content with pre-rendered HTML (for inline tool cards).
+ * Used during streaming when XML tool blocks should show as cards, not raw XML.
+ */
+function replaceAssistantLastHTML(htmlContent){
+  const msgs = $$('#chatMessages .msg.assistant .bubble');
+  if(msgs.length === 0) return;
+  const bubble = msgs[msgs.length-1];
+  // Render as markdown but with XML blocks pre-replaced by cards
+  const clean = stripInternalThinking(stripXMLToolBlocks(htmlContent));
+  const html = renderMarkdown(clean);
+  // Re-insert any tool cards (they were already replaced above)
+  bubble.innerHTML = html;
+  bubble.dataset.raw = htmlContent;
+  bubble.classList.toggle('plain', !window.marked);
+  // Re-apply syntax highlighting
+  if(window.hljs) bubble.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+  const wrap = $('#chatMessages');
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+/**
+ * Update the status badge of an XML tool card by tool ID.
+ * Status values: 'running' | 'done' | 'error'
+ */
+function updateXMLToolCard(id, toolName, query, status){
+  const icon = status === 'done' ? '✓' : status === 'error' ? '✗' : '⟳';
+  // Look for card by data-tool attribute in all bubbles
+  const bubbles = $$('#chatMessages .msg.assistant .bubble');
+  if(!bubbles.length) return;
+  const bubble = bubbles[bubbles.length-1];
+  const cards = bubble.querySelectorAll('.xml-tool-card');
+  cards.forEach(card => {
+    if(card.dataset.tool === toolName){
+      const badge = card.querySelector('.tool-status-badge');
+      if(badge) badge.textContent = icon;
+      card.dataset.status = status;
+      card.classList.toggle('tool-done', status === 'done');
+      card.classList.toggle('tool-error', status === 'error');
+    }
+  });
 }
 
 function setAssistantLastThinking(thinking){
@@ -2825,10 +2919,24 @@ async function askChat(){
           }catch(e){}
           continue;
         }
+        if(event === 'tool_start'){
+          try{
+            const ts = JSON.parse(dataStr);
+            if(ts.id && ts.tool){
+              // Update inline XML card to show running state
+              updateXMLToolCard(ts.id, ts.tool, ts.query, 'running');
+            }
+          }catch(e){}
+          continue;
+        }
         if(event === 'tool_result'){
           try{
             const tr = JSON.parse(dataStr);
-            if(tr && tr.source && tr.output){
+            if(tr && tr.id){
+              // Update the inline XML card status
+              updateXMLToolCard(tr.id, tr.tool, tr.query, tr.error ? 'error' : 'done');
+            } else if(tr && tr.source && tr.output){
+              // Legacy path
               acc = '';
               replaceAssistantLast(`🔎 ${tr.tool || 'Tool'} wurde ausgeführt. Antwort wird mit den neuen Informationen überarbeitet…`);
               const bubbles = $$('#chatMessages .msg.assistant .bubble');
@@ -2838,6 +2946,11 @@ async function askChat(){
               }
             }
           }catch(e){}
+          continue;
+        }
+        if(event === 'route'){
+          // Debug: routing decision
+          try{ console.debug('Route:', JSON.parse(dataStr)); }catch(e){}
           continue;
         }
         if(event === 'reasoning'){
@@ -2876,7 +2989,9 @@ async function askChat(){
           const tok = JSON.parse(dataStr);
           if(typeof tok === 'string'){
             acc += tok;
-            replaceAssistantLast(acc);
+            // Render XML tool blocks as cards during streaming
+            const rendered = replaceXMLToolBlocksWithCards(acc);
+            replaceAssistantLastHTML(rendered);
           }
         }catch(e){
           // Check if it's an error message (starts with ⚠️ or doesn't parse as JSON)
