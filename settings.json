@@ -115,6 +115,27 @@
       "public": true
     },
     {
+      "path": "/api/vision",
+      "match_type": "exact",
+      "description": "Multimodal vision chat (SSE)",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/stt",
+      "match_type": "exact",
+      "description": "Speech-to-text (Whisper proxy)",
+      "enabled": true,
+      "public": true
+    },
+    {
+      "path": "/api/tts",
+      "match_type": "exact",
+      "description": "Text-to-speech proxy",
+      "enabled": true,
+      "public": true
+    },
+    {
       "path": "/api/search",
       "match_type": "exact",
       "description": "Semantic search",
@@ -185,8 +206,25 @@
       "public": true
     }
   ],
+  "vector_search_threshold": 0,
   "allow_code_exec": false,
   "allow_nanogo": false,
   "allow_shell_exec": false,
-  "allow_tinygo": false
+  "allow_tinygo": false,
+  "app_name": "",
+  "app_logo_url": "",
+  "custom_css": "",
+  "web_ui_auth": false,
+  "web_ui_users": null,
+  "session_ttl_seconds": 0,
+  "ldap_enabled": false,
+  "ldap_server": "",
+  "ldap_port": 0,
+  "ldap_use_tls": false,
+  "ldap_start_tls": false,
+  "ldap_base_dn": "",
+  "ldap_bind_dn": "",
+  "ldap_user_attr": "",
+  "ldap_filter": "",
+  "ldap_admin_group": ""
 }

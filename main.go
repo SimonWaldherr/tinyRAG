@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -178,6 +179,11 @@ type appSettings struct {
 	Personas   []persona      `json:"personas"`
 	APIUsers   []adminAPIUser `json:"api_users"`
 	APIRoutes  []apiRouteRule `json:"api_routes"`
+	// VectorSearchThreshold is the minimum cosine-similarity score (0–1) for a
+	// primary retrieval hit to be included in the answer context. Defaults to
+	// 0.60 when zero. Neighbor chunks (Score=-1) are always included.
+	VectorSearchThreshold float64 `json:"vector_search_threshold"`
+
 	// AllowCodeExec must be explicitly enabled to allow running user
 	// provided code. Defaults to false for safety.
 	AllowCodeExec bool `json:"allow_code_exec"`
@@ -1855,6 +1861,93 @@ func chunksForIngest(text string, s appSettings) ([]string, int) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Structured data import helpers (CSV / JSON → RAG chunks via tinySQL)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// importDelimitedAsChunks uses tinySQL's ImportCSV to parse CSV/TSV data from
+// src into a temporary in-memory database, then converts each row to a
+// "key: value, …" text string that can be embedded and stored as RAG chunks.
+func importDelimitedAsChunks(ctx context.Context, src io.Reader, source string, s appSettings) (*tinysql.ImportResult, []string, error) {
+	tmpDB := tinysql.NewDB()
+	tableName := "import_data"
+	result, err := tinysql.ImportCSV(ctx, tmpDB, "default", tableName, src, &tinysql.ImportOptions{
+		CreateTable:   true,
+		TypeInference: false, // keep all values as TEXT for text chunking
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("csv parse: %w", err)
+	}
+
+	// Query all rows from the temp table.
+	stmt, err := tinysql.ParseSQL("SELECT * FROM " + tableName)
+	if err != nil {
+		return result, nil, fmt.Errorf("csv query build: %w", err)
+	}
+	rs, err := tinysql.Execute(ctx, tmpDB, "default", stmt)
+	if err != nil || rs == nil {
+		return result, nil, fmt.Errorf("csv query: %w", err)
+	}
+
+	rawTexts := make([]string, 0, len(rs.Rows))
+	for _, row := range rs.Rows {
+		var parts []string
+		for _, col := range result.ColumnNames {
+			v, _ := tinysql.GetVal(row, col)
+			parts = append(parts, col+": "+fmt.Sprint(v))
+		}
+		rawTexts = append(rawTexts, strings.Join(parts, ", "))
+	}
+
+	// Re-chunk via the normal pipeline so chunk size limits are respected.
+	var chunks []string
+	for _, text := range rawTexts {
+		c, _ := chunksForIngest(text, s)
+		chunks = append(chunks, c...)
+	}
+	return result, chunks, nil
+}
+
+// importJSONAsChunks uses tinySQL's ImportJSON to parse a JSON array from src,
+// then converts each object to a "key: value, …" text string for RAG ingestion.
+func importJSONAsChunks(ctx context.Context, src io.Reader, source string, s appSettings) (*tinysql.ImportResult, []string, error) {
+	tmpDB := tinysql.NewDB()
+	tableName := "import_data"
+	result, err := tinysql.ImportJSON(ctx, tmpDB, "default", tableName, src, &tinysql.ImportOptions{
+		CreateTable:   true,
+		TypeInference: false,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("json parse: %w", err)
+	}
+
+	stmt, err := tinysql.ParseSQL("SELECT * FROM " + tableName)
+	if err != nil {
+		return result, nil, fmt.Errorf("json query build: %w", err)
+	}
+	rs, err := tinysql.Execute(ctx, tmpDB, "default", stmt)
+	if err != nil || rs == nil {
+		return result, nil, fmt.Errorf("json query: %w", err)
+	}
+
+	rawTexts := make([]string, 0, len(rs.Rows))
+	for _, row := range rs.Rows {
+		var parts []string
+		for _, col := range result.ColumnNames {
+			v, _ := tinysql.GetVal(row, col)
+			parts = append(parts, col+": "+fmt.Sprint(v))
+		}
+		rawTexts = append(rawTexts, strings.Join(parts, ", "))
+	}
+
+	var chunks []string
+	for _, text := range rawTexts {
+		c, _ := chunksForIngest(text, s)
+		chunks = append(chunks, c...)
+	}
+	return result, chunks, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // OpenAI-compatible client (LM Studio, Ollama, …)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2519,6 +2612,11 @@ type ragSystem struct {
 	// Monotonic chunk IDs (avoid collisions even after deletes)
 	idMu   sync.Mutex
 	nextID int
+
+	// Pre-compiled SQL queries for frequently-called static statements.
+	queryCache   *tinysql.QueryCache
+	countAllStmt *tinysql.CompiledQuery
+	maxIDStmt    *tinysql.CompiledQuery
 }
 
 // newRAG initializes a new `ragSystem` backed by a tinySQL DB using
@@ -2620,7 +2718,14 @@ func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode
 		}
 	}
 
-	r := &ragSystem{db: db, lm: lm, k: k, dbPath: dbPath, storageMode: storageMode}
+	r := &ragSystem{
+		db:          db,
+		lm:          lm,
+		k:           k,
+		dbPath:      dbPath,
+		storageMode: storageMode,
+		queryCache:  tinysql.NewQueryCache(32),
+	}
 	return r, nil
 }
 
@@ -2647,6 +2752,17 @@ func (r *ragSystem) getActiveEmbedModel() string {
 		return s.EmbedModel
 	}
 	return ""
+}
+
+// scoreThreshold returns the configured minimum cosine-similarity score for
+// primary retrieval hits. Falls back to 0.60 when unconfigured.
+func (r *ragSystem) scoreThreshold() float64 {
+	if settings != nil {
+		if t := settings.get().VectorSearchThreshold; t > 0 {
+			return t
+		}
+	}
+	return 0.60
 }
 
 // save flushes the underlying database to disk or performs a sync
@@ -2694,6 +2810,11 @@ func (r *ragSystem) init() error {
 	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET role_scope='|all|' WHERE role_scope IS NULL OR role_scope = ''"); err == nil {
 		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
 	}
+	// Pre-compile static queries for improved repeated-call performance.
+	if r.queryCache != nil {
+		r.countAllStmt, _ = tinysql.Compile(r.queryCache, "SELECT COUNT(*) AS cnt FROM chunks")
+		r.maxIDStmt, _ = tinysql.Compile(r.queryCache, "SELECT MAX(id) AS mid FROM chunks")
+	}
 	// Initialize nextID from MAX(id)+1
 	r.idMu.Lock()
 	defer r.idMu.Unlock()
@@ -2704,12 +2825,19 @@ func (r *ragSystem) init() error {
 // maxChunkIDLocked queries the DB for the maximum chunk id and must
 // be called with appropriate locking by the caller.
 func (r *ragSystem) maxChunkIDLocked() int {
-	q := "SELECT MAX(id) AS mid FROM chunks"
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		return -1
+	var (
+		rs  *tinysql.ResultSet
+		err error
+	)
+	if r.maxIDStmt != nil {
+		rs, err = tinysql.ExecuteCompiled(context.Background(), r.db, "default", r.maxIDStmt)
+	} else {
+		stmt, parseErr := tinysql.ParseSQL("SELECT MAX(id) AS mid FROM chunks")
+		if parseErr != nil {
+			return -1
+		}
+		rs, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
 	}
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
 	if err != nil || rs == nil || len(rs.Rows) == 0 {
 		return -1
 	}
@@ -2835,11 +2963,17 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 
 // docCount returns the total number of stored chunks.
 func (r *ragSystem) docCount() int {
-	q := "SELECT COUNT(*) AS cnt FROM chunks"
-	stmt, _ := tinysql.ParseSQL(q)
-
 	r.dbMu.Lock()
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
+	var (
+		rs  *tinysql.ResultSet
+		err error
+	)
+	if r.countAllStmt != nil {
+		rs, err = tinysql.ExecuteCompiled(context.Background(), r.db, "default", r.countAllStmt)
+	} else {
+		stmt, _ := tinysql.ParseSQL("SELECT COUNT(*) AS cnt FROM chunks")
+		rs, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
+	}
 	r.dbMu.Unlock()
 
 	if err != nil || rs == nil || len(rs.Rows) == 0 {
@@ -2913,6 +3047,7 @@ func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
 		return nil, err
 	}
 
+	minScore := r.scoreThreshold()
 	results := make([]searchResult, 0, k*3)
 	seen := make(map[chunkKey]bool)
 	primaryCount := 0
@@ -2920,7 +3055,7 @@ func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
 		if primaryCount >= k {
 			break
 		}
-		if h.Score <= 0.6 {
+		if h.Score <= minScore {
 			// skip low-score primary candidates
 			continue
 		}
@@ -3128,14 +3263,17 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 	for _, hit := range best {
 		hits = append(hits, hit)
 	}
-	sort.Slice(hits, func(i, j int) bool {
-		if hits[i].Score == hits[j].Score {
-			if hits[i].Article == hits[j].Article {
-				return hits[i].ChunkIdx < hits[j].ChunkIdx
+	slices.SortFunc(hits, func(a, b retrievalHit) int {
+		if a.Score != b.Score {
+			if a.Score > b.Score {
+				return -1
 			}
-			return hits[i].Article < hits[j].Article
+			return 1
 		}
-		return hits[i].Score > hits[j].Score
+		if a.Article != b.Article {
+			return strings.Compare(a.Article, b.Article)
+		}
+		return a.ChunkIdx - b.ChunkIdx
 	})
 	return hits, embedMs, totalSearchMs, nil
 }
@@ -3446,7 +3584,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	case "vector_query":
 		// Parse optional k:N and threshold:F prefixes from the query string
 		k := s.K
-		threshold := 0.6
+		threshold := rag.scoreThreshold()
 		rawQ := strings.TrimSpace(tr.Query)
 		for {
 			if rest, ok := strings.CutPrefix(rawQ, "k:"); ok {
@@ -4304,7 +4442,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 	decisionMap, derr := r.analyzeQuestion(question, summary)
 	if derr != nil {
 		var sel []retrievalHit
-		thresh := 0.60
+		thresh := r.scoreThreshold()
 		for _, h := range hits {
 			if h.Score >= thresh {
 				sel = append(sel, h)
@@ -4334,7 +4472,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 			desiredK = int(fv)
 		}
 	}
-	thresh := 0.60
+	thresh := r.scoreThreshold()
 	if v, ok := decisionMap["threshold"]; ok {
 		if fv, ok2 := v.(float64); ok2 {
 			thresh = fv
@@ -4427,7 +4565,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 	decisionMap, derr := r.analyzeQuestion(question, summary)
 	if derr != nil {
 		var sel []retrievalHit
-		thresh := 0.60
+		thresh := r.scoreThreshold()
 		for _, h := range hits {
 			if h.Score >= thresh {
 				sel = append(sel, h)
@@ -4455,7 +4593,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 			desiredK = int(fv)
 		}
 	}
-	thresh := 0.60
+	thresh := r.scoreThreshold()
 	if v, ok := decisionMap["threshold"]; ok {
 		if fv, ok2 := v.(float64); ok2 {
 			thresh = fv
@@ -4515,7 +4653,7 @@ func (r *ragSystem) prepareDirectContext(query string, k int) (string, *debugInf
 	}
 	var sel []retrievalHit
 	for _, h := range hits {
-		if h.Score >= 0.60 {
+		if h.Score >= r.scoreThreshold() {
 			sel = append(sel, h)
 			if len(sel) >= k {
 				break
@@ -7713,6 +7851,111 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"chunks_total": rag.docCount(),
 		})
 	})
+
+	// GET /api/debug/storage-stats — tinySQL backend observability (admin only)
+	mux.HandleFunc("/api/debug/storage-stats", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		bs := rag.db.BackendStats()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"mode":               storageModeLabel(bs.Mode),
+			"tables_in_memory":   bs.TablesInMemory,
+			"tables_on_disk":     bs.TablesOnDisk,
+			"memory_used_bytes":  bs.MemoryUsedBytes,
+			"memory_limit_bytes": bs.MemoryLimitBytes,
+			"disk_used_bytes":    bs.DiskUsedBytes,
+			"cache_hit_rate":     bs.CacheHitRate,
+			"sync_count":         bs.SyncCount,
+			"load_count":         bs.LoadCount,
+			"eviction_count":     bs.EvictionCount,
+		})
+	}))
+
+	// POST /api/import/csv — bulk-import a CSV/TSV file as RAG chunks (admin only).
+	// Accepts multipart/form-data with field "file" (the CSV) and optional "source"
+	// (article name used as the RAG source label; defaults to the filename).
+	mux.HandleFunc("/api/import/csv", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "form parse error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, fh, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing 'file' field: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		source := strings.TrimSpace(r.FormValue("source"))
+		if source == "" {
+			source = strings.TrimSuffix(fh.Filename, ".csv")
+			source = strings.TrimSuffix(source, ".tsv")
+		}
+		s := settings.get()
+		result, chunks, impErr := importDelimitedAsChunks(r.Context(), file, source, s)
+		if impErr != nil {
+			http.Error(w, impErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := rag.addChunks(source, chunks, s.EmbedModel); err != nil {
+			http.Error(w, "ingest error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"source":        source,
+			"rows_imported": result.RowsInserted,
+			"chunks":        len(chunks),
+			"columns":       result.ColumnNames,
+		})
+	}))
+
+	// POST /api/import/json — bulk-import a JSON array file as RAG chunks (admin only).
+	// Accepts multipart/form-data with field "file" (JSON array of objects) and
+	// optional "source" (article name; defaults to filename).
+	mux.HandleFunc("/api/import/json", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			http.Error(w, "form parse error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, fh, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing 'file' field: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		source := strings.TrimSpace(r.FormValue("source"))
+		if source == "" {
+			source = strings.TrimSuffix(fh.Filename, ".json")
+		}
+		s := settings.get()
+		result, chunks, impErr := importJSONAsChunks(r.Context(), file, source, s)
+		if impErr != nil {
+			http.Error(w, impErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := rag.addChunks(source, chunks, s.EmbedModel); err != nil {
+			http.Error(w, "ingest error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"source":        source,
+			"rows_imported": result.RowsInserted,
+			"chunks":        len(chunks),
+			"columns":       result.ColumnNames,
+		})
+	}))
 
 	// GET /api/sources
 	mux.HandleFunc("/api/sources", func(w http.ResponseWriter, r *http.Request) {

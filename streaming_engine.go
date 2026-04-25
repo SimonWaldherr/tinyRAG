@@ -277,10 +277,12 @@ func (e *StreamingEngine) Run(
 
 		// Strip <tool> XML from the answer text before saving/using
 		visibleAnswer := stripXMLToolCalls(roundAnswer.String())
-		// thinkingStr is collected but currently discarded; future work can
-		// emit it as an SSE "reasoning" event if needed.
-		thinkingStr := strings.TrimSpace(thinkBuf.String())
-		_ = thinkingStr
+		// Emit thinking/reasoning tokens as a dedicated SSE event so the
+		// frontend can display them in a collapsible "reasoning" section.
+		if thinkingStr := strings.TrimSpace(thinkBuf.String()); thinkingStr != "" {
+			payload, _ := json.Marshal(thinkingStr)
+			sw.event("reasoning", string(payload))
+		}
 
 		fullAnswer.WriteString(visibleAnswer)
 
