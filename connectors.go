@@ -1347,7 +1347,7 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 			json.NewEncoder(w).Encode(mcpErr)
 			return
 		}
-		if strings.ToLower(strings.TrimSpace(entry.Connector.Config["mcp_approved"])) != "true" {
+		if strings.TrimSpace(entry.Connector.Config["mcp_approved"]) != "true" {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(MCPCallResult{
 				Content: []MCPContentItem{{Type: "text", Text: "tool is not approved for MCP execution"}},

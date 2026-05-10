@@ -1168,6 +1168,7 @@ func searchWikipedia(query, lang string) ([]map[string]string, error) {
 // maxToolResultRows caps the number of rows returned by sql_query and the
 // maximum k value for vector_query to keep LLM context windows manageable.
 const maxToolResultRows = 50
+const maxFetchBodyBytes int64 = 2 * 1024 * 1024 // 2 MiB hard cap to limit untrusted remote payload size.
 
 var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 var multiSpaceRe = regexp.MustCompile(`\s{3,}`)
@@ -1192,7 +1193,7 @@ func fetchURL(rawURL string) (string, error) {
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBodyBytes))
 	if err != nil {
 		return "", err
 	}
@@ -3052,7 +3053,7 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	}
 	normRoles := normalizeRoleScopes(roles, activeRole)
 	roleScope := serializeRoleScope(normRoles)
-	documentID := stableContentHash(article + "|" + roleScope)
+	documentID := stableContentHash(article)
 	nowTS := time.Now().UTC().Format(time.RFC3339)
 	sourceType := normalizeR3SourceType(article)
 	defaultSourceQuality := sourceTypeQualityDefault(sourceType)
@@ -3127,14 +3128,14 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 			chunkID := fmt.Sprintf("%s:%d", documentID, idx)
 			chash := stableContentHash(batch[j])
 			legacyVals = append(legacyVals, fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s')",
-				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), vecJSON(v), escapeSQ(embedModel), escapeSQ(roleScope)))
+				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), escapeSQ(vecJSON(v)), escapeSQ(embedModel), escapeSQ(roleScope)))
 			tup := fmt.Sprintf(
 				"(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s', '%s', '%s', 'tinyrag', '%s', '%s', '', '%s', '%s', '%s', '%s', '%s', %.4f, %.4f, %.4f, %.4f, %.4f, '%s', '%s', '%s', 1)",
 				startID+j,
 				escapeSQ(article),
 				idx,
 				escapeSQ(batch[j]),
-				vecJSON(v),
+				escapeSQ(vecJSON(v)),
 				escapeSQ(embedModel),
 				escapeSQ(roleScope),
 				escapeSQ(chunkID),
@@ -3374,7 +3375,7 @@ func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit,
 
 	q := fmt.Sprintf(
 		"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type, source_title, source_url, source_object_id, source_version, role_scope, acl_groups, business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score, feedback_score, imported_at, updated_at, content_hash, open_link_allowed, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-		vecJSON(qvec), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
+		escapeSQ(vecJSON(qvec)), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
 	)
 
 	t1 := time.Now()
@@ -3564,7 +3565,7 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 		}
 		q := fmt.Sprintf(
 			"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type, source_title, source_url, source_object_id, source_version, role_scope, acl_groups, business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score, feedback_score, imported_at, updated_at, content_hash, open_link_allowed, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-			vecJSON(vec), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
+			escapeSQ(vecJSON(vec)), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
 		)
 		t1 := time.Now()
 		stmt, err := tinysql.ParseSQL(q)
