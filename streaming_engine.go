@@ -123,17 +123,21 @@ type StreamingEngine struct {
 	settings   *settingsStore
 	customAPIs *apiStore
 	modules    *moduleStore
+	connectors *connectorStore
+	connExec   *connectorExecutor
 	cfg        EngineConfig
 }
 
 // newStreamingEngine creates a StreamingEngine with default config.
-func newStreamingEngine(lm lmProvider, rag *ragSystem, settings *settingsStore, customAPIs *apiStore, modules *moduleStore) *StreamingEngine {
+func newStreamingEngine(lm lmProvider, rag *ragSystem, settings *settingsStore, customAPIs *apiStore, modules *moduleStore, connectors *connectorStore, connExec *connectorExecutor) *StreamingEngine {
 	return &StreamingEngine{
 		lm:         lm,
 		rag:        rag,
 		settings:   settings,
 		customAPIs: customAPIs,
 		modules:    modules,
+		connectors: connectors,
+		connExec:   connExec,
 		cfg:        defaultEngineConfig(),
 	}
 }
@@ -341,13 +345,48 @@ func (e *StreamingEngine) Run(
 
 		// ── Build continuation message ────────────────────────────────────────
 		// Ingest tool results into RAG for future retrieval
+		persistPolicy := ToolPersistencePolicy{}
 		for _, tr := range toolResults {
-			if tr.Error == nil && tr.Text != "" && e.rag != nil {
+			pclass := persistPolicy.Classify(tr.Call.Name, tr.Source)
+			polPayload, _ := json.Marshal(map[string]any{
+				"id": tr.Call.ID, "tool": tr.Call.Name, "source": tr.Source, "class": pclass,
+			})
+			sw.event("persistence_policy", string(polPayload))
+			if tr.Error == nil && tr.Text != "" && e.rag != nil && pclass == ToolPersistableAfterPolicy {
 				s = e.settings.get()
-				chunks, _ := chunksForIngest(tr.Text, s)
+				chunks, _ := chunksForIngestWithDoc(tr.Text, s, stableContentHash(tr.Source), false)
 				if ingestErr := e.rag.addChunks(tr.Source, chunks, s.EmbedModel); ingestErr != nil {
 					log.Printf("ENGINE[%s] failed to ingest tool %s: %v", req.RequestID, tr.Call.Name, ingestErr)
+					e.rag.logR3Audit(AuditEvent{
+						EventType:   "tool_ingest_failed",
+						Actor:       "engine",
+						EntityType:  "tool_call",
+						EntityID:    tr.Call.ID,
+						Decision:    "deny",
+						PolicyClass: string(pclass),
+						Details:     ingestErr.Error(),
+					})
+				} else {
+					e.rag.logR3Audit(AuditEvent{
+						EventType:   "tool_ingest",
+						Actor:       "engine",
+						EntityType:  "tool_call",
+						EntityID:    tr.Call.ID,
+						Decision:    "allow",
+						PolicyClass: string(pclass),
+						Details:     tr.Call.Name,
+					})
 				}
+			} else if e.rag != nil {
+				e.rag.logR3Audit(AuditEvent{
+					EventType:   "tool_persistence_skipped",
+					Actor:       "engine",
+					EntityType:  "tool_call",
+					EntityID:    tr.Call.ID,
+					Decision:    "deny",
+					PolicyClass: string(pclass),
+					Details:     tr.Call.Name,
+				})
 			}
 		}
 
@@ -380,7 +419,7 @@ func (e *StreamingEngine) execTool(ctx context.Context, call XMLToolCall, s appS
 
 	tr := toolRequest{Tool: call.Name, Query: call.Query}
 	rag := e.rag
-	text, source, err := executeToolRequestCtx(tctx, tr, s, rag, e.customAPIs, e.modules)
+	text, source, err := executeToolRequestCtx(tctx, tr, s, rag, e.customAPIs, e.modules, e.connectors, e.connExec)
 	duration := time.Since(startedAt)
 
 	if err != nil {

@@ -412,6 +412,31 @@ func (s *connectorStore) llmTools() []LLMTool {
 	return tools
 }
 
+// enabledToolDefs exposes enabled connector capabilities as tinyRAG toolDef
+// entries so they can be used through the XML tool protocol.
+func (s *connectorStore) enabledToolDefs() []toolDef {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []toolDef
+	for _, c := range s.data {
+		if !c.Enabled {
+			continue
+		}
+		for _, cap := range c.Capabilities {
+			paramHint := "JSON input matching connector schema"
+			if len(cap.InputSchema.Required) == 1 {
+				paramHint = fmt.Sprintf("Either plain text or JSON with required field %q", cap.InputSchema.Required[0])
+			}
+			out = append(out, toolDef{
+				Name:        cap.Name,
+				Description: fmt.Sprintf("%s (connector: %s)", cap.Description, c.Name),
+				ParamHint:   paramHint,
+			})
+		}
+	}
+	return out
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP-compatible interface (stretch goal)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -783,6 +808,9 @@ func executeHTTPCapability(
 	// Build URL.
 	path := expandTemplate(cap.PathTemplate, input)
 	fullURL := baseURL + path
+	if err := isSafeFetchURL(fullURL); err != nil {
+		return "", nil, "http:" + fullURL, err
+	}
 	source = "http:" + fullURL
 
 	// Build body (for POST/PUT/PATCH).
@@ -809,7 +837,7 @@ func executeHTTPCapability(
 		req.Header.Set(k, resolveSecret(v))
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: conn.timeout()}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, source, fmt.Errorf("http: do request: %w", err)
@@ -1181,10 +1209,13 @@ var newExecCommandContext = func(ctx context.Context, name string, args ...strin
 // ─────────────────────────────────────────────────────────────────────────────
 
 // registerConnectorRoutes attaches all connector-related HTTP endpoints to mux.
-func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor *connectorExecutor) {
+func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor *connectorExecutor, guard func(http.HandlerFunc) http.HandlerFunc) {
+	if guard == nil {
+		guard = func(h http.HandlerFunc) http.HandlerFunc { return h }
+	}
 	// GET  /api/connectors         — list all connectors
 	// POST /api/connectors         — upsert a connector
-	mux.HandleFunc("/api/connectors", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/connectors", guard(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
@@ -1204,10 +1235,10 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 		default:
 			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		}
-	})
+	}))
 
 	// POST /api/connectors/delete  — delete connector by id
-	mux.HandleFunc("/api/connectors/delete", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/connectors/delete", guard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -1230,20 +1261,20 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
-	})
+	}))
 
 	// GET /api/connectors/tools    — LLM function-calling tool array
-	mux.HandleFunc("/api/connectors/tools", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/connectors/tools", guard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(store.llmTools())
-	})
+	}))
 
 	// POST /api/connectors/execute — execute a capability
-	mux.HandleFunc("/api/connectors/execute", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/connectors/execute", guard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -1260,10 +1291,10 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	})
+	}))
 
 	// POST /api/connectors/test    — test connector health
-	mux.HandleFunc("/api/connectors/test", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/connectors/test", guard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -1278,22 +1309,22 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 		result := executor.TestConnector(req.ID)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	})
+	}))
 
 	// ── MCP-compatible endpoints ───────────────────────────────────────────
 
 	// GET /api/mcp/tools           — MCP tool list
-	mux.HandleFunc("/api/mcp/tools", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/mcp/tools", guard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(store.mcpTools())
-	})
+	}))
 
 	// POST /api/mcp/execute        — MCP call-tool
-	mux.HandleFunc("/api/mcp/execute", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/mcp/execute", guard(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
 			return
@@ -1314,6 +1345,14 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(mcpErr)
+			return
+		}
+		if strings.ToLower(strings.TrimSpace(entry.Connector.Config["mcp_approved"])) != "true" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(MCPCallResult{
+				Content: []MCPContentItem{{Type: "text", Text: "tool is not approved for MCP execution"}},
+				IsError: true,
+			})
 			return
 		}
 
@@ -1338,5 +1377,5 @@ func registerConnectorRoutes(mux *http.ServeMux, store *connectorStore, executor
 			Content: []MCPContentItem{{Type: "text", Text: string(outBytes)}},
 			IsError: false,
 		})
-	})
+	}))
 }

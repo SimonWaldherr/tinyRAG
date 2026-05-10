@@ -113,7 +113,7 @@ func buildTestEngine(resp string) (*StreamingEngine, *mockLMProvider) {
 	mstore := &moduleStore{settings: s}
 	// We can't easily instantiate ragSystem in unit tests without a DB,
 	// so we pass nil and rely on the engine not calling RAG tools in these tests.
-	eng := newStreamingEngine(lm, nil, s, store, mstore)
+	eng := newStreamingEngine(lm, nil, s, store, mstore, nil, nil)
 	return eng, lm
 }
 
