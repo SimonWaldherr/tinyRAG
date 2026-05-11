@@ -9,6 +9,7 @@ A lightweight Retrieval-Augmented Generation (RAG) system with a modern web inte
 
 ## Features
 
+- **R³ Governed Retrieval**: Ranked, Responsible, Retrieval with policy-driven scoring and citations
 - **Semantic Search**: Store and search documents using vector embeddings
 - **RAG Chat**: Ask questions and get answers based on your knowledge base
 - **Multiple Data Sources**:
@@ -213,6 +214,25 @@ The project follows standard Go conventions:
 - Cosine similarity for semantic search
 - Configurable chunk size and retrieval count (k)
 - Efficient in-memory vector operations
+- Metadata-aware R³ ranking with trust, quality, freshness, feedback, and sensitivity penalties
+
+### R³ Governance
+
+tinyRAG includes a governed retrieval layer (R³: **Ranked, Responsible, Retrieval**):
+
+- Retrieval units with source/ACL/sensitivity/provenance metadata
+- Weighted deterministic ranking (`R3Score`) beyond pure semantic similarity
+- ACL and role filtering before context assembly
+- Citation-first context and answer constraints
+- Policy-driven tool persistence (`transient_only`, `persistable_after_policy`, `never_persist`)
+- Import job and audit-event telemetry tables for traceability
+
+See:
+
+- [`docs/r3-architecture.md`](docs/r3-architecture.md)
+- [`docs/import-adapters.md`](docs/import-adapters.md)
+- [`docs/request-lifecycle.md`](docs/request-lifecycle.md)
+- [`docs/xml-tool-protocol.md`](docs/xml-tool-protocol.md)
 
 ### LLM Integration
 
