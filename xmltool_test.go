@@ -56,6 +56,17 @@ func TestParseXMLBlock_SourceElement(t *testing.T) {
 	}
 }
 
+func TestParseXMLBlock_InputElement(t *testing.T) {
+	block := `<tool name="customer_lookup"><input>{"id":"42"}</input></tool>`
+	call, ok := parseXMLBlock(block)
+	if !ok {
+		t.Fatal("expected successful parse")
+	}
+	if call.Query != `{"id":"42"}` {
+		t.Errorf("expected input JSON in Query, got %q", call.Query)
+	}
+}
+
 func TestParseXMLBlock_EmptyName(t *testing.T) {
 	block := `<tool name=""><query>test</query></tool>`
 	_, ok := parseXMLBlock(block)

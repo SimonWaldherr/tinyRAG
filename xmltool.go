@@ -57,6 +57,7 @@ type xmlToolRaw struct {
 	Query   string   `xml:"query"`
 	URL     string   `xml:"url"`
 	Source  string   `xml:"source"`
+	Input   string   `xml:"input"`
 }
 
 // parseXMLBlock attempts to parse a complete `<tool …>…</tool>` block.
@@ -80,6 +81,9 @@ func parseXMLBlock(block string) (XMLToolCall, bool) {
 	}
 	if query == "" {
 		query = strings.TrimSpace(raw.Source)
+	}
+	if query == "" {
+		query = strings.TrimSpace(raw.Input)
 	}
 	if query == "" {
 		log.Printf("xmltool: block has empty content: %q", truncate(block, 120))

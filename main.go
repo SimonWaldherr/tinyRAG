@@ -252,6 +252,8 @@ var settings *settingsStore
 
 // sessions holds all active web-UI browser sessions.
 var sessions = newSessionStore()
+var connectorRegistryStore *connectorStore
+var connectorRuntimeExec *connectorExecutor
 
 // normalizeBaseURL trims and normalizes an LLM base URL, removing
 // trailing slashes and an optional "/v1" suffix.
@@ -431,6 +433,15 @@ func parseRoleCSV(raw string) []string {
 func roleScopeFilterSQL(role string) string {
 	token := escapeSQ(roleScopeToken(role))
 	return fmt.Sprintf("(role_scope IS NULL OR role_scope = '' OR role_scope = '|all|' OR role_scope LIKE '%%%s%%')", token)
+}
+
+func aclGroupsFilterSQL(role string) string {
+	token := escapeSQ(roleScopeToken(role))
+	return fmt.Sprintf("(acl_groups IS NULL OR acl_groups = '' OR acl_groups = '|all|' OR acl_groups LIKE '%%%s%%')", token)
+}
+
+func roleAndACLFilterSQL(role string) string {
+	return fmt.Sprintf("(%s AND %s)", roleScopeFilterSQL(role), aclGroupsFilterSQL(role))
 }
 
 func defaultPersonas() []persona {
@@ -890,12 +901,8 @@ func webUIAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Allow API-key authenticated requests through
-		if auth := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-			next(w, r)
-			return
-		}
-		if xkey := strings.TrimSpace(r.Header.Get("X-API-Key")); xkey != "" {
+		// Allow only VALID API-key authenticated requests through
+		if _, ok := authenticateAPIUser(r, s.APIUsers); ok {
 			next(w, r)
 			return
 		}
@@ -1161,6 +1168,7 @@ func searchWikipedia(query, lang string) ([]map[string]string, error) {
 // maxToolResultRows caps the number of rows returned by sql_query and the
 // maximum k value for vector_query to keep LLM context windows manageable.
 const maxToolResultRows = 50
+const maxFetchBodyBytes int64 = 2 * 1024 * 1024 // 2 MiB hard cap to limit untrusted remote payload size.
 
 var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 var multiSpaceRe = regexp.MustCompile(`\s{3,}`)
@@ -1168,6 +1176,9 @@ var multiSpaceRe = regexp.MustCompile(`\s{3,}`)
 // fetchURL retrieves and heuristically strips HTML from a URL,
 // returning plain text suitable for chunking and embedding.
 func fetchURL(rawURL string) (string, error) {
+	if err := isSafeFetchURL(rawURL); err != nil {
+		return "", err
+	}
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return "", err
@@ -1182,7 +1193,7 @@ func fetchURL(rawURL string) (string, error) {
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBodyBytes))
 	if err != nil {
 		return "", err
 	}
@@ -1855,9 +1866,13 @@ func sanitizeTextForIngest(text string, s appSettings) (string, int) {
 	return out, replacements
 }
 
-func chunksForIngest(text string, s appSettings) ([]string, int) {
-	sanitized, redactions := sanitizeTextForIngest(text, s)
+func chunksForIngestWithDoc(text string, s appSettings, documentID string, irreversible bool) ([]string, int) {
+	sanitized, redactions := sanitizeAndPseudonymize(text, s, documentID, irreversible)
 	return chunkText(sanitized, s.ChunkSize), redactions
+}
+
+func chunksForIngest(text string, s appSettings) ([]string, int) {
+	return chunksForIngestWithDoc(text, s, stableContentHash(text), false)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2806,9 +2821,72 @@ func (r *ragSystem) init() error {
 	if alterStmt, err := tinysql.ParseSQL("ALTER TABLE chunks ADD COLUMN role_scope TEXT"); err == nil {
 		_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
 	}
+	// tinyRAG R3 metadata columns (backward-compatible; ignore already-exists errors)
+	r3ChunkColumns := []string{
+		"chunk_id TEXT",
+		"document_id TEXT",
+		"source_system TEXT",
+		"source_type TEXT",
+		"source_title TEXT",
+		"source_url TEXT",
+		"source_object_id TEXT",
+		"source_version TEXT",
+		"acl_groups TEXT",
+		"business_owner TEXT",
+		"sensitivity TEXT",
+		"trust_level FLOAT",
+		"source_quality FLOAT",
+		"freshness_score FLOAT",
+		"quality_score FLOAT",
+		"feedback_score FLOAT",
+		"imported_at TEXT",
+		"updated_at TEXT",
+		"content_hash TEXT",
+		"open_link_allowed INT",
+	}
+	for _, col := range r3ChunkColumns {
+		stmtSQL := fmt.Sprintf("ALTER TABLE chunks ADD COLUMN %s", col)
+		if alterStmt, err := tinysql.ParseSQL(stmtSQL); err == nil {
+			_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
+		}
+	}
 	// Normalize older rows without a scope to global visibility.
 	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET role_scope='|all|' WHERE role_scope IS NULL OR role_scope = ''"); err == nil {
 		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	// Keep ACL groups aligned with role scope by default.
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET acl_groups=role_scope WHERE acl_groups IS NULL OR acl_groups = ''"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	// Default R3 quality fields.
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET source_quality=0.60 WHERE source_quality IS NULL"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET trust_level=0.50 WHERE trust_level IS NULL"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET freshness_score=0.50 WHERE freshness_score IS NULL"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET quality_score=0.50 WHERE quality_score IS NULL"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET feedback_score=0.50 WHERE feedback_score IS NULL"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET open_link_allowed=1 WHERE open_link_allowed IS NULL"); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
+	}
+	// Canonical source registry + import jobs + audit log tables.
+	createR3Tables := []string{
+		"CREATE TABLE IF NOT EXISTS r3_sources (document_id TEXT, provenance TEXT, ownership TEXT, trust_tier TEXT, lifecycle TEXT, retention_policy TEXT, acl_metadata TEXT, updated_at TEXT)",
+		"CREATE TABLE IF NOT EXISTS r3_import_jobs (job_id TEXT, source_system TEXT, cursor TEXT, status TEXT, processed INT, imported INT, skipped INT, last_error TEXT, last_hash TEXT, started_at TEXT, updated_at TEXT, completed_at TEXT, idempotency_id TEXT)",
+		"CREATE TABLE IF NOT EXISTS r3_audit_events (event_id TEXT, event_type TEXT, actor TEXT, entity_type TEXT, entity_id TEXT, decision TEXT, policy_class TEXT, details TEXT, created_at TEXT)",
+	}
+	for _, stmtSQL := range createR3Tables {
+		if stmt, err := tinysql.ParseSQL(stmtSQL); err == nil {
+			_, _ = tinysql.Execute(context.Background(), r.db, "default", stmt)
+		}
 	}
 	// Pre-compile static queries for improved repeated-call performance.
 	if r.queryCache != nil {
@@ -2865,6 +2943,98 @@ func (r *ragSystem) allocIDs(n int) int {
 	return start
 }
 
+func (r *ragSystem) upsertR3Source(src SourceRegistryRecord) error {
+	if strings.TrimSpace(src.DocumentID) == "" {
+		return nil
+	}
+	delSQL := fmt.Sprintf("DELETE FROM r3_sources WHERE document_id = '%s'", escapeSQ(src.DocumentID))
+	insSQL := fmt.Sprintf(
+		"INSERT INTO r3_sources VALUES ('%s','%s','%s','%s','%s','%s','%s','%s')",
+		escapeSQ(src.DocumentID),
+		escapeSQ(src.Provenance),
+		escapeSQ(src.Ownership),
+		escapeSQ(src.TrustTier),
+		escapeSQ(src.Lifecycle),
+		escapeSQ(src.RetentionPolicy),
+		escapeSQ(src.ACLMetadata),
+		escapeSQ(time.Now().UTC().Format(time.RFC3339)),
+	)
+	r.dbMu.Lock()
+	defer r.dbMu.Unlock()
+	if delStmt, err := tinysql.ParseSQL(delSQL); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", delStmt)
+	}
+	insStmt, err := tinysql.ParseSQL(insSQL)
+	if err != nil {
+		return err
+	}
+	_, err = tinysql.Execute(context.Background(), r.db, "default", insStmt)
+	return err
+}
+
+func (r *ragSystem) logR3Audit(evt AuditEvent) {
+	if strings.TrimSpace(evt.EventID) == "" {
+		evt.EventID = stableContentHash(fmt.Sprintf("%s|%s|%d", evt.EventType, evt.EntityID, time.Now().UnixNano()))[:16]
+	}
+	if evt.CreatedAt.IsZero() {
+		evt.CreatedAt = time.Now().UTC()
+	}
+	sql := fmt.Sprintf(
+		"INSERT INTO r3_audit_events VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s')",
+		escapeSQ(evt.EventID),
+		escapeSQ(evt.EventType),
+		escapeSQ(evt.Actor),
+		escapeSQ(evt.EntityType),
+		escapeSQ(evt.EntityID),
+		escapeSQ(evt.Decision),
+		escapeSQ(evt.PolicyClass),
+		escapeSQ(evt.Details),
+		escapeSQ(evt.CreatedAt.UTC().Format(time.RFC3339)),
+	)
+	stmt, err := tinysql.ParseSQL(sql)
+	if err != nil {
+		return
+	}
+	r.dbMu.Lock()
+	_, _ = tinysql.Execute(context.Background(), r.db, "default", stmt)
+	r.dbMu.Unlock()
+}
+
+func (r *ragSystem) upsertImportJob(job ImportJob) {
+	if strings.TrimSpace(job.JobID) == "" {
+		return
+	}
+	delSQL := fmt.Sprintf("DELETE FROM r3_import_jobs WHERE job_id = '%s'", escapeSQ(job.JobID))
+	completedAt := ""
+	if job.CompletedAt != nil && !job.CompletedAt.IsZero() {
+		completedAt = job.CompletedAt.UTC().Format(time.RFC3339)
+	}
+	insSQL := fmt.Sprintf(
+		"INSERT INTO r3_import_jobs VALUES ('%s','%s','%s','%s',%d,%d,%d,'%s','%s','%s','%s','%s','%s')",
+		escapeSQ(job.JobID),
+		escapeSQ(job.SourceSystem),
+		escapeSQ(job.Cursor),
+		escapeSQ(string(job.Status)),
+		job.Processed,
+		job.Imported,
+		job.Skipped,
+		escapeSQ(job.LastError),
+		escapeSQ(job.LastHash),
+		escapeSQ(job.StartedAt.UTC().Format(time.RFC3339)),
+		escapeSQ(job.UpdatedAt.UTC().Format(time.RFC3339)),
+		escapeSQ(completedAt),
+		escapeSQ(job.IdempotencyID),
+	)
+	r.dbMu.Lock()
+	defer r.dbMu.Unlock()
+	if delStmt, err := tinysql.ParseSQL(delSQL); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", delStmt)
+	}
+	if insStmt, err := tinysql.ParseSQL(insSQL); err == nil {
+		_, _ = tinysql.Execute(context.Background(), r.db, "default", insStmt)
+	}
+}
+
 // addChunks embeds and stores `chunks` for the given `article` into
 // the database, performing batched inserts.
 func (r *ragSystem) addChunks(article string, chunks []string, embedModel string) error {
@@ -2883,11 +3053,29 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	}
 	normRoles := normalizeRoleScopes(roles, activeRole)
 	roleScope := serializeRoleScope(normRoles)
+	documentID := stableContentHash(article)
+	nowTS := time.Now().UTC().Format(time.RFC3339)
+	sourceType := normalizeR3SourceType(article)
+	defaultSourceQuality := sourceTypeQualityDefault(sourceType)
+	defaultTrust := 0.65
+	if sourceType == "chat" {
+		defaultTrust = 0.40
+	}
+	if sourceType == "ticket" {
+		defaultTrust = 0.50
+	}
+	defaultFresh := 1.0
+	defaultQuality := 0.65
+	defaultFeedback := 0.50
+	sensitivity := "internal"
+	if (SensitivityPolicy{}).MustPseudonymize(detectSensitivityClass(strings.Join(chunks, "\n"))) {
+		sensitivity = "confidential"
+	}
 	// If this article already exists in the DB, skip adding again to avoid duplicates.
 	// This makes imports idempotent; to replace content delete the source first.
 	checkQ := fmt.Sprintf(
-		"SELECT COUNT(*) AS cnt FROM chunks WHERE article = '%s' AND role_scope = '%s'",
-		escapeSQ(article), escapeSQ(roleScope),
+		"SELECT COUNT(*) AS cnt FROM chunks WHERE document_id = '%s' AND role_scope = '%s'",
+		escapeSQ(documentID), escapeSQ(roleScope),
 	)
 	if st, err := tinysql.ParseSQL(checkQ); err == nil {
 		r.dbMu.Lock()
@@ -2934,10 +3122,40 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 
 		// Bulk insert: construct a single multi-row INSERT statement for the batch
 		var vals []string
+		var legacyVals []string
 		for j, v := range vecs {
 			idx := i + j
-			tup := fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s')",
-				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), vecJSON(v), escapeSQ(embedModel), escapeSQ(roleScope))
+			chunkID := fmt.Sprintf("%s:%d", documentID, idx)
+			chash := stableContentHash(batch[j])
+			legacyVals = append(legacyVals, fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s')",
+				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), escapeSQ(vecJSON(v)), escapeSQ(embedModel), escapeSQ(roleScope)))
+			tup := fmt.Sprintf(
+				"(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s', '%s', '%s', 'tinyrag', '%s', '%s', '', '%s', '%s', '%s', '%s', '%s', %.4f, %.4f, %.4f, %.4f, %.4f, '%s', '%s', '%s', 1)",
+				startID+j,
+				escapeSQ(article),
+				idx,
+				escapeSQ(batch[j]),
+				escapeSQ(vecJSON(v)),
+				escapeSQ(embedModel),
+				escapeSQ(roleScope),
+				escapeSQ(chunkID),
+				escapeSQ(documentID),
+				escapeSQ(sourceType),
+				escapeSQ(article),
+				escapeSQ(article),
+				escapeSQ("v1"),
+				escapeSQ(roleScope),
+				escapeSQ(activeRole),
+				escapeSQ(sensitivity),
+				defaultTrust,
+				defaultSourceQuality,
+				defaultFresh,
+				defaultQuality,
+				defaultFeedback,
+				escapeSQ(nowTS),
+				escapeSQ(nowTS),
+				escapeSQ(chash),
+			)
 			vals = append(vals, tup)
 		}
 		q := "INSERT INTO chunks VALUES " + strings.Join(vals, ",")
@@ -2947,8 +3165,22 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 		}
 		r.dbMu.Lock()
 		if _, err := tinysql.Execute(context.Background(), r.db, "default", stmt); err != nil {
-			r.dbMu.Unlock()
-			return fmt.Errorf("exec bulk insert: %w", err)
+			// Backward-compatible fallback for storage engines without full ALTER support.
+			if strings.Contains(strings.ToLower(err.Error()), "unknown column") {
+				legacyQ := "INSERT INTO chunks VALUES " + strings.Join(legacyVals, ",")
+				if legacyStmt, parseErr := tinysql.ParseSQL(legacyQ); parseErr == nil {
+					if _, legacyErr := tinysql.Execute(context.Background(), r.db, "default", legacyStmt); legacyErr != nil {
+						r.dbMu.Unlock()
+						return fmt.Errorf("exec legacy bulk insert: %w", legacyErr)
+					}
+				} else {
+					r.dbMu.Unlock()
+					return fmt.Errorf("parse legacy bulk insert: %w", parseErr)
+				}
+			} else {
+				r.dbMu.Unlock()
+				return fmt.Errorf("exec bulk insert: %w", err)
+			}
 		}
 		r.dbMu.Unlock()
 
@@ -2958,6 +3190,15 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	if err := r.save(); err != nil {
 		log.Printf("WARN: save failed: %v", err)
 	}
+	_ = r.upsertR3Source(SourceRegistryRecord{
+		DocumentID:      documentID,
+		Provenance:      article,
+		Ownership:       activeRole,
+		TrustTier:       fmt.Sprintf("%.2f", defaultTrust),
+		Lifecycle:       "active",
+		RetentionPolicy: "default",
+		ACLMetadata:     roleScope,
+	})
 	return nil
 }
 
@@ -2996,7 +3237,7 @@ func (r *ragSystem) docCount() int {
 
 func (r *ragSystem) docCountForRole(role string) int {
 	normRole := normalizeDemoRole(role)
-	q := fmt.Sprintf("SELECT COUNT(*) AS cnt FROM chunks WHERE %s", roleScopeFilterSQL(normRole))
+	q := fmt.Sprintf("SELECT COUNT(*) AS cnt FROM chunks WHERE %s", roleAndACLFilterSQL(normRole))
 	stmt, _ := tinysql.ParseSQL(q)
 
 	r.dbMu.Lock()
@@ -3023,15 +3264,24 @@ func (r *ragSystem) docCountForRole(role string) int {
 
 // searchResult represents a single retrieval hit returned by searchJSON.
 type searchResult struct {
-	Score   float64 `json:"score"`
-	Content string  `json:"content"`
+	Score      float64  `json:"score"`
+	R3Score    float64  `json:"r3_score,omitempty"`
+	Content    string   `json:"content"`
+	DocumentID string   `json:"document_id,omitempty"`
+	ChunkID    string   `json:"chunk_id,omitempty"`
+	Citation   Citation `json:"citation,omitempty"`
 }
 
 type retrievalHit struct {
-	Article  string
-	ChunkIdx int
-	Content  string
-	Score    float64
+	Article    string
+	ChunkIdx   int
+	Content    string
+	Score      float64
+	R3Score    float64
+	Unit       RetrievalUnit
+	Citation   Citation
+	ChunkID    string
+	DocumentID string
 }
 
 type chunkKey struct {
@@ -3055,7 +3305,7 @@ func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
 		if primaryCount >= k {
 			break
 		}
-		if h.Score <= minScore {
+		if h.R3Score <= minScore {
 			// skip low-score primary candidates
 			continue
 		}
@@ -3068,14 +3318,21 @@ func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
 			pkey := chunkKey{article: h.Article, chunkIdx: h.ChunkIdx - 1}
 			if !seen[pkey] {
 				if prevContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx-1); ok {
-					results = append(results, searchResult{Score: -1, Content: prevContent})
+					results = append(results, searchResult{Score: -1, R3Score: -1, Content: prevContent})
 					seen[pkey] = true
 				}
 			}
 		}
 
 		// add primary hit
-		results = append(results, searchResult{Score: h.Score, Content: h.Content})
+		results = append(results, searchResult{
+			Score:      h.Score,
+			R3Score:    h.R3Score,
+			Content:    h.Content,
+			DocumentID: h.DocumentID,
+			ChunkID:    h.ChunkID,
+			Citation:   h.Citation,
+		})
 		seen[key] = true
 		primaryCount++
 
@@ -3083,7 +3340,7 @@ func (r *ragSystem) searchJSON(query string, k int) ([]searchResult, error) {
 		nkey := chunkKey{article: h.Article, chunkIdx: h.ChunkIdx + 1}
 		if !seen[nkey] {
 			if nextContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx+1); ok {
-				results = append(results, searchResult{Score: -1, Content: nextContent})
+				results = append(results, searchResult{Score: -1, R3Score: -1, Content: nextContent})
 				seen[nkey] = true
 			}
 		}
@@ -3117,8 +3374,8 @@ func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit,
 	embedMs := time.Since(t0).Milliseconds()
 
 	q := fmt.Sprintf(
-		"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-		vecJSON(qvec), escapeSQ(r.getActiveEmbedModel()), roleScopeFilterSQL(activeRole), candidateLimitForK(k),
+		"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type, source_title, source_url, source_object_id, source_version, role_scope, acl_groups, business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score, feedback_score, imported_at, updated_at, content_hash, open_link_allowed, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
+		escapeSQ(vecJSON(qvec)), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
 	)
 
 	t1 := time.Now()
@@ -3135,6 +3392,8 @@ func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit,
 	searchMs := time.Since(t1).Milliseconds()
 
 	hits := make([]retrievalHit, 0, len(rs.Rows))
+	rankPolicy := defaultRankingPolicy()
+	now := time.Now().UTC()
 	for _, row := range rs.Rows {
 		c, ok := tinysql.GetVal(row, "content")
 		art, _ := tinysql.GetVal(row, "article")
@@ -3161,13 +3420,114 @@ func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit,
 		case int64:
 			score = float64(sv)
 		}
+		parseFloat := func(key string, fb float64) float64 {
+			if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
+				switch tv := vv.(type) {
+				case float64:
+					return tv
+				case int:
+					return float64(tv)
+				case int64:
+					return float64(tv)
+				case string:
+					if f, err := strconv.ParseFloat(strings.TrimSpace(tv), 64); err == nil {
+						return f
+					}
+				}
+			}
+			return fb
+		}
+		parseText := func(key string, fb string) string {
+			if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
+				return fmt.Sprint(vv)
+			}
+			return fb
+		}
+		parseTime := func(key string) time.Time {
+			raw := strings.TrimSpace(parseText(key, ""))
+			if raw == "" {
+				return time.Time{}
+			}
+			if t, err := time.Parse(time.RFC3339, raw); err == nil {
+				return t
+			}
+			return time.Time{}
+		}
+		openLinkAllowed := true
+		if vv, ok := tinysql.GetVal(row, "open_link_allowed"); ok && vv != nil {
+			switch tv := vv.(type) {
+			case int:
+				openLinkAllowed = tv != 0
+			case int64:
+				openLinkAllowed = tv != 0
+			case float64:
+				openLinkAllowed = tv != 0
+			case bool:
+				openLinkAllowed = tv
+			case string:
+				openLinkAllowed = strings.TrimSpace(tv) != "0" && !strings.EqualFold(strings.TrimSpace(tv), "false")
+			}
+		}
+		chunkID := parseText("chunk_id", "")
+		documentID := parseText("document_id", "")
+		if chunkID == "" {
+			if idv, ok := tinysql.GetVal(row, "id"); ok {
+				chunkID = fmt.Sprintf("%v", idv)
+			}
+		}
+		if documentID == "" {
+			documentID = stableContentHash(fmt.Sprint(art))
+		}
+		unit := RetrievalUnit{
+			ChunkID:         chunkID,
+			DocumentID:      documentID,
+			ChunkIdx:        idx,
+			Content:         fmt.Sprint(c),
+			SourceSystem:    parseText("source_system", "tinyrag"),
+			SourceType:      parseText("source_type", normalizeR3SourceType(fmt.Sprint(art))),
+			SourceTitle:     parseText("source_title", fmt.Sprint(art)),
+			SourceURL:       parseText("source_url", ""),
+			SourceObjectID:  parseText("source_object_id", fmt.Sprint(art)),
+			SourceVersion:   parseText("source_version", "v1"),
+			RoleScope:       parseText("role_scope", "|all|"),
+			ACLGroups:       parseText("acl_groups", parseText("role_scope", "|all|")),
+			BusinessOwner:   parseText("business_owner", "it"),
+			Sensitivity:     parseText("sensitivity", "internal"),
+			TrustLevel:      parseFloat("trust_level", 0.5),
+			SourceQuality:   parseFloat("source_quality", sourceTypeQualityDefault(parseText("source_type", ""))),
+			FreshnessScore:  parseFloat("freshness_score", 0.0),
+			QualityScore:    parseFloat("quality_score", 0.5),
+			FeedbackScore:   parseFloat("feedback_score", 0.5),
+			ImportedAt:      parseTime("imported_at"),
+			UpdatedAt:       parseTime("updated_at"),
+			ContentHash:     parseText("content_hash", stableContentHash(fmt.Sprint(c))),
+			OpenLinkAllowed: openLinkAllowed,
+		}
+		r3Score := rankPolicy.Score(unit, score, now)
 		hits = append(hits, retrievalHit{
-			Article:  fmt.Sprint(art),
-			ChunkIdx: idx,
-			Content:  fmt.Sprint(c),
-			Score:    score,
+			Article:    fmt.Sprint(art),
+			ChunkIdx:   idx,
+			Content:    fmt.Sprint(c),
+			Score:      score,
+			R3Score:    r3Score,
+			Unit:       unit,
+			Citation:   buildCitation(unit, r3Score),
+			ChunkID:    chunkID,
+			DocumentID: documentID,
 		})
 	}
+	sortHitsDeterministic(hits, func(a, b retrievalHit) bool {
+		if a.R3Score != b.R3Score {
+			return a.R3Score > b.R3Score
+		}
+		if a.Score != b.Score {
+			return a.Score > b.Score
+		}
+		if a.Article != b.Article {
+			return a.Article < b.Article
+		}
+		return a.ChunkIdx < b.ChunkIdx
+	})
 	return hits, embedMs, searchMs, nil
 }
 
@@ -3204,8 +3564,8 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 			break
 		}
 		q := fmt.Sprintf(
-			"SELECT content, article, chunk_idx, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-			vecJSON(vec), escapeSQ(r.getActiveEmbedModel()), roleScopeFilterSQL(activeRole), candidateLimitForK(k),
+			"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type, source_title, source_url, source_object_id, source_version, role_scope, acl_groups, business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score, feedback_score, imported_at, updated_at, content_hash, open_link_allowed, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
+			escapeSQ(vecJSON(vec)), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
 		)
 		t1 := time.Now()
 		stmt, err := tinysql.ParseSQL(q)
@@ -3219,6 +3579,8 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 			return nil, embedMs, totalSearchMs, err
 		}
 		totalSearchMs += time.Since(t1).Milliseconds()
+		rankPolicy := defaultRankingPolicy()
+		now := time.Now().UTC()
 		for _, row := range rs.Rows {
 			c, ok := tinysql.GetVal(row, "content")
 			art, _ := tinysql.GetVal(row, "article")
@@ -3245,15 +3607,104 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 			case int64:
 				score = float64(sv)
 			}
-			hit := retrievalHit{
-				Article:  fmt.Sprint(art),
-				ChunkIdx: idx,
-				Content:  fmt.Sprint(c),
-				Score:    score,
+			parseFloat := func(key string, fb float64) float64 {
+				if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
+					switch tv := vv.(type) {
+					case float64:
+						return tv
+					case int:
+						return float64(tv)
+					case int64:
+						return float64(tv)
+					case string:
+						if f, err := strconv.ParseFloat(strings.TrimSpace(tv), 64); err == nil {
+							return f
+						}
+					}
+				}
+				return fb
 			}
-			hit.Score *= variants[i].Weight
+			parseText := func(key string, fb string) string {
+				if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
+					return fmt.Sprint(vv)
+				}
+				return fb
+			}
+			parseTime := func(key string) time.Time {
+				raw := strings.TrimSpace(parseText(key, ""))
+				if raw == "" {
+					return time.Time{}
+				}
+				if t, err := time.Parse(time.RFC3339, raw); err == nil {
+					return t
+				}
+				return time.Time{}
+			}
+			openLinkAllowed := true
+			if vv, ok := tinysql.GetVal(row, "open_link_allowed"); ok && vv != nil {
+				switch tv := vv.(type) {
+				case int:
+					openLinkAllowed = tv != 0
+				case int64:
+					openLinkAllowed = tv != 0
+				case float64:
+					openLinkAllowed = tv != 0
+				case bool:
+					openLinkAllowed = tv
+				case string:
+					openLinkAllowed = strings.TrimSpace(tv) != "0" && !strings.EqualFold(strings.TrimSpace(tv), "false")
+				}
+			}
+			weightedSemantic := score * variants[i].Weight
+			chunkID := parseText("chunk_id", "")
+			documentID := parseText("document_id", "")
+			if chunkID == "" {
+				if idv, ok := tinysql.GetVal(row, "id"); ok {
+					chunkID = fmt.Sprintf("%v", idv)
+				}
+			}
+			if documentID == "" {
+				documentID = stableContentHash(fmt.Sprint(art))
+			}
+			unit := RetrievalUnit{
+				ChunkID:         chunkID,
+				DocumentID:      documentID,
+				ChunkIdx:        idx,
+				Content:         fmt.Sprint(c),
+				SourceSystem:    parseText("source_system", "tinyrag"),
+				SourceType:      parseText("source_type", normalizeR3SourceType(fmt.Sprint(art))),
+				SourceTitle:     parseText("source_title", fmt.Sprint(art)),
+				SourceURL:       parseText("source_url", ""),
+				SourceObjectID:  parseText("source_object_id", fmt.Sprint(art)),
+				SourceVersion:   parseText("source_version", "v1"),
+				RoleScope:       parseText("role_scope", "|all|"),
+				ACLGroups:       parseText("acl_groups", parseText("role_scope", "|all|")),
+				BusinessOwner:   parseText("business_owner", "it"),
+				Sensitivity:     parseText("sensitivity", "internal"),
+				TrustLevel:      parseFloat("trust_level", 0.5),
+				SourceQuality:   parseFloat("source_quality", sourceTypeQualityDefault(parseText("source_type", ""))),
+				FreshnessScore:  parseFloat("freshness_score", 0.0),
+				QualityScore:    parseFloat("quality_score", 0.5),
+				FeedbackScore:   parseFloat("feedback_score", 0.5),
+				ImportedAt:      parseTime("imported_at"),
+				UpdatedAt:       parseTime("updated_at"),
+				ContentHash:     parseText("content_hash", stableContentHash(fmt.Sprint(c))),
+				OpenLinkAllowed: openLinkAllowed,
+			}
+			r3Score := rankPolicy.Score(unit, weightedSemantic, now)
+			hit := retrievalHit{
+				Article:    fmt.Sprint(art),
+				ChunkIdx:   idx,
+				Content:    fmt.Sprint(c),
+				Score:      weightedSemantic,
+				R3Score:    r3Score,
+				Unit:       unit,
+				Citation:   buildCitation(unit, r3Score),
+				ChunkID:    chunkID,
+				DocumentID: documentID,
+			}
 			key := aggKey{article: hit.Article, chunkIdx: hit.ChunkIdx}
-			if prev, ok := best[key]; !ok || hit.Score > prev.Score {
+			if prev, ok := best[key]; !ok || hit.R3Score > prev.R3Score || (hit.R3Score == prev.R3Score && hit.Score > prev.Score) {
 				best[key] = hit
 			}
 		}
@@ -3264,6 +3715,12 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 		hits = append(hits, hit)
 	}
 	slices.SortFunc(hits, func(a, b retrievalHit) int {
+		if a.R3Score != b.R3Score {
+			if a.R3Score > b.R3Score {
+				return -1
+			}
+			return 1
+		}
 		if a.Score != b.Score {
 			if a.Score > b.Score {
 				return -1
@@ -3286,12 +3743,47 @@ func formatContextChunk(article string, chunkIdx int, content string) string {
 	return fmt.Sprintf("[Quelle: %s | Chunk: %d]\n%s", article, chunkIdx, strings.TrimSpace(content))
 }
 
+func formatContextChunkWithCitation(article string, chunkIdx int, content string, citation Citation) string {
+	article = strings.TrimSpace(article)
+	if article == "" {
+		article = "unknown"
+	}
+	title := strings.TrimSpace(citation.Title)
+	if title == "" {
+		title = article
+	}
+	stale := ""
+	if citation.Stale {
+		stale = " | stale"
+	}
+	link := ""
+	if citation.SourceURL != "" {
+		link = " | URL: " + citation.SourceURL
+	}
+	updated := citation.UpdatedAt
+	if updated == "" {
+		updated = "unknown"
+	}
+	return fmt.Sprintf("[Quelle: %s | System: %s | Typ: %s | Updated: %s | Trust: %.2f | R3: %.3f%s%s | Chunk: %d]\n%s",
+		title,
+		citation.SourceSystem,
+		citation.SourceType,
+		updated,
+		citation.TrustLevel,
+		citation.R3Score,
+		stale,
+		link,
+		chunkIdx,
+		strings.TrimSpace(content),
+	)
+}
+
 func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64) (string, *debugInfo, bool) {
 	activeRole := "it"
 	if settings != nil {
 		activeRole = settings.get().ActiveRole
 	}
-	q := fmt.Sprintf("SELECT article, chunk_idx, content FROM chunks WHERE LOWER(article) = LOWER('%s') AND %s ORDER BY chunk_idx", escapeSQ(article), roleScopeFilterSQL(activeRole))
+	q := fmt.Sprintf("SELECT article, chunk_idx, content, chunk_id, document_id, source_system, source_type, source_title, source_url, sensitivity, trust_level, updated_at, open_link_allowed FROM chunks WHERE LOWER(article) = LOWER('%s') AND %s ORDER BY chunk_idx", escapeSQ(article), roleAndACLFilterSQL(activeRole))
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return "", nil, false
@@ -3305,6 +3797,7 @@ func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64
 
 	var parts []string
 	var dbgChunks []debugChunk
+	var citations []Citation
 	resolvedArticle := article
 	for _, row := range rs.Rows {
 		c, ok := tinysql.GetVal(row, "content")
@@ -3326,12 +3819,94 @@ func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64
 			}
 		}
 		content := fmt.Sprint(c)
-		parts = append(parts, formatContextChunk(resolvedArticle, idx, content))
+		openLinkAllowed := true
+		if vv, ok := tinysql.GetVal(row, "open_link_allowed"); ok && vv != nil {
+			switch tv := vv.(type) {
+			case int:
+				openLinkAllowed = tv != 0
+			case int64:
+				openLinkAllowed = tv != 0
+			case float64:
+				openLinkAllowed = tv != 0
+			}
+		}
+		trust := 0.5
+		if vv, ok := tinysql.GetVal(row, "trust_level"); ok && vv != nil {
+			switch tv := vv.(type) {
+			case float64:
+				trust = tv
+			case int:
+				trust = float64(tv)
+			case int64:
+				trust = float64(tv)
+			}
+		}
+		updatedAt := ""
+		if vv, ok := tinysql.GetVal(row, "updated_at"); ok && vv != nil {
+			updatedAt = fmt.Sprint(vv)
+		}
+		chunkID := ""
+		if vv, ok := tinysql.GetVal(row, "chunk_id"); ok && vv != nil {
+			chunkID = fmt.Sprint(vv)
+		}
+		documentID := stableContentHash(resolvedArticle)
+		if vv, ok := tinysql.GetVal(row, "document_id"); ok && vv != nil && fmt.Sprint(vv) != "" {
+			documentID = fmt.Sprint(vv)
+		}
+		citation := Citation{
+			ChunkID:       chunkID,
+			DocumentID:    documentID,
+			Title:         resolvedArticle,
+			SourceSystem:  "tinyrag",
+			SourceType:    normalizeR3SourceType(resolvedArticle),
+			UpdatedAt:     updatedAt,
+			TrustLevel:    trust,
+			Sensitivity:   "internal",
+			R3Score:       0.75,
+			OpenLinkAllow: openLinkAllowed,
+		}
+		if vv, ok := tinysql.GetVal(row, "source_system"); ok && vv != nil {
+			citation.SourceSystem = fmt.Sprint(vv)
+		}
+		if vv, ok := tinysql.GetVal(row, "source_type"); ok && vv != nil && fmt.Sprint(vv) != "" {
+			citation.SourceType = fmt.Sprint(vv)
+		}
+		if vv, ok := tinysql.GetVal(row, "source_title"); ok && vv != nil && fmt.Sprint(vv) != "" {
+			citation.Title = fmt.Sprint(vv)
+		}
+		if vv, ok := tinysql.GetVal(row, "source_url"); ok && vv != nil {
+			if openLinkAllowed {
+				citation.SourceURL = fmt.Sprint(vv)
+			}
+		}
+		if vv, ok := tinysql.GetVal(row, "sensitivity"); ok && vv != nil && fmt.Sprint(vv) != "" {
+			citation.Sensitivity = fmt.Sprint(vv)
+		}
+		parts = append(parts, formatContextChunkWithCitation(resolvedArticle, idx, content, citation))
+		citations = append(citations, citation)
 		if debug {
-			dbgChunks = append(dbgChunks, debugChunk{Score: -1, Content: content, Article: resolvedArticle, ChunkIdx: idx, IsNeighbor: false})
+			dbgChunks = append(dbgChunks, debugChunk{
+				Score:         citation.R3Score,
+				SemanticScore: -1,
+				R3Score:       citation.R3Score,
+				Content:       content,
+				Article:       resolvedArticle,
+				ChunkIdx:      idx,
+				Citation:      citation,
+				IsNeighbor:    false,
+			})
 		}
 	}
-	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: 0, TotalChunks: r.docCountForRole(activeRole), UsedK: r.k, Decision: "article_specific"}
+	di := &debugInfo{
+		Chunks:       dbgChunks,
+		Citations:    citations,
+		EmbedMs:      embedMs,
+		SearchMs:     0,
+		TotalChunks:  r.docCountForRole(activeRole),
+		UsedK:        r.k,
+		Decision:     "article_specific",
+		RankingModel: "r3_weighted",
+	}
 	return strings.Join(parts, "\n---\n"), di, true
 }
 
@@ -3339,32 +3914,41 @@ func (r *ragSystem) assembleContext(hits []retrievalHit, usedK int, decision str
 	seen := make(map[chunkKey]bool)
 	var contextParts []string
 	var dbgChunks []debugChunk
+	var citations []Citation
 
-	appendChunk := func(article string, idx int, content string, score float64, isNeighbor bool) {
+	appendChunk := func(article string, idx int, content string, score float64, semantic float64, citation Citation, isNeighbor bool) {
 		key := chunkKey{article: article, chunkIdx: idx}
 		if seen[key] {
 			return
 		}
 		seen[key] = true
-		contextParts = append(contextParts, formatContextChunk(article, idx, content))
+		if citation.Title != "" || citation.DocumentID != "" {
+			contextParts = append(contextParts, formatContextChunkWithCitation(article, idx, content, citation))
+			citations = append(citations, citation)
+		} else {
+			contextParts = append(contextParts, formatContextChunk(article, idx, content))
+		}
 		dbgChunks = append(dbgChunks, debugChunk{
-			Score:      score,
-			Content:    content,
-			Article:    article,
-			ChunkIdx:   idx,
-			IsNeighbor: isNeighbor,
+			Score:         score,
+			SemanticScore: semantic,
+			R3Score:       score,
+			Content:       content,
+			Article:       article,
+			ChunkIdx:      idx,
+			Citation:      citation,
+			IsNeighbor:    isNeighbor,
 		})
 	}
 
 	for _, h := range hits {
 		if h.ChunkIdx > 0 {
 			if prevContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx-1); ok {
-				appendChunk(h.Article, h.ChunkIdx-1, prevContent, -1, true)
+				appendChunk(h.Article, h.ChunkIdx-1, prevContent, -1, -1, Citation{}, true)
 			}
 		}
-		appendChunk(h.Article, h.ChunkIdx, h.Content, h.Score, false)
+		appendChunk(h.Article, h.ChunkIdx, h.Content, h.R3Score, h.Score, h.Citation, false)
 		if nextContent, ok := r.fetchNeighborContent(h.Article, h.ChunkIdx+1); ok {
-			appendChunk(h.Article, h.ChunkIdx+1, nextContent, -1, true)
+			appendChunk(h.Article, h.ChunkIdx+1, nextContent, -1, -1, Citation{}, true)
 		}
 	}
 
@@ -3372,7 +3956,16 @@ func (r *ragSystem) assembleContext(hits []retrievalHit, usedK int, decision str
 	if settings != nil {
 		activeRole = settings.get().ActiveRole
 	}
-	di := &debugInfo{Chunks: dbgChunks, EmbedMs: embedMs, SearchMs: searchMs, TotalChunks: r.docCountForRole(activeRole), UsedK: usedK, Decision: decision}
+	di := &debugInfo{
+		Chunks:       dbgChunks,
+		Citations:    citations,
+		EmbedMs:      embedMs,
+		SearchMs:     searchMs,
+		TotalChunks:  r.docCountForRole(activeRole),
+		UsedK:        usedK,
+		Decision:     decision,
+		RankingModel: "r3_weighted",
+	}
 	return strings.Join(contextParts, "\n---\n"), di, nil
 }
 
@@ -3525,7 +4118,7 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 	}
 }
 
-func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore) (string, string, error) {
+func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore, connectors *connectorStore, connectorExec *connectorExecutor) (string, string, error) {
 	var text string
 	var source string
 	var fetchErr error
@@ -3776,6 +4369,55 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			}
 		}
 	default:
+		// Connector capability execution path (schema-validated).
+		if connectors != nil && connectorExec != nil {
+			if reg := connectors.registry(); reg != nil {
+				if entry, ok := reg[tr.Tool]; ok {
+					input := map[string]any{}
+					rawQuery := strings.TrimSpace(tr.Query)
+					if rawQuery != "" {
+						if err := json.Unmarshal([]byte(rawQuery), &input); err != nil {
+							// Fallback: map scalar query into the first required field.
+							if len(entry.Capability.InputSchema.Required) == 1 {
+								input[entry.Capability.InputSchema.Required[0]] = rawQuery
+							} else {
+								fetchErr = fmt.Errorf("connector tool %s requires JSON input matching schema", tr.Tool)
+								break
+							}
+						}
+					}
+					execRes, err := connectorExec.Execute(ConnectorExecRequest{
+						ConnectorID: entry.Connector.ID,
+						Capability:  tr.Tool,
+						Input:       input,
+					})
+					if err != nil {
+						fetchErr = err
+						break
+					}
+					source = execRes.Source
+					if source == "" {
+						source = "connector:" + entry.Connector.ID + ":" + tr.Tool
+					}
+					var out strings.Builder
+					if len(execRes.Output) > 0 {
+						out.WriteString("Connector output:\n")
+						j, _ := json.MarshalIndent(execRes.Output, "", "  ")
+						out.Write(j)
+						out.WriteString("\n")
+					}
+					if strings.TrimSpace(execRes.Raw) != "" {
+						out.WriteString("\nRaw:\n")
+						out.WriteString(execRes.Raw)
+					}
+					text = strings.TrimSpace(out.String())
+					if text == "" {
+						text = "connector call completed with empty output"
+					}
+					break
+				}
+			}
+		}
 		if strings.HasPrefix(tr.Tool, "module:") && modules != nil {
 			modID := strings.TrimPrefix(tr.Tool, "module:")
 			mod, ok := modules.get(modID)
@@ -3824,11 +4466,11 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 // executeToolRequestCtx is a context-aware wrapper around executeToolRequest.
 // It checks context cancellation before and after the tool call so that
 // the configured ToolTimeout in the StreamingEngine is honoured.
-func executeToolRequestCtx(ctx context.Context, tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore) (string, string, error) {
+func executeToolRequestCtx(ctx context.Context, tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore, connectors *connectorStore, connectorExec *connectorExecutor) (string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", fmt.Errorf("tool %s: %w", tr.Tool, err)
 	}
-	text, source, err := executeToolRequest(tr, s, rag, customAPIs, modules)
+	text, source, err := executeToolRequest(tr, s, rag, customAPIs, modules, connectors, connectorExec)
 	if err != nil {
 		return text, source, err
 	}
@@ -4262,6 +4904,7 @@ func buildContextPrompt(ctxText string) string {
 		sb.WriteString(ctxText)
 		sb.WriteString("\n\n")
 		sb.WriteString("Behandle diesen Kontext als primaere Quelle. Wenn er nicht ausreicht oder zeitlich fraglich ist, nutze ein Tool.\n\n")
+		sb.WriteString("Pflichtregeln: Keine uncitierte RAG-Antwort. Keine erfundenen Quellen. Keine unautorisierten Links aus eingeschraenkten Quellen.\n\n")
 	} else {
 		sb.WriteString("Es liegt kein hinreichender lokaler Kontext fuer diese Anfrage vor. Nutze bei Bedarf Tools.\n\n")
 	}
@@ -4337,21 +4980,26 @@ func buildToolSystemPrompt(ctxText string, tools []toolDef, deep bool, s appSett
 // debugChunk contains information about a retrieved chunk useful for
 // emitting debug payloads back to the frontend.
 type debugChunk struct {
-	Score      float64 `json:"score"`
-	Content    string  `json:"content"`
-	Article    string  `json:"article"`
-	ChunkIdx   int     `json:"chunk_idx"`
-	IsNeighbor bool    `json:"is_neighbor"`
+	Score         float64  `json:"score"`
+	SemanticScore float64  `json:"semantic_score,omitempty"`
+	Content       string   `json:"content"`
+	Article       string   `json:"article"`
+	ChunkIdx      int      `json:"chunk_idx"`
+	R3Score       float64  `json:"r3_score,omitempty"`
+	Citation      Citation `json:"citation,omitempty"`
+	IsNeighbor    bool     `json:"is_neighbor"`
 }
 
 // debugInfo aggregates retrieval timing and chunk-level debug data.
 type debugInfo struct {
-	Chunks      []debugChunk `json:"chunks"`
-	EmbedMs     int64        `json:"embed_ms"`
-	SearchMs    int64        `json:"search_ms"`
-	TotalChunks int          `json:"total_chunks"`
-	UsedK       int          `json:"used_k"`
-	Decision    string       `json:"decision,omitempty"`
+	Chunks       []debugChunk `json:"chunks"`
+	Citations    []Citation   `json:"citations,omitempty"`
+	EmbedMs      int64        `json:"embed_ms"`
+	SearchMs     int64        `json:"search_ms"`
+	TotalChunks  int          `json:"total_chunks"`
+	UsedK        int          `json:"used_k"`
+	Decision     string       `json:"decision,omitempty"`
+	RankingModel string       `json:"ranking_model,omitempty"`
 }
 
 // debugModels records which LLM endpoint and models were used for a request.
@@ -4406,7 +5054,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 	const highThreshold = 0.90
 	var primaryCount int
 	for _, h := range hits {
-		if h.Score > highThreshold {
+		if h.R3Score > highThreshold {
 			primaryCount++
 		}
 	}
@@ -4415,7 +5063,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 	if primaryCount > 0 {
 		var sel []retrievalHit
 		for _, h := range hits {
-			if h.Score > highThreshold {
+			if h.R3Score > highThreshold {
 				sel = append(sel, h)
 				if len(sel) >= r.k {
 					break
@@ -4434,7 +5082,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 	}
 	for i := 0; i < topN; i++ {
 		h := hits[i]
-		summaryParts = append(summaryParts, fmt.Sprintf("%s (score=%.4f)", h.Article, h.Score))
+		summaryParts = append(summaryParts, fmt.Sprintf("%s (r3=%.4f, semantic=%.4f)", h.Article, h.R3Score, h.Score))
 	}
 	summary := strings.Join(summaryParts, "; ")
 
@@ -4444,7 +5092,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 		var sel []retrievalHit
 		thresh := r.scoreThreshold()
 		for _, h := range hits {
-			if h.Score >= thresh {
+			if h.R3Score >= thresh {
 				sel = append(sel, h)
 				if len(sel) >= r.k {
 					break
@@ -4499,7 +5147,7 @@ func (r *ragSystem) prepareContext(question string, debug bool) (string, *debugI
 
 	var sel []retrievalHit
 	for _, h := range hits {
-		if h.Score >= thresh {
+		if h.R3Score >= thresh {
 			sel = append(sel, h)
 			if len(sel) >= desiredK {
 				break
@@ -4532,7 +5180,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 	const highThreshold = 0.90
 	var primaryCount int
 	for _, h := range hits {
-		if h.Score > highThreshold {
+		if h.R3Score > highThreshold {
 			primaryCount++
 		}
 	}
@@ -4540,7 +5188,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 	if primaryCount > 0 {
 		var sel []retrievalHit
 		for _, h := range hits {
-			if h.Score > highThreshold {
+			if h.R3Score > highThreshold {
 				sel = append(sel, h)
 				if len(sel) >= k {
 					break
@@ -4558,7 +5206,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 	}
 	for i := 0; i < topN; i++ {
 		h := hits[i]
-		summaryParts = append(summaryParts, fmt.Sprintf("%s (score=%.4f)", h.Article, h.Score))
+		summaryParts = append(summaryParts, fmt.Sprintf("%s (r3=%.4f, semantic=%.4f)", h.Article, h.R3Score, h.Score))
 	}
 	summary := strings.Join(summaryParts, "; ")
 
@@ -4567,7 +5215,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 		var sel []retrievalHit
 		thresh := r.scoreThreshold()
 		for _, h := range hits {
-			if h.Score >= thresh {
+			if h.R3Score >= thresh {
 				sel = append(sel, h)
 				if len(sel) >= k {
 					break
@@ -4619,7 +5267,7 @@ func (r *ragSystem) prepareContextWithK(question string, debug bool, k int) (str
 
 	var sel []retrievalHit
 	for _, h := range hits {
-		if h.Score >= thresh {
+		if h.R3Score >= thresh {
 			sel = append(sel, h)
 			if len(sel) >= desiredK {
 				break
@@ -4653,7 +5301,7 @@ func (r *ragSystem) prepareDirectContext(query string, k int) (string, *debugInf
 	}
 	var sel []retrievalHit
 	for _, h := range hits {
-		if h.Score >= r.scoreThreshold() {
+		if h.R3Score >= r.scoreThreshold() {
 			sel = append(sel, h)
 			if len(sel) >= k {
 				break
@@ -5517,7 +6165,7 @@ func (r *ragSystem) fetchNeighborContent(article string, chunkIdx int) (string, 
 	}
 	q := fmt.Sprintf(
 		"SELECT content FROM chunks WHERE article = '%s' AND chunk_idx = %d AND %s",
-		escapeSQ(article), chunkIdx, roleScopeFilterSQL(activeRole),
+		escapeSQ(article), chunkIdx, roleAndACLFilterSQL(activeRole),
 	)
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
@@ -5549,7 +6197,7 @@ func (r *ragSystem) listSources() []map[string]any {
 }
 
 func (r *ragSystem) listSourcesForRole(role string) []map[string]any {
-	q := fmt.Sprintf("SELECT article, COUNT(*) AS cnt FROM chunks WHERE %s GROUP BY article ORDER BY article", roleScopeFilterSQL(role))
+	q := fmt.Sprintf("SELECT article, COUNT(*) AS cnt FROM chunks WHERE %s GROUP BY article ORDER BY article", roleAndACLFilterSQL(role))
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return nil
@@ -5584,7 +6232,7 @@ func (r *ragSystem) deleteSource(article string) error {
 }
 
 func (r *ragSystem) deleteSourceForRole(article, role string) error {
-	q := fmt.Sprintf("DELETE FROM chunks WHERE article = '%s' AND %s", escapeSQ(article), roleScopeFilterSQL(role))
+	q := fmt.Sprintf("DELETE FROM chunks WHERE article = '%s' AND %s", escapeSQ(article), roleAndACLFilterSQL(role))
 	stmt, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return err
@@ -6062,7 +6710,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	mux := http.NewServeMux()
 	adminUsers := newAdminUserStore(settings)
 	apiRoutes := newAPIRouteStore(settings)
-	adminGuard := func(h http.HandlerFunc) http.HandlerFunc { return routePolicyMiddleware(settings, h) }
+	connectorRegistryStore = connectors
+	connectorRuntimeExec = connectorExec
+	adminGuard := func(h http.HandlerFunc) http.HandlerFunc {
+		return webUIAuthMiddleware(routePolicyMiddleware(settings, h))
+	}
 
 	// Static assets
 	mux.HandleFunc("/", webUIAuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -6812,7 +7464,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		// Normal mode: call LM with SSE streaming via StreamingEngine
-		allTools := filterToolsForRole(append(customAPIs.allTools(), modules.enabledTools()...), s.ActiveRole)
+		allTools := append(customAPIs.allTools(), modules.enabledTools()...)
+		if connectors != nil {
+			allTools = append(allTools, connectors.enabledToolDefs()...)
+		}
+		allTools = filterToolsForRole(allTools, s.ActiveRole)
 		// build system prompt; in deep mode add research instructions
 		var systemPrompt string
 		systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep, s)
@@ -6889,10 +7545,15 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			fmt.Fprintf(w, "event: route\ndata: %s\n\n", routeJSON)
 			flusher.Flush()
 		}
+		if di != nil && len(di.Citations) > 0 {
+			citJSON, _ := json.Marshal(di.Citations)
+			fmt.Fprintf(w, "event: citation_cards\ndata: %s\n\n", citJSON)
+			flusher.Flush()
+		}
 
 		// Run the streaming engine
 		sw := &sseWriter{w: w, flusher: flusher}
-		engine := newStreamingEngine(rag.getLM(), rag, settings, customAPIs, modules)
+		engine := newStreamingEngine(rag.getLM(), rag, settings, customAPIs, modules, connectors, connectorExec)
 		engReq := EngineRequest{
 			RequestID:    reqID,
 			Question:     req.Question,
@@ -6902,6 +7563,12 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			Debug:        req.Debug,
 		}
 		answerStr, engineErr := engine.Run(context.Background(), engReq, sw, tel)
+		if di != nil && len(di.Citations) > 0 {
+			answerStr = ensureCitedAnswer(answerStr, di.Citations)
+			if !validateCitationsAgainstSources(answerStr, di.Citations) {
+				answerStr = ensureCitedAnswer("Antwort aufgrund strenger Quellenrichtlinie gekürzt. Bitte verifiziere die Quellenbasis.", di.Citations)
+			}
+		}
 		tel.VisibleChars = len(answerStr)
 		if engineErr != nil {
 			tel.finalize(false, engineErr.Error())
@@ -6921,7 +7588,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		s := settings.get()
-		json.NewEncoder(w).Encode(filterToolsForRole(append(customAPIs.allTools(), modules.enabledTools()...), s.ActiveRole))
+		allTools := append(customAPIs.allTools(), modules.enabledTools()...)
+		if connectors != nil {
+			allTools = append(allTools, connectors.enabledToolDefs()...)
+		}
+		json.NewEncoder(w).Encode(filterToolsForRole(allTools, s.ActiveRole))
 	})
 
 	// POST /api/tool/execute — execute a tool and add results to RAG
@@ -6945,18 +7616,32 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		var text string
 		var source string
 		var fetchErr error
-		text, source, fetchErr = executeToolRequest(req, s, rag, customAPIs, modules)
+		text, source, fetchErr = executeToolRequest(req, s, rag, customAPIs, modules, connectors, connectorExec)
 
 		if fetchErr != nil {
 			http.Error(w, fmt.Sprintf("Tool %q fehlgeschlagen: %v", req.Tool, fetchErr), 500)
 			return
 		}
 
-		chunks, redactions := chunksForIngest(text, s)
-		if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+		pclass := (ToolPersistencePolicy{}).Classify(req.Tool, source)
+		chunks, redactions := chunksForIngestWithDoc(text, s, stableContentHash(source), false)
+		persisted := false
+		if pclass == ToolPersistableAfterPolicy {
+			if err := rag.addChunks(source, chunks, settings.get().EmbedModel); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			persisted = true
 		}
+		rag.logR3Audit(AuditEvent{
+			EventType:   "manual_tool_execute",
+			Actor:       s.ActiveRole,
+			EntityType:  "tool",
+			EntityID:    req.Tool,
+			Decision:    map[bool]string{true: "allow", false: "deny"}[persisted],
+			PolicyClass: string(pclass),
+			Details:     source,
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -6967,6 +7652,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"chunks":     len(chunks),
 			"total":      rag.docCountForRole(s.ActiveRole),
 			"redactions": redactions,
+			"persisted":  persisted,
+			"policy":     pclass,
 		})
 	}))
 
@@ -7852,6 +8539,32 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		})
 	})
 
+	// GET /api/import/jobs — latest import job telemetry (admin/session or API-key guarded)
+	mux.HandleFunc("/api/import/jobs", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		stmt, err := tinysql.ParseSQL("SELECT * FROM r3_import_jobs ORDER BY updated_at DESC")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rag.dbMu.Lock()
+		rs, err := tinysql.Execute(context.Background(), rag.db, "default", stmt)
+		rag.dbMu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var rows any = []any{}
+		if rs != nil {
+			rows = rs.Rows
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rows)
+	}))
+
 	// GET /api/debug/storage-stats — tinySQL backend observability (admin only)
 	mux.HandleFunc("/api/debug/storage-stats", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -7897,18 +8610,57 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			source = strings.TrimSuffix(fh.Filename, ".csv")
 			source = strings.TrimSuffix(source, ".tsv")
 		}
+		job := ImportJob{
+			JobID:         newRequestID(),
+			SourceSystem:  "csv_import",
+			Cursor:        source,
+			Status:        ImportJobRunning,
+			Processed:     0,
+			Imported:      0,
+			Skipped:       0,
+			StartedAt:     time.Now().UTC(),
+			UpdatedAt:     time.Now().UTC(),
+			IdempotencyID: stableContentHash("csv|" + source),
+		}
+		rag.upsertImportJob(job)
 		s := settings.get()
 		result, chunks, impErr := importDelimitedAsChunks(r.Context(), file, source, s)
 		if impErr != nil {
+			job.Status = ImportJobFailed
+			job.LastError = impErr.Error()
+			job.UpdatedAt = time.Now().UTC()
+			rag.upsertImportJob(job)
 			http.Error(w, impErr.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := rag.addChunks(source, chunks, s.EmbedModel); err != nil {
+			job.Status = ImportJobFailed
+			job.LastError = err.Error()
+			job.UpdatedAt = time.Now().UTC()
+			rag.upsertImportJob(job)
 			http.Error(w, "ingest error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		doneAt := time.Now().UTC()
+		job.Status = ImportJobCompleted
+		job.Processed = int(result.RowsInserted)
+		job.Imported = len(chunks)
+		job.LastHash = stableContentHash(strings.Join(chunks, "\n"))
+		job.UpdatedAt = doneAt
+		job.CompletedAt = &doneAt
+		rag.upsertImportJob(job)
+		rag.logR3Audit(AuditEvent{
+			EventType:   "import_csv",
+			Actor:       s.ActiveRole,
+			EntityType:  "import_job",
+			EntityID:    job.JobID,
+			Decision:    "allow",
+			PolicyClass: "ingestion",
+			Details:     source,
+		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
+			"job_id":        job.JobID,
 			"source":        source,
 			"rows_imported": result.RowsInserted,
 			"chunks":        len(chunks),
@@ -7938,18 +8690,57 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if source == "" {
 			source = strings.TrimSuffix(fh.Filename, ".json")
 		}
+		job := ImportJob{
+			JobID:         newRequestID(),
+			SourceSystem:  "json_import",
+			Cursor:        source,
+			Status:        ImportJobRunning,
+			Processed:     0,
+			Imported:      0,
+			Skipped:       0,
+			StartedAt:     time.Now().UTC(),
+			UpdatedAt:     time.Now().UTC(),
+			IdempotencyID: stableContentHash("json|" + source),
+		}
+		rag.upsertImportJob(job)
 		s := settings.get()
 		result, chunks, impErr := importJSONAsChunks(r.Context(), file, source, s)
 		if impErr != nil {
+			job.Status = ImportJobFailed
+			job.LastError = impErr.Error()
+			job.UpdatedAt = time.Now().UTC()
+			rag.upsertImportJob(job)
 			http.Error(w, impErr.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := rag.addChunks(source, chunks, s.EmbedModel); err != nil {
+			job.Status = ImportJobFailed
+			job.LastError = err.Error()
+			job.UpdatedAt = time.Now().UTC()
+			rag.upsertImportJob(job)
 			http.Error(w, "ingest error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		doneAt := time.Now().UTC()
+		job.Status = ImportJobCompleted
+		job.Processed = int(result.RowsInserted)
+		job.Imported = len(chunks)
+		job.LastHash = stableContentHash(strings.Join(chunks, "\n"))
+		job.UpdatedAt = doneAt
+		job.CompletedAt = &doneAt
+		rag.upsertImportJob(job)
+		rag.logR3Audit(AuditEvent{
+			EventType:   "import_json",
+			Actor:       s.ActiveRole,
+			EntityType:  "import_job",
+			EntityID:    job.JobID,
+			Decision:    "allow",
+			PolicyClass: "ingestion",
+			Details:     source,
+		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
+			"job_id":        job.JobID,
 			"source":        source,
 			"rows_imported": result.RowsInserted,
 			"chunks":        len(chunks),
@@ -8312,7 +9103,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 	}))
 
 	// Connector system routes
-	registerConnectorRoutes(mux, connectors, connectorExec)
+	registerConnectorRoutes(mux, connectors, connectorExec, adminGuard)
 
 	// ── Web-UI Authentication endpoints ──────────────────────────────────────
 
