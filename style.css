@@ -15,6 +15,7 @@
   --accent:             #4c8bf5;
   --accent-subtle:      rgba(76,139,245,.12);
   --accent-subtle2:     rgba(76,139,245,.22);
+  --gradient-secondary: #8b5cf6;
   --danger:             #e8546f;
   --ok:                 #3ecf8e;
   --warn:               #f5a623;
@@ -49,6 +50,7 @@
   --accent:             #2563eb;
   --accent-subtle:      rgba(37,99,235,.09);
   --accent-subtle2:     rgba(37,99,235,.18);
+  --gradient-secondary: #7c3aed;
   --danger:             #dc2626;
   --ok:                 #16a34a;
   --warn:               #d97706;
@@ -77,6 +79,7 @@
   --accent:             #81a1c1;
   --accent-subtle:      rgba(129,161,193,.14);
   --accent-subtle2:     rgba(129,161,193,.26);
+  --gradient-secondary: #5e81ac;
   --danger:             #bf616a;
   --ok:                 #a3be8c;
   --warn:               #ebcb8b;
@@ -105,6 +108,7 @@
   --accent:             #268bd2;
   --accent-subtle:      rgba(38,139,210,.14);
   --accent-subtle2:     rgba(38,139,210,.26);
+  --gradient-secondary: #2aa198;
   --danger:             #dc322f;
   --ok:                 #859900;
   --warn:               #b58900;
@@ -133,6 +137,7 @@
   --accent:             #66d9ef;
   --accent-subtle:      rgba(102,217,239,.12);
   --accent-subtle2:     rgba(102,217,239,.22);
+  --gradient-secondary: #a6e22e;
   --danger:             #f92672;
   --ok:                 #a6e22e;
   --warn:               #e6db74;
@@ -161,6 +166,7 @@
   --accent:             #bd93f9;
   --accent-subtle:      rgba(189,147,249,.14);
   --accent-subtle2:     rgba(189,147,249,.26);
+  --gradient-secondary: #ff79c6;
   --danger:             #ff5555;
   --ok:                 #50fa7b;
   --warn:               #f1fa8c;
@@ -289,7 +295,7 @@ small.warn { color: var(--warn) }
   content: '';
   display: inline-block;
   width: 26px; height: 26px;
-  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #8b5cf6));
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--gradient-secondary)));
   border-radius: 8px;
   flex-shrink: 0;
   box-shadow: 0 2px 8px var(--accent-subtle2);
@@ -308,7 +314,7 @@ small.warn { color: var(--warn) }
   border: none;
   border-radius: 10px;
   padding: 10px 14px;
-  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #8b5cf6));
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--gradient-secondary)));
   color: #fff;
   font-family: var(--font);
   font-weight: 600;
@@ -795,7 +801,7 @@ button { font-family: var(--font); cursor: pointer }
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 8px 10px;
-  box-shadow: var(--shadow-sm), 0 0 0 0 var(--accent-subtle);
+  box-shadow: var(--shadow-sm);
   transition: border-color .2s, box-shadow .2s;
 }
 .chat-input-wrapper:focus-within {
@@ -822,7 +828,7 @@ button { font-family: var(--font); cursor: pointer }
   width: 36px; height: 36px;
   border: none;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, #7c3aed));
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--gradient-secondary)));
   color: #fff;
   display: flex;
   align-items: center;
