@@ -25,12 +25,12 @@
       <h1 id="appNameHeading">tinyRAG</h1>
     </div>
     <div class="sub" aria-live="polite"><span id="chunkCount" aria-label="Number of chunks">-</span> <span data-i18n="chunks_in_knowledge_base">Chunks in der Wissensbasis</span></div>
-    <button class="new-chat-btn" id="newChatBtn" aria-label="Start new chat"><span data-i18n="new_chat">+ Neuer Chat</span></button>
+    <button class="new-chat-btn" id="newChatBtn" aria-label="Start new chat" title="Start a new chat conversation"><span data-i18n="new_chat">+ Neuer Chat</span></button>
   </div>
 
   <div class="sidebar-tabs" role="tablist" aria-label="Sidebar Tabs">
-    <button class="sidebar-tab active" data-sidebar-tab="chats" role="tab" aria-selected="true" aria-controls="sidebar-chats" id="tab-chats"><span data-i18n="chats">Chats</span></button>
-    <button class="sidebar-tab" data-sidebar-tab="sources" role="tab" aria-selected="false" aria-controls="sidebar-sources" id="tab-sources"><span data-i18n="sources">Quellen</span></button>
+    <button class="sidebar-tab active" data-sidebar-tab="chats" role="tab" aria-selected="true" aria-controls="sidebar-chats" id="tab-chats" title="Show chat history"><span data-i18n="chats">Chats</span></button>
+    <button class="sidebar-tab" data-sidebar-tab="sources" role="tab" aria-selected="false" aria-controls="sidebar-sources" id="tab-sources" title="Show knowledge base sources"><span data-i18n="sources">Quellen</span></button>
   </div>
 
   <div id="sidebar-chats" class="sidebar-list" role="tabpanel" aria-labelledby="tab-chats"></div>
@@ -38,26 +38,26 @@
   <!-- User session / logout bar (visible only when web UI auth is enabled) -->
   <div id="userBar" class="user-bar" style="display:none" aria-label="User session">
     <span id="userBarName" class="user-bar-name"></span>
-    <button id="logoutBtn" class="user-bar-logout" aria-label="Sign out">Sign out</button>
+    <button id="logoutBtn" class="user-bar-logout" aria-label="Sign out" title="Sign out of the current session">Sign out</button>
   </div>
 </aside>
 
 <!-- Main -->
 <main class="main" id="main-content" role="main">
   <div class="main-tabs" role="tablist" aria-label="Main navigation">
-    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="appSidebar">☰</button>
-    <button class="main-tab active" data-main-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat" id="tab-chat"><span data-i18n="chat">Chat</span></button>
-    <button class="main-tab" data-main-tab="search" role="tab" aria-selected="false" aria-controls="panel-search" id="tab-search"><span data-i18n="search">Suche</span></button>
-    <button class="main-tab" data-main-tab="ingest" role="tab" aria-selected="false" aria-controls="panel-ingest" id="tab-ingest"><span data-i18n="ingest">Daten hinzufügen</span></button>
+    <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="appSidebar" title="Toggle sidebar">☰</button>
+    <button class="main-tab active" data-main-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat" id="tab-chat" title="Open chat panel"><span data-i18n="chat">Chat</span></button>
+    <button class="main-tab" data-main-tab="search" role="tab" aria-selected="false" aria-controls="panel-search" id="tab-search" title="Open semantic search"><span data-i18n="search">Suche</span></button>
+    <button class="main-tab" data-main-tab="ingest" role="tab" aria-selected="false" aria-controls="panel-ingest" id="tab-ingest" title="Add data to the knowledge base"><span data-i18n="ingest">Daten hinzufügen</span></button>
 
     <div class="spacer"></div>
 
     <div class="toolbar-secondary">
-      <label class="debug-toggle" for="personaSelect">
-        <select id="personaSelect" aria-label="Select persona (pre-prompt)"></select>
+      <label class="debug-toggle" for="personaSelect" title="Select conversation persona (pre-prompt)">
+        <select id="personaSelect" aria-label="Select persona (pre-prompt)" title="Select conversation persona (pre-prompt)"></select>
       </label>
-      <label class="debug-toggle" for="roleSelect">
-        <select id="roleSelect" aria-label="Select role context">
+      <label class="debug-toggle" for="roleSelect" title="Select role context for content filtering">
+        <select id="roleSelect" aria-label="Select role context" title="Select role context for content filtering">
           <option value="it" data-i18n="role_it">IT</option>
           <option value="logistik" data-i18n="role_logistics">Logistik</option>
           <option value="vertrieb" data-i18n="role_sales">Vertrieb</option>
@@ -72,12 +72,12 @@
       <span id="debug-description" class="visually-hidden" data-i18n="debug_description">Shows RAG context data that the system uses for the response</span>
     </div>
 
-    <button class="settings-btn" id="settingsBtn" aria-label="Open settings">
+    <button class="settings-btn" id="settingsBtn" aria-label="Open settings" title="Open settings">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       <span class="visually-hidden" data-i18n="settings">Einstellungen</span>
     </button>
-    <label class="llm-switcher">
-      <select id="llmSwitcher" aria-label="Select LLM provider">
+    <label class="llm-switcher" title="Select LLM provider">
+      <select id="llmSwitcher" aria-label="Select LLM provider" title="Select LLM provider">
         <option value="openai">ChatGPT (OpenAI)</option>
         <option value="lmstudio">LM Studio (local)</option>
         <option value="ollama">Ollama (local)</option>
@@ -90,10 +90,10 @@
       </select>
     </label>
     <label class="model-chooser">
-      <select id="llmModelSelect" aria-label="Select chat model" style="display:none">
+      <select id="llmModelSelect" aria-label="Select chat model" title="Select specific chat model" style="display:none">
         <option value="">(Use recommended)</option>
       </select>
-      <button id="llmApplyBtn" class="btn-small" style="display:none">Apply</button>
+      <button id="llmApplyBtn" class="btn-small" style="display:none" title="Apply the selected model">Apply</button>
     </label>
     <div id="openaiBadge" class="openai-badge" style="display:none">
       <span>Using</span>
@@ -116,15 +116,15 @@
         </div>
         <p data-i18n="chat_empty_state">Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.</p>
         <div class="chat-suggestions" id="chatSuggestions">
-          <button class="suggestion-btn" onclick="fillChat('Fasse die wichtigsten Infos zusammen')">
+          <button class="suggestion-btn" onclick="fillChat('Fasse die wichtigsten Infos zusammen')" title="Summarize the most important information from the knowledge base">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg>
             <span data-i18n="sugg_summarize">Zusammenfassen</span>
           </button>
-          <button class="suggestion-btn" onclick="fillChat('Was sind die neuesten Dokumente?')">
+          <button class="suggestion-btn" onclick="fillChat('Was sind die neuesten Dokumente?')" title="Show what new documents or information are in the knowledge base">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             <span data-i18n="sugg_newest">Was ist neu?</span>
           </button>
-          <button class="suggestion-btn" onclick="fillChat('Hilf mir bei der Analyse')">
+          <button class="suggestion-btn" onclick="fillChat('Hilf mir bei der Analyse')" title="Ask the assistant to help with an analysis">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <span data-i18n="sugg_analyze">Analyse</span>
           </button>
@@ -135,15 +135,15 @@
     <div class="chat-input-area">
       <label for="chatQ" class="visually-hidden" data-i18n="chat_input_label">Enter your question</label>
       <div class="chat-mode-bar" aria-label="Chat modes">
-        <label class="chat-mode-toggle" for="autoSearchMode">
+        <label class="chat-mode-toggle" for="autoSearchMode" title="Automatically search the knowledge base before each answer">
           <input type="checkbox" id="autoSearchMode" checked>
           <span data-i18n="auto_search">Auto-Search</span>
         </label>
-        <label class="chat-mode-toggle" for="deepMode">
+        <label class="chat-mode-toggle" for="deepMode" title="Enable multi-step deep research mode for complex questions">
           <input type="checkbox" id="deepMode">
           <span data-i18n="deep_research">Deep Research</span>
         </label>
-        <label class="chat-mode-toggle" for="offlineMode">
+        <label class="chat-mode-toggle" for="offlineMode" title="Answer without searching the knowledge base (uses LLM knowledge only)">
           <input type="checkbox" id="offlineMode">
           <span data-i18n="offline_mode">Offline</span>
         </label>
@@ -152,7 +152,7 @@
       <div id="imagePreviewBar" class="image-preview-bar" style="display:none" aria-live="polite">
         <img id="imagePreviewThumb" class="image-preview-thumb" src="" alt="Attached image preview">
         <span id="imagePreviewName" class="image-preview-name"></span>
-        <button id="imagePreviewRemove" class="image-preview-remove" aria-label="Remove attached image">✕</button>
+        <button id="imagePreviewRemove" class="image-preview-remove" aria-label="Remove attached image" title="Remove attached image">✕</button>
       </div>
       <div class="chat-input-wrapper">
         <button id="sttBtn" class="chat-icon-btn" aria-label="Record voice input" title="Spracheingabe" aria-pressed="false">
@@ -162,8 +162,8 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
         </button>
         <input type="file" id="imageAttachInput" accept="image/*" style="display:none" aria-hidden="true">
-        <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" data-i18n-placeholder="chat_input_placeholder"></textarea>
-        <button id="chatBtn" aria-label="Send message">
+        <textarea id="chatQ" placeholder="Frage eingeben…" autocomplete="off" rows="1" aria-label="Chat input" title="Type your question here (Enter to send, Shift+Enter for new line)" data-i18n-placeholder="chat_input_placeholder"></textarea>
+        <button id="chatBtn" aria-label="Send message" title="Send message (Enter)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
           <span class="visually-hidden" data-i18n="send">Senden</span>
         </button>
@@ -185,8 +185,8 @@
       </div>
     </div>
     <div class="row">
-      <input type="text" id="searchQ" placeholder="Suchbegriff…" autocomplete="off" aria-label="Search query" data-i18n-placeholder="search_placeholder">
-      <button class="btn-primary" id="searchBtn" aria-label="Execute search"><span data-i18n="search_button">Suchen</span></button>
+      <input type="text" id="searchQ" placeholder="Suchbegriff…" autocomplete="off" aria-label="Search query" title="Enter a search term for semantic search in the knowledge base" data-i18n-placeholder="search_placeholder">
+      <button class="btn-primary" id="searchBtn" aria-label="Execute search" title="Search the knowledge base semantically"><span data-i18n="search_button">Suchen</span></button>
     </div>
     <div class="results" id="searchResults" role="region" aria-live="polite" aria-label="Search results"></div>
   </section>
@@ -194,38 +194,38 @@
   <!-- Ingest -->
   <section id="panel-ingest" class="main-panel" role="tabpanel" aria-labelledby="tab-ingest">
     <div class="sidebar-tabs ingest-tabs" role="tablist" aria-label="Import Tabs">
-      <button class="sidebar-tab active" data-ingest-tab="wiki" role="tab" aria-selected="true" aria-controls="ingest-wiki" id="tab-wiki"><span data-i18n="wikipedia">Wikipedia</span></button>
-      <button class="sidebar-tab" data-ingest-tab="url" role="tab" aria-selected="false" aria-controls="ingest-url" id="tab-url"><span data-i18n="url">URL</span></button>
-      <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false" aria-controls="ingest-text" id="tab-text"><span data-i18n="text">Text</span></button>
-      <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false" aria-controls="ingest-upload" id="tab-upload"><span data-i18n="upload">Upload</span></button>
-      <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false" aria-controls="ingest-folder" id="tab-folder"><span data-i18n="folder">Ordner</span></button>
+      <button class="sidebar-tab active" data-ingest-tab="wiki" role="tab" aria-selected="true" aria-controls="ingest-wiki" id="tab-wiki" title="Load a Wikipedia article into the knowledge base"><span data-i18n="wikipedia">Wikipedia</span></button>
+      <button class="sidebar-tab" data-ingest-tab="url" role="tab" aria-selected="false" aria-controls="ingest-url" id="tab-url" title="Scrape a web page and add it to the knowledge base"><span data-i18n="url">URL</span></button>
+      <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false" aria-controls="ingest-text" id="tab-text" title="Enter text directly to embed into the knowledge base"><span data-i18n="text">Text</span></button>
+      <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false" aria-controls="ingest-upload" id="tab-upload" title="Upload a file to the knowledge base"><span data-i18n="upload">Upload</span></button>
+      <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false" aria-controls="ingest-folder" id="tab-folder" title="Import all supported files from a server folder"><span data-i18n="folder">Ordner</span></button>
     </div>
 
     <div class="ingest-embed-row">
       <label for="ingestEmbedSelect" class="ingest-embed-label">Embedding-Modell (optional)</label>
-      <select id="ingestEmbedSelect" class="ingest-embed-select">
+      <select id="ingestEmbedSelect" class="ingest-embed-select" title="Override the default embedding model for this import (optional)">
         <option value="">(Default / use settings)</option>
         <option value="custom">-- Custom --</option>
       </select>
-      <input id="ingestEmbedCustom" type="text" placeholder="z.B. text-embedding-3-small" class="ingest-embed-custom" style="display:none">
+      <input id="ingestEmbedCustom" type="text" placeholder="z.B. text-embedding-3-small" class="ingest-embed-custom" title="Enter a custom embedding model name" style="display:none">
     </div>
 
     <div class="ingest-roles-row" aria-label="Import role scopes">
       <span class="ingest-roles-label" data-i18n="import_roles">Import-Sichtbarkeit (Rollen)</span>
-      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="it" checked><span data-i18n="role_it">IT</span></label>
-      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="logistik"><span data-i18n="role_logistics">Logistik</span></label>
-      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="vertrieb"><span data-i18n="role_sales">Vertrieb</span></label>
-      <label class="inline-check"><input type="checkbox" class="ingest-role-scope" value="hr"><span data-i18n="role_hr">HR</span></label>
+      <label class="inline-check" title="Include chunks visible to the IT role"><input type="checkbox" class="ingest-role-scope" value="it" checked><span data-i18n="role_it">IT</span></label>
+      <label class="inline-check" title="Include chunks visible to the Logistics role"><input type="checkbox" class="ingest-role-scope" value="logistik"><span data-i18n="role_logistics">Logistik</span></label>
+      <label class="inline-check" title="Include chunks visible to the Sales role"><input type="checkbox" class="ingest-role-scope" value="vertrieb"><span data-i18n="role_sales">Vertrieb</span></label>
+      <label class="inline-check" title="Include chunks visible to the HR role"><input type="checkbox" class="ingest-role-scope" value="hr"><span data-i18n="role_hr">HR</span></label>
       <span class="hint" data-i18n="import_roles_hint">Keine Auswahl = aktive Rolle. Mehrfachauswahl erlaubt (wichtig für Massenupload).</span>
     </div>
 
     <div id="ingest-wiki" role="tabpanel" aria-labelledby="tab-wiki">
       <label for="wikiArticle" data-i18n="wiki_label">Wikipedia-Artikel laden</label>
       <div class="row">
-        <input type="text" id="wikiArticle" placeholder="z.B. Sonnensystem" aria-label="Wikipedia article name" data-i18n-placeholder="wiki_placeholder">
+        <input type="text" id="wikiArticle" placeholder="z.B. Sonnensystem" aria-label="Wikipedia article name" title="Name of the Wikipedia article to load" data-i18n-placeholder="wiki_placeholder">
         <label for="wikiLang" class="visually-hidden" data-i18n="wiki_lang_label">Wikipedia language code</label>
-        <input type="text" id="wikiLang" value="de" class="input-narrow" aria-label="Wikipedia language code">
-        <button class="btn-primary" id="wikiBtn" aria-label="Load Wikipedia article"><span data-i18n="load">Laden</span></button>
+        <input type="text" id="wikiLang" value="de" class="input-narrow" aria-label="Wikipedia language code" title="Wikipedia language code (e.g. de, en, fr, es)">
+        <button class="btn-primary" id="wikiBtn" aria-label="Load Wikipedia article" title="Load this Wikipedia article into the knowledge base"><span data-i18n="load">Laden</span></button>
       </div>
       <div id="wikiStatus" role="status" aria-live="polite"></div>
       <div id="wikiSuggestions" class="wiki-suggestions-box" role="region" aria-label="Wikipedia suggestions"></div>
@@ -234,29 +234,29 @@
     <div id="ingest-url" style="display:none" role="tabpanel" aria-labelledby="tab-url">
       <label for="scrapeUrl" data-i18n="url_label">Beliebige Webseite scrapen</label>
       <div class="row">
-        <input type="text" id="scrapeUrl" placeholder="https://example.com/page" inputmode="url" aria-label="URL to scrape" data-i18n-placeholder="url_placeholder">
-        <button class="btn-primary" id="urlBtn" aria-label="Scrape webpage"><span data-i18n="scrape">Scrapen</span></button>
+        <input type="text" id="scrapeUrl" placeholder="https://example.com/page" inputmode="url" aria-label="URL to scrape" title="Full URL of the web page to scrape and embed" data-i18n-placeholder="url_placeholder">
+        <button class="btn-primary" id="urlBtn" aria-label="Scrape webpage" title="Scrape this page and add its content to the knowledge base"><span data-i18n="scrape">Scrapen</span></button>
       </div>
       <div id="urlStatus" role="status" aria-live="polite"></div>
     </div>
 
     <div id="ingest-text" style="display:none" role="tabpanel" aria-labelledby="tab-text">
       <label for="textTitle" data-i18n="text_title_label">Titel (optional)</label>
-      <input type="text" id="textTitle" placeholder="Mein Dokument" aria-label="Document title" data-i18n-placeholder="text_title_placeholder">
+      <input type="text" id="textTitle" placeholder="Mein Dokument" aria-label="Document title" title="Optional title for this document" data-i18n-placeholder="text_title_placeholder">
       <label for="textContent" data-i18n="text_content_label">Text</label>
-      <textarea id="textContent" rows="8" placeholder="Text hier einfügen…" aria-label="Document content" data-i18n-placeholder="text_content_placeholder"></textarea>
+      <textarea id="textContent" rows="8" placeholder="Text hier einfügen…" aria-label="Document content" title="Paste or enter the text to embed into the knowledge base" data-i18n-placeholder="text_content_placeholder"></textarea>
       <div class="actions-row">
-        <button class="btn-primary" id="textBtn" aria-label="Save and embed text"><span data-i18n="save_embed">Speichern &amp; Einbetten</span></button>
+        <button class="btn-primary" id="textBtn" aria-label="Save and embed text" title="Save this text and embed it into the knowledge base"><span data-i18n="save_embed">Speichern &amp; Einbetten</span></button>
       </div>
       <div id="textStatus" role="status" aria-live="polite"></div>
     </div>
 
     <div id="ingest-upload" style="display:none" role="tabpanel" aria-labelledby="tab-upload">
       <label for="fileInput" data-i18n="upload_label">Textdatei hochladen</label>
-      <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop zone for file upload">
+      <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="Drop zone for file upload" title="Click to choose a file or drag and drop it here">
         <p data-i18n="drop_zone_text">Datei hierher ziehen oder klicken</p>
         <p class="hint upload-format-hint">Text: .txt .md .csv .json .xml .html .log .pdf .docx .odt u.a. — Bilder (Vision-Modell erforderlich): .jpg .png .gif .webp</p>
-        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.htm,.yaml,.yml,.toml,.ini,.cfg,.conf,.sql,.go,.py,.js,.ts,.rs,.c,.h,.cpp,.java,.pdf,.docx,.odt,.pptx,.xlsx,.jpg,.jpeg,.png,.gif,.webp" aria-label="File input">
+        <input type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html,.log,.htm,.yaml,.yml,.toml,.ini,.cfg,.conf,.sql,.go,.py,.js,.ts,.rs,.c,.h,.cpp,.java,.pdf,.docx,.odt,.pptx,.xlsx,.jpg,.jpeg,.png,.gif,.webp" aria-label="File input" title="Select a file to upload">
       </div>
       <div id="uploadStatus" role="status" aria-live="polite"></div>
     </div>
@@ -265,12 +265,12 @@
       <label for="folderPath" data-i18n="folder_label">Ordner importieren (alle Textdateien)</label>
       <p class="hint" data-i18n="folder_hint">Absoluter Pfad zum Ordner auf dem Server. Unterstützte Dateien: .txt, .md, .csv, .json, .xml, .html, .log u.a.</p>
       <div class="row">
-        <input type="text" id="folderPath" placeholder="/pfad/zum/ordner" aria-label="Folder path" data-i18n-placeholder="folder_placeholder">
-        <label class="inline-check" for="folderRecursive">
+        <input type="text" id="folderPath" placeholder="/pfad/zum/ordner" aria-label="Folder path" title="Absolute path to the folder on the server" data-i18n-placeholder="folder_placeholder">
+        <label class="inline-check" for="folderRecursive" title="Also scan and import files in subdirectories">
           <input type="checkbox" id="folderRecursive" checked aria-label="Import recursively">
           <span data-i18n="recursive">Rekursiv</span>
         </label>
-        <button class="btn-primary" id="folderBtn" aria-label="Import folder"><span data-i18n="import">Importieren</span></button>
+        <button class="btn-primary" id="folderBtn" aria-label="Import folder" title="Import all supported files from the specified folder"><span data-i18n="import">Importieren</span></button>
       </div>
       <div id="folderStatus" role="status" aria-live="polite"></div>
     </div>
@@ -279,7 +279,7 @@
     <div class="maintenance-section">
       <h4 data-i18n="maintenance">Wartung</h4>
       <p class="hint" data-i18n="clear_chunks_info">Lösche alle Chunks in der Wissensbasis. Diese Aktion kann nicht rückgängig gemacht werden.</p>
-      <button class="btn-primary btn-danger" id="clearChunksBtn" aria-label="Clear all chunks"><span data-i18n="clear_chunks">Wissensbasis leeren</span></button>
+      <button class="btn-primary btn-danger" id="clearChunksBtn" aria-label="Clear all chunks" title="Delete all chunks from the knowledge base — this cannot be undone"><span data-i18n="clear_chunks">Wissensbasis leeren</span></button>
       <div id="clearStatus" role="status" aria-live="polite" class="tool-status"></div>
     </div>
   </section>
@@ -290,21 +290,21 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="modal-header">
       <h2 id="settings-title" data-i18n="settings_title">Einstellungen</h2>
-      <button class="modal-close" id="settingsClose" aria-label="Close settings dialog">
+      <button class="modal-close" id="settingsClose" aria-label="Close settings dialog" title="Close settings dialog">
         <span aria-hidden="true">×</span>
       </button>
     </div>
 
     <!-- Settings Tabs -->
     <div class="settings-tabs" role="tablist" aria-label="Settings tabs">
-      <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-general" id="stab-general"><span data-i18n="general">Allgemein</span></button>
-      <button class="settings-tab" data-settings-tab="llm" role="tab" aria-selected="false" aria-controls="settings-llm" id="stab-llm"><span data-i18n="llm_backend">LLM Backend</span></button>
-      <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false" aria-controls="settings-apis" id="stab-apis"><span data-i18n="custom_apis">Custom APIs</span></button>
-      <button class="settings-tab" data-settings-tab="modules" role="tab" aria-selected="false" aria-controls="settings-modules" id="stab-modules"><span data-i18n="modules">Module</span></button>
-      <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas"><span data-i18n="personas">Personas</span></button>
-      <button class="settings-tab" data-settings-tab="admin" role="tab" aria-selected="false" aria-controls="settings-admin" id="stab-admin"><span>Admin</span></button>
-      <button class="settings-tab" data-settings-tab="branding" role="tab" aria-selected="false" aria-controls="settings-branding" id="stab-branding"><span>Branding</span></button>
-      <button class="settings-tab" data-settings-tab="auth" role="tab" aria-selected="false" aria-controls="settings-auth" id="stab-auth"><span>Auth &amp; Security</span></button>
+      <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-general" id="stab-general" title="General appearance and language settings"><span data-i18n="general">Allgemein</span></button>
+      <button class="settings-tab" data-settings-tab="llm" role="tab" aria-selected="false" aria-controls="settings-llm" id="stab-llm" title="Configure LLM backend endpoint and model settings"><span data-i18n="llm_backend">LLM Backend</span></button>
+      <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false" aria-controls="settings-apis" id="stab-apis" title="Manage custom external API search sources"><span data-i18n="custom_apis">Custom APIs</span></button>
+      <button class="settings-tab" data-settings-tab="modules" role="tab" aria-selected="false" aria-controls="settings-modules" id="stab-modules" title="Manage connector modules for external data sources"><span data-i18n="modules">Module</span></button>
+      <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas" title="Manage conversation personas (pre-prompts)"><span data-i18n="personas">Personas</span></button>
+      <button class="settings-tab" data-settings-tab="admin" role="tab" aria-selected="false" aria-controls="settings-admin" id="stab-admin" title="Manage API users and route access control"><span>Admin</span></button>
+      <button class="settings-tab" data-settings-tab="branding" role="tab" aria-selected="false" aria-controls="settings-branding" id="stab-branding" title="Customize application name, logo and CSS (white-label)"><span>Branding</span></button>
+      <button class="settings-tab" data-settings-tab="auth" role="tab" aria-selected="false" aria-controls="settings-auth" id="stab-auth" title="Configure web UI authentication, users and LDAP"><span>Auth &amp; Security</span></button>
     </div>
 
     <!-- Tab: General -->
@@ -313,19 +313,19 @@
       
       <!-- Language Selection -->
       <label for="langSelect" data-i18n="language">Sprache / Language</label>
-      <select id="langSelect" aria-label="Select language">
+      <select id="langSelect" aria-label="Select language" title="Select the UI language">
         <option value="de">Deutsch</option>
         <option value="en">English</option>
       </select>
 
       <label for="setUsageProfile" data-i18n="usage_profile">Nutzungsprofil</label>
-      <select id="setUsageProfile" aria-label="Usage profile">
+      <select id="setUsageProfile" aria-label="Usage profile" title="Select your usage profile">
         <option value="personal" data-i18n="usage_profile_personal">Persönlich</option>
         <option value="commercial" data-i18n="usage_profile_commercial">Gewerblich</option>
       </select>
 
       <label for="setResponseLanguageMode" data-i18n="response_language_mode">Antwortsprache</label>
-      <select id="setResponseLanguageMode" aria-label="Response language mode">
+      <select id="setResponseLanguageMode" aria-label="Response language mode" title="Choose how the LLM determines the response language">
         <option value="auto" data-i18n="response_language_auto">Automatisch (Sprache der Anfrage)</option>
         <option value="settings" data-i18n="response_language_settings">Fix nach Einstellungssprache</option>
       </select>
@@ -333,7 +333,7 @@
       
       <label data-i18n="theme">Theme</label>
       <div class="theme-grid" id="themeGrid" role="radiogroup" aria-label="Theme selection">
-        <div class="theme-card active" data-theme-id="dark" role="radio" aria-checked="true" tabindex="0" aria-label="Dark theme">
+        <div class="theme-card active" data-theme-id="dark" role="radio" aria-checked="true" tabindex="0" aria-label="Dark theme" title="Switch to Dark theme">
           <div class="preview">
             <span style="background:#0f1115"></span>
             <span style="background:#151922"></span>
@@ -341,7 +341,7 @@
           </div>
           <div class="label">Dark</div>
         </div>
-        <div class="theme-card" data-theme-id="light" role="radio" aria-checked="false" tabindex="-1" aria-label="Light theme">
+        <div class="theme-card" data-theme-id="light" role="radio" aria-checked="false" tabindex="-1" aria-label="Light theme" title="Switch to Light theme">
           <div class="preview">
             <span style="background:#f5f5f7"></span>
             <span style="background:#ffffff"></span>
@@ -349,7 +349,7 @@
           </div>
           <div class="label">Light</div>
         </div>
-        <div class="theme-card" data-theme-id="nord" role="radio" aria-checked="false" tabindex="-1" aria-label="Nord theme">
+        <div class="theme-card" data-theme-id="nord" role="radio" aria-checked="false" tabindex="-1" aria-label="Nord theme" title="Switch to Nord theme">
           <div class="preview">
             <span style="background:#2e3440"></span>
             <span style="background:#3b4252"></span>
@@ -357,7 +357,7 @@
           </div>
           <div class="label">Nord</div>
         </div>
-        <div class="theme-card" data-theme-id="solarized" role="radio" aria-checked="false" tabindex="-1" aria-label="Solarized theme">
+        <div class="theme-card" data-theme-id="solarized" role="radio" aria-checked="false" tabindex="-1" aria-label="Solarized theme" title="Switch to Solarized theme">
           <div class="preview">
             <span style="background:#002b36"></span>
             <span style="background:#073642"></span>
@@ -365,7 +365,7 @@
           </div>
           <div class="label">Solarized</div>
         </div>
-        <div class="theme-card" data-theme-id="monokai" role="radio" aria-checked="false" tabindex="-1" aria-label="Monokai theme">
+        <div class="theme-card" data-theme-id="monokai" role="radio" aria-checked="false" tabindex="-1" aria-label="Monokai theme" title="Switch to Monokai theme">
           <div class="preview">
             <span style="background:#1e1f1c"></span>
             <span style="background:#272822"></span>
@@ -373,7 +373,7 @@
           </div>
           <div class="label">Monokai</div>
         </div>
-        <div class="theme-card" data-theme-id="dracula" role="radio" aria-checked="false" tabindex="-1" aria-label="Dracula theme">
+        <div class="theme-card" data-theme-id="dracula" role="radio" aria-checked="false" tabindex="-1" aria-label="Dracula theme" title="Switch to Dracula theme">
           <div class="preview">
             <span style="background:#282a36"></span>
             <span style="background:#343746"></span>
@@ -387,14 +387,14 @@
         <span data-i18n="endpoint_note">Hinweis: Das Endpoint-Feld erwartet die Basis-URL ohne <code>/v1</code>. Falls du <code>/v1</code> einfügst, wird es automatisch entfernt.</span>
       </div>
       <div class="settings-nanogo">
-        <label class="inline-check" for="allowNanoGo">
+        <label class="inline-check" for="allowNanoGo" title="Enable execution of nanoGo interpreted Go scripts (only activate for trusted sources)">
           <input type="checkbox" id="allowNanoGo" aria-describedby="nanogo-desc">
           <span data-i18n="allow_nanogo">Erlaube Ausführung von nanoGo (interpretiertes Go)</span>
         </label>
         <div class="hint" id="nanogo-desc" data-i18n="nanogo_hint">Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.</div>
       </div>
       <div class="settings-nanogo">
-        <label class="inline-check" for="setRedactPII">
+        <label class="inline-check" for="setRedactPII" title="Automatically mask personal data (email, phone, IBAN, card numbers) during ingest (recommended for GDPR compliance)">
           <input type="checkbox" id="setRedactPII" aria-describedby="redact-pii-desc">
           <span data-i18n="redact_pii">PII beim Ingest maskieren (E-Mail, Telefon, IBAN, Kartenmuster)</span>
         </label>
@@ -409,42 +409,42 @@
       <div class="settings-grid">
         <div>
           <label for="setBaseUrl" data-i18n="api_endpoint">API Endpoint (OpenAI-kompatibel)</label>
-          <input id="setBaseUrl" type="text" placeholder="http://localhost:1234" aria-label="API Endpoint">
+          <input id="setBaseUrl" type="text" placeholder="http://localhost:1234" aria-label="API Endpoint" title="Base URL of the OpenAI-compatible API endpoint (without /v1)">
           <p class="hint">Standard: derselbe Endpoint wird für Chat und Embeddings verwendet. Für fortgeschrittene Setups kannst du getrennte Endpoints verwenden.</p>
 
-          <label class="inline-check">
+          <label class="inline-check" title="Use different base URLs for chat completions and embedding requests">
             <input type="checkbox" id="useSeparateEndpoints">
             <span>Getrennte Chat/Embedding Endpoints verwenden</span>
           </label>
 
           <div id="advancedEndpoints" style="display:none">
             <label for="setChatBase">Chat Endpoint (z. B. api.openai.com oder lokales Ollama)</label>
-            <input id="setChatBase" type="text" placeholder="http://localhost:1234" aria-label="Chat endpoint">
+            <input id="setChatBase" type="text" placeholder="http://localhost:1234" aria-label="Chat endpoint" title="Base URL for chat/completion requests">
             <label for="setEmbedBase">Embedding Endpoint (z. B. lokaler Embed-Service)</label>
-            <input id="setEmbedBase" type="text" placeholder="http://localhost:1234" aria-label="Embed endpoint">
+            <input id="setEmbedBase" type="text" placeholder="http://localhost:1234" aria-label="Embed endpoint" title="Base URL for embedding requests">
           </div>
 
           <label for="setOpenAIKey">OpenAI API Key (optional)</label>
           <div class="input-btn-row">
-            <input id="setOpenAIKey" type="password" placeholder="sk-..." aria-label="OpenAI API Key">
+            <input id="setOpenAIKey" type="password" placeholder="sk-..." aria-label="OpenAI API Key" title="Your OpenAI API key (stored server-side)">
             <button class="tool-btn" id="btnUseOpenAI" title="Schnell konfigurieren: OpenAI als Endpoint verwenden">Use OpenAI</button>
             <button class="tool-btn danger" id="btnClearOpenAI" title="Stored OpenAI key löschen">Delete Key</button>
           </div>
           <div id="openaiHint" class="hint">Trage deinen OpenAI-Key ein und klicke auf <strong>Use OpenAI</strong>, dann auf <strong>Speichern</strong>.</div>
           <div class="mini-actions">
-            <button class="tool-btn" id="btnDiscover" aria-label="Auto-discover endpoints"><span data-i18n="auto_discovery">Auto-Discovery</span></button>
-            <button class="tool-btn suggested" id="btnTestEndpoint" aria-label="Test endpoint and load models"><span data-i18n="test_load_models">Test &amp; Modelle laden</span></button>
+            <button class="tool-btn" id="btnDiscover" aria-label="Auto-discover endpoints" title="Scan common local ports to auto-discover running LLM endpoints"><span data-i18n="auto_discovery">Auto-Discovery</span></button>
+            <button class="tool-btn suggested" id="btnTestEndpoint" aria-label="Test endpoint and load models" title="Test the connection to the configured endpoint and load available models"><span data-i18n="test_load_models">Test &amp; Modelle laden</span></button>
           </div>
           <div class="tool-status" id="endpointStatus" role="status" aria-live="polite"></div>
         </div>
 
         <div>
           <label for="setChatModel" data-i18n="chat_model">Chat-Modell</label>
-          <select id="setChatModel" aria-label="Select chat model"></select>
+          <select id="setChatModel" aria-label="Select chat model" title="Select the model used for chat completions"></select>
           <small class="help" id="chatHint"></small>
 
           <label for="setEmbedModel" data-i18n="embedding_model">Embedding-Modell</label>
-          <select id="setEmbedModel" aria-label="Select embedding model"></select>
+          <select id="setEmbedModel" aria-label="Select embedding model" title="Select the model used for generating text embeddings"></select>
           <small class="help warn" id="embedHint"></small>
         </div>
       </div>
@@ -452,7 +452,7 @@
       <div class="discover-box" id="discoverBox" style="display:none" role="region" aria-label="Discovery results"></div>
 
       <div class="actions-row">
-        <button class="btn-primary" id="btnSaveSettings" aria-label="Save settings"><span data-i18n="save">Speichern</span></button>
+        <button class="btn-primary" id="btnSaveSettings" aria-label="Save settings" title="Save all LLM backend settings"><span data-i18n="save">Speichern</span></button>
         <button class="tool-btn danger" id="btnClearAllChunks" title="Alle Chunks löschen">Alle Chunks löschen</button>
         <span class="tool-status" id="saveStatus" role="status" aria-live="polite"></span>
       </div>
@@ -465,13 +465,13 @@
 
       <h4 data-i18n="add_new_api">Neue API hinzufügen</h4>
       <label for="newApiName" data-i18n="api_name">Name</label>
-      <input id="newApiName" placeholder="z.B. StackOverflow" aria-label="API name" data-i18n-placeholder="api_name_placeholder">
+      <input id="newApiName" placeholder="z.B. StackOverflow" aria-label="API name" title="Name for this custom API source" data-i18n-placeholder="api_name_placeholder">
       <label for="newApiTemplate" data-i18n="api_template">URL-Template (mit $q)</label>
-      <input id="newApiTemplate" placeholder="https://example.com/search?q=$q" aria-label="API URL template" data-i18n-placeholder="api_template_placeholder">
+      <input id="newApiTemplate" placeholder="https://example.com/search?q=$q" aria-label="API URL template" title="URL template for this API; use $q as the query placeholder" data-i18n-placeholder="api_template_placeholder">
       <label for="newApiDesc" data-i18n="api_description">Beschreibung (optional)</label>
-      <input id="newApiDesc" placeholder="Wofür ist die Quelle gut?" aria-label="API description" data-i18n-placeholder="api_desc_placeholder">
+      <input id="newApiDesc" placeholder="Wofür ist die Quelle gut?" aria-label="API description" title="Optional description of what this API source is used for" data-i18n-placeholder="api_desc_placeholder">
       <div class="actions-row">
-        <button class="btn-primary" id="btnAddCustomApi" aria-label="Add custom API"><span data-i18n="add">Hinzufügen</span></button>
+        <button class="btn-primary" id="btnAddCustomApi" aria-label="Add custom API" title="Add this custom API to the list"><span data-i18n="add">Hinzufügen</span></button>
       </div>
     </div>
 
@@ -488,12 +488,12 @@
 
       <h4 data-i18n="new_persona">Neue Persona</h4>
       <label for="newPersonaName" data-i18n="persona_name">Name</label>
-      <input id="newPersonaName" placeholder="z.B. Sachlicher Modus" aria-label="Persona name" data-i18n-placeholder="persona_name_placeholder">
+      <input id="newPersonaName" placeholder="z.B. Sachlicher Modus" aria-label="Persona name" title="Name for the new persona" data-i18n-placeholder="persona_name_placeholder">
       <label for="newPersonaPrompt" data-i18n="persona_prompt">Pre-Prompt</label>
-      <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…" aria-label="Persona pre-prompt" data-i18n-placeholder="persona_prompt_placeholder"></textarea>
+      <textarea id="newPersonaPrompt" rows="4" placeholder="Instruktionen, Tonalität, Stil…" aria-label="Persona pre-prompt" title="System prompt / instructions that define how the assistant should behave" data-i18n-placeholder="persona_prompt_placeholder"></textarea>
       <div class="actions-row">
-        <button class="btn-primary" id="btnAddPersona" aria-label="Add persona"><span data-i18n="add">Hinzufügen</span></button>
-        <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas">Beispiel-Personas hinzufügen</button>
+        <button class="btn-primary" id="btnAddPersona" aria-label="Add persona" title="Add this persona to the list"><span data-i18n="add">Hinzufügen</span></button>
+        <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas" title="Load a set of example personas to get started">Beispiel-Personas hinzufügen</button>
       </div>
     </div>
 
@@ -504,16 +504,16 @@
 
       <h4>Neuen API-User anlegen</h4>
       <label for="newAdminUserName">Name</label>
-      <input id="newAdminUserName" placeholder="z.B. ERP Import" aria-label="API user name">
+      <input id="newAdminUserName" placeholder="z.B. ERP Import" aria-label="API user name" title="Name or description for this API user">
       <label for="newAdminUserRole">Rolle</label>
-      <select id="newAdminUserRole" aria-label="API user role">
+      <select id="newAdminUserRole" aria-label="API user role" title="Role scope for this API user's access to the knowledge base">
         <option value="it">IT</option>
         <option value="logistik">Logistik</option>
         <option value="vertrieb">Vertrieb</option>
         <option value="hr">HR</option>
       </select>
       <div class="actions-row">
-        <button class="btn-primary" id="btnAddAdminUser" aria-label="Add API user">API-User anlegen</button>
+        <button class="btn-primary" id="btnAddAdminUser" aria-label="Add API user" title="Create a new API user and generate an access key">API-User anlegen</button>
       </div>
 
       <h3 style="margin-top:24px">API-Routen</h3>
@@ -527,18 +527,18 @@
       <p class="hint">Customize the application name, logo, and appearance for your organization.</p>
 
       <label for="brandAppName">Application Name</label>
-      <input id="brandAppName" type="text" placeholder="tinyRAG" aria-label="Application name">
+      <input id="brandAppName" type="text" placeholder="tinyRAG" aria-label="Application name" title="Custom application name shown in the sidebar and page title">
 
       <label for="brandLogoURL">Logo URL</label>
-      <input id="brandLogoURL" type="text" placeholder="https://... or data:image/..." aria-label="Logo URL">
+      <input id="brandLogoURL" type="text" placeholder="https://... or data:image/..." aria-label="Logo URL" title="Absolute URL or base64 data URI for the logo image shown in the sidebar">
       <p class="hint">Absolute URL or base64 data URI of your logo image. Displayed in the sidebar.</p>
 
       <label for="brandCustomCSS">Custom CSS</label>
-      <textarea id="brandCustomCSS" rows="6" placeholder=":root { --accent: #e74c3c; }" aria-label="Custom CSS" style="font-family:monospace;font-size:.85rem"></textarea>
+      <textarea id="brandCustomCSS" rows="6" placeholder=":root { --accent: #e74c3c; }" aria-label="Custom CSS" title="Custom CSS injected into every page. Use CSS custom properties to override colours." style="font-family:monospace;font-size:.85rem"></textarea>
       <p class="hint">CSS injected into every page. Use CSS custom properties to override colours.</p>
 
       <div class="actions-row" style="margin-top:14px">
-        <button class="btn-primary" id="btnSaveBranding" aria-label="Save branding">Speichern</button>
+        <button class="btn-primary" id="btnSaveBranding" aria-label="Save branding" title="Save branding settings">Speichern</button>
         <div class="tool-status" id="brandingStatus"></div>
       </div>
     </div>
@@ -549,16 +549,16 @@
       <p class="hint">
         When enabled, users must log in to access the interface. Disable for single-user or local-only deployments.
       </p>
-      <label class="inline-check" for="authEnabled">
+      <label class="inline-check" for="authEnabled" title="Require users to log in before accessing the web UI">
         <input type="checkbox" id="authEnabled">
         <span>Enable Web UI Login</span>
       </label>
 
       <label for="authSessionTTL" style="margin-top:12px">Session Lifetime (seconds)</label>
-      <input id="authSessionTTL" type="number" min="300" value="86400" aria-label="Session TTL in seconds">
+      <input id="authSessionTTL" type="number" min="300" value="86400" aria-label="Session TTL in seconds" title="How long a login session stays active in seconds (default: 86400 = 24 hours)">
 
       <div class="actions-row" style="margin-top:14px">
-        <button class="btn-primary" id="btnSaveAuth" aria-label="Save auth settings">Speichern</button>
+        <button class="btn-primary" id="btnSaveAuth" aria-label="Save auth settings" title="Save authentication settings">Speichern</button>
         <div class="tool-status" id="authStatus"></div>
       </div>
 
@@ -569,66 +569,66 @@
 
       <h4 style="margin-top:16px">New User</h4>
       <label for="newWebUserName">Username</label>
-      <input id="newWebUserName" type="text" placeholder="alice" aria-label="Username">
+      <input id="newWebUserName" type="text" placeholder="alice" aria-label="Username" title="Username for the new web UI account">
       <label for="newWebUserPass">Password (min. 8 characters)</label>
-      <input id="newWebUserPass" type="password" placeholder="••••••••" aria-label="Password">
+      <input id="newWebUserPass" type="password" placeholder="••••••••" aria-label="Password" title="Password for the new account (minimum 8 characters)">
       <label for="newWebUserRole">Role</label>
-      <select id="newWebUserRole" aria-label="User role">
+      <select id="newWebUserRole" aria-label="User role" title="Role for this user: viewer (read-only) or admin (full access)">
         <option value="viewer">Viewer</option>
         <option value="admin">Admin</option>
       </select>
       <div class="actions-row" style="margin-top:10px">
-        <button class="btn-primary" id="btnAddWebUser" aria-label="Create web UI user">User anlegen</button>
+        <button class="btn-primary" id="btnAddWebUser" aria-label="Create web UI user" title="Create the new web UI user account">User anlegen</button>
         <div class="tool-status" id="webUserStatus"></div>
       </div>
 
       <hr style="margin:20px 0;border-color:var(--border)">
       <h3>LDAP / Active Directory (optional)</h3>
       <p class="hint">When enabled, users not found in the local list can authenticate via LDAP. Local accounts take precedence.</p>
-      <label class="inline-check" for="ldapEnabled">
+      <label class="inline-check" for="ldapEnabled" title="Allow users to authenticate via LDAP or Active Directory">
         <input type="checkbox" id="ldapEnabled">
         <span>Enable LDAP Authentication</span>
       </label>
 
       <div id="ldapFields" style="margin-top:14px">
         <label for="ldapServer">Server (hostname or IP)</label>
-        <input id="ldapServer" type="text" placeholder="ldap.example.com" aria-label="LDAP server">
+        <input id="ldapServer" type="text" placeholder="ldap.example.com" aria-label="LDAP server" title="Hostname or IP address of the LDAP / Active Directory server">
 
         <label for="ldapPort">Port</label>
-        <input id="ldapPort" type="number" value="389" min="1" max="65535" aria-label="LDAP port">
+        <input id="ldapPort" type="number" value="389" min="1" max="65535" aria-label="LDAP port" title="LDAP port (default: 389 — or 636 for LDAPS)">
 
-        <label class="inline-check" for="ldapUseTLS" style="margin:8px 0">
+        <label class="inline-check" for="ldapUseTLS" style="margin:8px 0" title="Connect to LDAP using LDAPS (TLS on port 636)">
           <input type="checkbox" id="ldapUseTLS">
           <span>Use LDAPS (TLS)</span>
         </label>
-        <label class="inline-check" for="ldapStartTLS" style="margin:8px 0">
+        <label class="inline-check" for="ldapStartTLS" style="margin:8px 0" title="Upgrade the plain LDAP connection to TLS using STARTTLS">
           <input type="checkbox" id="ldapStartTLS">
           <span>Use STARTTLS</span>
         </label>
 
         <label for="ldapBaseDN">Base DN</label>
-        <input id="ldapBaseDN" type="text" placeholder="dc=example,dc=com" aria-label="LDAP base DN">
+        <input id="ldapBaseDN" type="text" placeholder="dc=example,dc=com" aria-label="LDAP base DN" title="Base Distinguished Name for LDAP user search (e.g. dc=example,dc=com)">
 
         <label for="ldapBindDN">Service Account DN (for user search)</label>
-        <input id="ldapBindDN" type="text" placeholder="cn=service,dc=example,dc=com" aria-label="LDAP bind DN">
+        <input id="ldapBindDN" type="text" placeholder="cn=service,dc=example,dc=com" aria-label="LDAP bind DN" title="Distinguished Name of the service account used to search for users">
 
         <label for="ldapBindPass">Service Account Password</label>
-        <input id="ldapBindPass" type="password" placeholder="leave blank to keep current" aria-label="LDAP bind password">
+        <input id="ldapBindPass" type="password" placeholder="leave blank to keep current" aria-label="LDAP bind password" title="Password for the service account (leave blank to keep the current password)">
 
         <label for="ldapUserAttr">Username Attribute</label>
-        <input id="ldapUserAttr" type="text" placeholder="uid" value="uid" aria-label="LDAP username attribute">
+        <input id="ldapUserAttr" type="text" placeholder="uid" value="uid" aria-label="LDAP username attribute" title="LDAP attribute containing the login username (uid for POSIX, sAMAccountName for Active Directory)">
         <p class="hint">Use <code>uid</code> for POSIX LDAP, <code>sAMAccountName</code> for Active Directory.</p>
 
         <label for="ldapFilter">Additional Search Filter (optional)</label>
-        <input id="ldapFilter" type="text" placeholder="(memberOf=cn=rag-users,...)" aria-label="LDAP extra filter">
+        <input id="ldapFilter" type="text" placeholder="(memberOf=cn=rag-users,...)" aria-label="LDAP extra filter" title="Optional additional LDAP filter to restrict which users can log in">
 
         <label for="ldapAdminGroup">Admin Group DN (optional)</label>
-        <input id="ldapAdminGroup" type="text" placeholder="cn=rag-admins,ou=groups,dc=example,dc=com" aria-label="LDAP admin group DN">
+        <input id="ldapAdminGroup" type="text" placeholder="cn=rag-admins,ou=groups,dc=example,dc=com" aria-label="LDAP admin group DN" title="DN of the group whose members receive the admin role; all other LDAP users get viewer">
         <p class="hint">Members of this group receive the <em>admin</em> role; all other LDAP users get <em>viewer</em>.</p>
       </div>
 
       <div class="actions-row" style="margin-top:14px">
-        <button class="btn-primary" id="btnSaveLDAP" aria-label="Save LDAP settings">LDAP Speichern</button>
+        <button class="btn-primary" id="btnSaveLDAP" aria-label="Save LDAP settings" title="Save LDAP / Active Directory settings">LDAP Speichern</button>
         <div class="tool-status" id="ldapStatus"></div>
       </div>
     </div>
