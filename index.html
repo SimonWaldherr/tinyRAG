@@ -53,11 +53,11 @@
     <div class="spacer"></div>
 
     <div class="toolbar-secondary">
-      <label class="debug-toggle" for="personaSelect" title="Select conversation persona (pre-prompt)">
-        <select id="personaSelect" aria-label="Select persona (pre-prompt)" title="Select conversation persona (pre-prompt)"></select>
+      <label class="debug-toggle" for="personaSelect" title="Choose a conversation persona (pre-prompt that defines how the assistant behaves)">
+        <select id="personaSelect" aria-label="Select persona (pre-prompt)" title="Choose a conversation persona (pre-prompt that defines how the assistant behaves)"></select>
       </label>
-      <label class="debug-toggle" for="roleSelect" title="Select role context for content filtering">
-        <select id="roleSelect" aria-label="Select role context" title="Select role context for content filtering">
+      <label class="debug-toggle" for="roleSelect" title="Filter knowledge base results by department role (IT, Logistics, Sales, HR)">
+        <select id="roleSelect" aria-label="Select role context" title="Filter knowledge base results by department role (IT, Logistics, Sales, HR)">
           <option value="it" data-i18n="role_it">IT</option>
           <option value="logistik" data-i18n="role_logistics">Logistik</option>
           <option value="vertrieb" data-i18n="role_sales">Vertrieb</option>
@@ -76,8 +76,8 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       <span class="visually-hidden" data-i18n="settings">Einstellungen</span>
     </button>
-    <label class="llm-switcher" title="Select LLM provider">
-      <select id="llmSwitcher" aria-label="Select LLM provider" title="Select LLM provider">
+    <label class="llm-switcher" title="Choose which LLM provider backend to use for chat completions">
+      <select id="llmSwitcher" aria-label="Select LLM provider" title="Choose which LLM provider backend to use for chat completions">
         <option value="openai">ChatGPT (OpenAI)</option>
         <option value="lmstudio">LM Studio (local)</option>
         <option value="ollama">Ollama (local)</option>
@@ -90,7 +90,7 @@
       </select>
     </label>
     <label class="model-chooser">
-      <select id="llmModelSelect" aria-label="Select chat model" title="Select specific chat model" style="display:none">
+      <select id="llmModelSelect" aria-label="Select chat model" title="Choose a specific model to use; leave empty to use the provider's recommended default" style="display:none">
         <option value="">(Use recommended)</option>
       </select>
       <button id="llmApplyBtn" class="btn-small" style="display:none" title="Apply the selected model">Apply</button>
@@ -313,7 +313,7 @@
       
       <!-- Language Selection -->
       <label for="langSelect" data-i18n="language">Sprache / Language</label>
-      <select id="langSelect" aria-label="Select language" title="Select the UI language">
+      <select id="langSelect" aria-label="Select language" title="Change the user interface language (Deutsch / English)">
         <option value="de">Deutsch</option>
         <option value="en">English</option>
       </select>
@@ -325,7 +325,7 @@
       </select>
 
       <label for="setResponseLanguageMode" data-i18n="response_language_mode">Antwortsprache</label>
-      <select id="setResponseLanguageMode" aria-label="Response language mode" title="Choose how the LLM determines the response language">
+      <select id="setResponseLanguageMode" aria-label="Response language mode" title="Auto: LLM replies in the same language as the question; Fixed: always use the settings language">
         <option value="auto" data-i18n="response_language_auto">Automatisch (Sprache der Anfrage)</option>
         <option value="settings" data-i18n="response_language_settings">Fix nach Einstellungssprache</option>
       </select>
@@ -440,11 +440,11 @@
 
         <div>
           <label for="setChatModel" data-i18n="chat_model">Chat-Modell</label>
-          <select id="setChatModel" aria-label="Select chat model" title="Select the model used for chat completions"></select>
+          <select id="setChatModel" aria-label="Select chat model" title="Model used for generating chat completions (loaded after clicking Test & Load Models)"></select>
           <small class="help" id="chatHint"></small>
 
           <label for="setEmbedModel" data-i18n="embedding_model">Embedding-Modell</label>
-          <select id="setEmbedModel" aria-label="Select embedding model" title="Select the model used for generating text embeddings"></select>
+          <select id="setEmbedModel" aria-label="Select embedding model" title="Model used for generating text embeddings (must match the model used during ingest)"></select>
           <small class="help warn" id="embedHint"></small>
         </div>
       </div>
