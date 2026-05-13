@@ -15,6 +15,7 @@
   --accent:             #4c8bf5;
   --accent-subtle:      rgba(76,139,245,.12);
   --accent-subtle2:     rgba(76,139,245,.22);
+  --gradient-secondary: #8b5cf6;
   --danger:             #e8546f;
   --ok:                 #3ecf8e;
   --warn:               #f5a623;
@@ -49,6 +50,7 @@
   --accent:             #2563eb;
   --accent-subtle:      rgba(37,99,235,.09);
   --accent-subtle2:     rgba(37,99,235,.18);
+  --gradient-secondary: #7c3aed;
   --danger:             #dc2626;
   --ok:                 #16a34a;
   --warn:               #d97706;
@@ -77,6 +79,7 @@
   --accent:             #81a1c1;
   --accent-subtle:      rgba(129,161,193,.14);
   --accent-subtle2:     rgba(129,161,193,.26);
+  --gradient-secondary: #5e81ac;
   --danger:             #bf616a;
   --ok:                 #a3be8c;
   --warn:               #ebcb8b;
@@ -105,6 +108,7 @@
   --accent:             #268bd2;
   --accent-subtle:      rgba(38,139,210,.14);
   --accent-subtle2:     rgba(38,139,210,.26);
+  --gradient-secondary: #2aa198;
   --danger:             #dc322f;
   --ok:                 #859900;
   --warn:               #b58900;
@@ -133,6 +137,7 @@
   --accent:             #66d9ef;
   --accent-subtle:      rgba(102,217,239,.12);
   --accent-subtle2:     rgba(102,217,239,.22);
+  --gradient-secondary: #a6e22e;
   --danger:             #f92672;
   --ok:                 #a6e22e;
   --warn:               #e6db74;
@@ -161,6 +166,7 @@
   --accent:             #bd93f9;
   --accent-subtle:      rgba(189,147,249,.14);
   --accent-subtle2:     rgba(189,147,249,.26);
+  --gradient-secondary: #ff79c6;
   --danger:             #ff5555;
   --ok:                 #50fa7b;
   --warn:               #f1fa8c;
@@ -288,9 +294,9 @@ small.warn { color: var(--warn) }
 .sidebar-header h1::before {
   content: '';
   display: inline-block;
-  width: 24px; height: 24px;
-  background: var(--accent);
-  border-radius: 7px;
+  width: 26px; height: 26px;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--gradient-secondary)));
+  border-radius: 8px;
   flex-shrink: 0;
   box-shadow: 0 2px 8px var(--accent-subtle2);
 }
@@ -308,7 +314,7 @@ small.warn { color: var(--warn) }
   border: none;
   border-radius: 10px;
   padding: 10px 14px;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--gradient-secondary)));
   color: #fff;
   font-family: var(--font);
   font-weight: 600;
@@ -316,12 +322,12 @@ small.warn { color: var(--warn) }
   cursor: pointer;
   letter-spacing: .01em;
   transition: filter .15s, transform .1s, box-shadow .15s;
-  box-shadow: 0 2px 8px var(--accent-subtle2);
+  box-shadow: 0 2px 10px var(--accent-subtle2);
 }
 .new-chat-btn:hover {
   filter: brightness(1.10);
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px var(--accent-subtle2);
+  box-shadow: 0 4px 16px var(--accent-subtle2);
 }
 .new-chat-btn:active { transform: translateY(0); filter: brightness(.98) }
 
@@ -374,7 +380,7 @@ small.warn { color: var(--warn) }
 .item:hover { background: var(--tab-active-bg) }
 .item.active {
   background: var(--accent-subtle);
-  border-color: rgba(76,139,245,.15);
+  border-color: var(--accent-subtle2);
 }
 .item .title {
   font-weight: 500;
@@ -485,11 +491,14 @@ small.warn { color: var(--warn) }
   color: var(--muted);
   border-radius: 8px;
   padding: 6px 9px;
-  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   cursor: pointer;
   transition: background .15s, color .15s, border-color .15s;
 }
+.settings-btn svg { pointer-events: none }
 .settings-btn:hover {
   background: var(--tab-active-bg);
   color: var(--text);
@@ -748,7 +757,7 @@ button { font-family: var(--font); cursor: pointer }
 
 .chat-input-area {
   padding: 10px 20px 20px;
-  background: transparent;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
   position: sticky;
   bottom: 0;
   z-index: 50;
@@ -793,11 +802,11 @@ button { font-family: var(--font); cursor: pointer }
   border-radius: 20px;
   padding: 8px 10px;
   box-shadow: var(--shadow-sm);
-  transition: border-color .15s, box-shadow .15s;
+  transition: border-color .2s, box-shadow .2s;
 }
 .chat-input-wrapper:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle), var(--shadow-sm);
+  box-shadow: var(--shadow-sm), 0 0 0 3px var(--accent-subtle);
 }
 
 .chat-input-area textarea {
@@ -816,28 +825,33 @@ button { font-family: var(--font); cursor: pointer }
 }
 
 .chat-input-area button {
-  width: 34px; height: 34px;
+  width: 36px; height: 36px;
   border: none;
   border-radius: 50%;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--gradient-secondary)));
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: transform .1s, filter .15s;
+  box-shadow: 0 2px 8px var(--accent-subtle2);
+  transition: transform .1s, filter .15s, box-shadow .15s;
 }
-.chat-input-area button:hover:not(:disabled) { filter: brightness(1.12); transform: scale(1.06) }
+.chat-input-area button:hover:not(:disabled) {
+  filter: brightness(1.12);
+  transform: scale(1.06);
+  box-shadow: 0 4px 14px var(--accent-subtle2);
+}
 .chat-input-area button:disabled {
   background: var(--border);
   color: var(--muted);
   cursor: not-allowed;
   filter: none;
   transform: none;
+  box-shadow: none;
 }
-.chat-input-area button span { font-size: 0 }
-.chat-input-area button::before { content: '↑'; font-size: 18px; font-weight: 700 }
+.chat-input-area button svg { pointer-events: none }
 
 .upload-format-hint { font-size: .8em; margin-top: .25em; }
 
@@ -864,16 +878,28 @@ button { font-family: var(--font); cursor: pointer }
 /* ─── Empty state ───────────────────────────────────────────────────── */
 
 .empty-state {
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border);
   border-radius: 20px;
   padding: 44px 28px;
   text-align: center;
   color: var(--muted);
   background: var(--panel);
-  max-width: 540px;
+  max-width: 520px;
   margin: 52px auto;
+  box-shadow: var(--shadow-sm);
 }
-.empty-state .icon { font-size: 30px; margin-bottom: 14px; opacity: .65 }
+.empty-state .icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px; height: 64px;
+  border-radius: 18px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-subtle2);
+  color: var(--accent);
+  margin: 0 auto 18px;
+  opacity: .9;
+}
 .empty-state p { font-size: 14px; line-height: 1.72; margin: 0 0 4px }
 
 .chat-suggestions {
@@ -893,8 +919,12 @@ button { font-family: var(--font); cursor: pointer }
   font-family: var(--font);
   font-size: 13px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   transition: background .15s, border-color .15s, transform .1s;
 }
+.suggestion-btn svg { color: var(--accent); flex-shrink: 0; pointer-events: none }
 .suggestion-btn:hover {
   background: var(--tab-active-bg);
   border-color: var(--border-focus);
@@ -1576,6 +1606,12 @@ button { font-family: var(--font); cursor: pointer }
 
 /* ─── Top toolbar compound controls ────────────────────────────────── */
 
+.toolbar-secondary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .llm-switcher {
   display: flex;
   align-items: center;
@@ -1588,6 +1624,25 @@ button { font-family: var(--font); cursor: pointer }
   margin-left: 4px;
 }
 #llmModelSelect { min-width: 160px }
+
+/* Debug icon-only toggle */
+.debug-toggle-icon {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.debug-toggle-icon:has(input:checked) {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.debug-toggle-icon input { display: none }
+.debug-toggle-icon svg { pointer-events: none }
 
 /* ─── Workspace status strip (below toolbar) ────────────────────────── */
 
@@ -1740,13 +1795,13 @@ button { font-family: var(--font); cursor: pointer }
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  font-size: 18px;
   transition: color .15s, background .15s;
 }
 .chat-icon-btn:hover {
   background: var(--tab-active-bg);
   color: var(--accent);
 }
+.chat-icon-btn svg { pointer-events: none }
 .chat-icon-btn.recording {
   color: var(--danger);
   animation: pulse 1s infinite;
