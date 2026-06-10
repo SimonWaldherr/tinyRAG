@@ -184,6 +184,17 @@ type appSettings struct {
 	// 0.60 when zero. Neighbor chunks (Score=-1) are always included.
 	VectorSearchThreshold float64 `json:"vector_search_threshold"`
 
+	// ── Vector store backend ──────────────────────────────────────────────────
+	// VectorBackend selects the vector persistence backend.
+	// Allowed values: "tinysql" (default), "sqlite-vec" (requires -tags sqlite_vec).
+	// Switching backends requires re-ingesting all data.
+	VectorBackend string `json:"vector_backend"`
+	// StorageMode controls the tinySQL storage strategy when VectorBackend is
+	// "tinysql".  Allowed values: "memory", "wal", "disk", "index", "hybrid".
+	// When empty, the -storage CLI flag value is used; the CLI flag takes
+	// precedence on startup so that operators can override without editing JSON.
+	StorageMode string `json:"storage_mode"`
+
 	// AllowCodeExec must be explicitly enabled to allow running user
 	// provided code. Defaults to false for safety.
 	AllowCodeExec bool `json:"allow_code_exec"`
@@ -2617,6 +2628,10 @@ type ragSystem struct {
 	// Storage mode (for display / logging)
 	storageMode tinysql.StorageMode
 
+	// chunkStore is the pluggable vector persistence backend.
+	// Default: tinySQLChunkStore; future: sqliteVecChunkStore.
+	chunkStore vectorChunkStore
+
 	// Settings-sensitive runtime state
 	lmMu sync.RWMutex
 	lm   lmProvider
@@ -2741,6 +2756,19 @@ func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode
 		storageMode: storageMode,
 		queryCache:  tinysql.NewQueryCache(32),
 	}
+
+	// Wire up the vector chunk store.  The tinySQLChunkStore shares the
+	// ragSystem's DB and mutex so that chunk and R3 operations remain
+	// serialized through a single lock.
+	vectorBackend := ""
+	if settings != nil {
+		vectorBackend = settings.get().VectorBackend
+	}
+	cs, err := newVectorChunkStore(vectorBackend, db, &r.dbMu, dbPath, storageMode)
+	if err != nil {
+		return nil, fmt.Errorf("init vector store backend %q: %w", vectorBackend, err)
+	}
+	r.chunkStore = cs
 	return r, nil
 }
 
@@ -2802,82 +2830,14 @@ func (r *ragSystem) save() error {
 
 // init creates required DB tables and initializes runtime counters.
 func (r *ragSystem) init() error {
-	q := "CREATE TABLE IF NOT EXISTS chunks (id INT, article TEXT, chunk_idx INT, content TEXT, embedding VECTOR, embed_model TEXT, role_scope TEXT)"
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
+	// Delegate chunks table creation/migration to the vector store backend.
+	if err := r.chunkStore.init(); err != nil {
 		return err
 	}
-	r.dbMu.Lock()
-	defer r.dbMu.Unlock()
-	_, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
-	if err != nil {
-		return err
-	}
-	// Attempt to add embed_model column for older DBs (ignore errors)
-	if alterStmt, err := tinysql.ParseSQL("ALTER TABLE chunks ADD COLUMN embed_model TEXT"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
-	}
-	// Attempt to add role_scope column for role-scoped visibility (ignore errors)
-	if alterStmt, err := tinysql.ParseSQL("ALTER TABLE chunks ADD COLUMN role_scope TEXT"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
-	}
-	// tinyRAG R3 metadata columns (backward-compatible; ignore already-exists errors)
-	r3ChunkColumns := []string{
-		"chunk_id TEXT",
-		"document_id TEXT",
-		"source_system TEXT",
-		"source_type TEXT",
-		"source_title TEXT",
-		"source_url TEXT",
-		"source_object_id TEXT",
-		"source_version TEXT",
-		"acl_groups TEXT",
-		"business_owner TEXT",
-		"sensitivity TEXT",
-		"trust_level FLOAT",
-		"source_quality FLOAT",
-		"freshness_score FLOAT",
-		"quality_score FLOAT",
-		"feedback_score FLOAT",
-		"imported_at TEXT",
-		"updated_at TEXT",
-		"content_hash TEXT",
-		"open_link_allowed INT",
-	}
-	for _, col := range r3ChunkColumns {
-		stmtSQL := fmt.Sprintf("ALTER TABLE chunks ADD COLUMN %s", col)
-		if alterStmt, err := tinysql.ParseSQL(stmtSQL); err == nil {
-			_, _ = tinysql.Execute(context.Background(), r.db, "default", alterStmt)
-		}
-	}
-	// Normalize older rows without a scope to global visibility.
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET role_scope='|all|' WHERE role_scope IS NULL OR role_scope = ''"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	// Keep ACL groups aligned with role scope by default.
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET acl_groups=role_scope WHERE acl_groups IS NULL OR acl_groups = ''"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	// Default R3 quality fields.
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET source_quality=0.60 WHERE source_quality IS NULL"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET trust_level=0.50 WHERE trust_level IS NULL"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET freshness_score=0.50 WHERE freshness_score IS NULL"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET quality_score=0.50 WHERE quality_score IS NULL"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET feedback_score=0.50 WHERE feedback_score IS NULL"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
-	if updStmt, err := tinysql.ParseSQL("UPDATE chunks SET open_link_allowed=1 WHERE open_link_allowed IS NULL"); err == nil {
-		_, _ = tinysql.Execute(context.Background(), r.db, "default", updStmt)
-	}
+
 	// Canonical source registry + import jobs + audit log tables.
+	// These remain in the tinySQL DB for all vector backends.
+	r.dbMu.Lock()
 	createR3Tables := []string{
 		"CREATE TABLE IF NOT EXISTS r3_sources (document_id TEXT, provenance TEXT, ownership TEXT, trust_tier TEXT, lifecycle TEXT, retention_policy TEXT, acl_metadata TEXT, updated_at TEXT)",
 		"CREATE TABLE IF NOT EXISTS r3_import_jobs (job_id TEXT, source_system TEXT, cursor TEXT, status TEXT, processed INT, imported INT, skipped INT, last_error TEXT, last_hash TEXT, started_at TEXT, updated_at TEXT, completed_at TEXT, idempotency_id TEXT)",
@@ -2888,50 +2848,19 @@ func (r *ragSystem) init() error {
 			_, _ = tinysql.Execute(context.Background(), r.db, "default", stmt)
 		}
 	}
-	// Pre-compile static queries for improved repeated-call performance.
-	if r.queryCache != nil {
-		r.countAllStmt, _ = tinysql.Compile(r.queryCache, "SELECT COUNT(*) AS cnt FROM chunks")
-		r.maxIDStmt, _ = tinysql.Compile(r.queryCache, "SELECT MAX(id) AS mid FROM chunks")
-	}
-	// Initialize nextID from MAX(id)+1
+	r.dbMu.Unlock()
+
+	// Initialize nextID from MAX(id)+1.
 	r.idMu.Lock()
 	defer r.idMu.Unlock()
-	r.nextID = r.maxChunkIDLocked() + 1
+	r.nextID = r.chunkStore.maxChunkID() + 1
 	return nil
 }
 
-// maxChunkIDLocked queries the DB for the maximum chunk id and must
-// be called with appropriate locking by the caller.
+// maxChunkIDLocked delegates to the chunkStore.  The "Locked" suffix is kept
+// for backward-compatibility; the chunkStore itself manages its own locking.
 func (r *ragSystem) maxChunkIDLocked() int {
-	var (
-		rs  *tinysql.ResultSet
-		err error
-	)
-	if r.maxIDStmt != nil {
-		rs, err = tinysql.ExecuteCompiled(context.Background(), r.db, "default", r.maxIDStmt)
-	} else {
-		stmt, parseErr := tinysql.ParseSQL("SELECT MAX(id) AS mid FROM chunks")
-		if parseErr != nil {
-			return -1
-		}
-		rs, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
-	}
-	if err != nil || rs == nil || len(rs.Rows) == 0 {
-		return -1
-	}
-	v, ok := tinysql.GetVal(rs.Rows[0], "mid")
-	if !ok || v == nil {
-		return -1
-	}
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return -1
+	return r.chunkStore.maxChunkID()
 }
 
 // allocIDs reserves `n` monotonic IDs for new chunks.
@@ -3071,33 +3000,10 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	if (SensitivityPolicy{}).MustPseudonymize(detectSensitivityClass(strings.Join(chunks, "\n"))) {
 		sensitivity = "confidential"
 	}
-	// If this article already exists in the DB, skip adding again to avoid duplicates.
-	// This makes imports idempotent; to replace content delete the source first.
-	checkQ := fmt.Sprintf(
-		"SELECT COUNT(*) AS cnt FROM chunks WHERE document_id = '%s' AND role_scope = '%s'",
-		escapeSQ(documentID), escapeSQ(roleScope),
-	)
-	if st, err := tinysql.ParseSQL(checkQ); err == nil {
-		r.dbMu.Lock()
-		if rs, err := tinysql.Execute(context.Background(), r.db, "default", st); err == nil && rs != nil && len(rs.Rows) > 0 {
-			if v, ok := tinysql.GetVal(rs.Rows[0], "cnt"); ok && v != nil {
-				cnt := 0
-				switch nv := v.(type) {
-				case int:
-					cnt = nv
-				case int64:
-					cnt = int(nv)
-				case float64:
-					cnt = int(nv)
-				}
-				if cnt > 0 {
-					fmt.Printf("skip addChunks: article '%s' already present (%d chunks)\n", article, cnt)
-					r.dbMu.Unlock()
-					return nil
-				}
-			}
-		}
-		r.dbMu.Unlock()
+	// If this article already exists, skip to keep imports idempotent.
+	if exists, err := r.chunkStore.checkArticleExists(documentID, roleScope); err == nil && exists {
+		fmt.Printf("skip addChunks: article '%s' already present\n", article)
+		return nil
 	}
 	batchSize := 16
 
@@ -3108,7 +3014,7 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 		}
 		batch := chunks[i:end]
 
-		// Embed without holding DB lock
+		// Embed without holding DB lock.
 		vecs, err := r.getLM().embed(batch)
 		if err != nil {
 			return fmt.Errorf("embed batch %d: %w", i/batchSize, err)
@@ -3117,72 +3023,46 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 			r.dim = len(vecs[0])
 		}
 
-		// Allocate IDs for this batch
+		// Allocate IDs for this batch.
 		startID := r.allocIDs(len(batch))
 
-		// Bulk insert: construct a single multi-row INSERT statement for the batch
-		var vals []string
-		var legacyVals []string
+		// Build storedChunk slice and delegate persistence to the chunk store.
+		sc := make([]storedChunk, len(batch))
 		for j, v := range vecs {
 			idx := i + j
-			chunkID := fmt.Sprintf("%s:%d", documentID, idx)
-			chash := stableContentHash(batch[j])
-			legacyVals = append(legacyVals, fmt.Sprintf("(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s')",
-				startID+j, escapeSQ(article), idx, escapeSQ(batch[j]), escapeSQ(vecJSON(v)), escapeSQ(embedModel), escapeSQ(roleScope)))
-			tup := fmt.Sprintf(
-				"(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s', '%s', '%s', 'tinyrag', '%s', '%s', '', '%s', '%s', '%s', '%s', '%s', %.4f, %.4f, %.4f, %.4f, %.4f, '%s', '%s', '%s', 1)",
-				startID+j,
-				escapeSQ(article),
-				idx,
-				escapeSQ(batch[j]),
-				escapeSQ(vecJSON(v)),
-				escapeSQ(embedModel),
-				escapeSQ(roleScope),
-				escapeSQ(chunkID),
-				escapeSQ(documentID),
-				escapeSQ(sourceType),
-				escapeSQ(article),
-				escapeSQ(article),
-				escapeSQ("v1"),
-				escapeSQ(roleScope),
-				escapeSQ(activeRole),
-				escapeSQ(sensitivity),
-				defaultTrust,
-				defaultSourceQuality,
-				defaultFresh,
-				defaultQuality,
-				defaultFeedback,
-				escapeSQ(nowTS),
-				escapeSQ(nowTS),
-				escapeSQ(chash),
-			)
-			vals = append(vals, tup)
-		}
-		q := "INSERT INTO chunks VALUES " + strings.Join(vals, ",")
-		stmt, err := tinysql.ParseSQL(q)
-		if err != nil {
-			return fmt.Errorf("parse bulk insert: %w", err)
-		}
-		r.dbMu.Lock()
-		if _, err := tinysql.Execute(context.Background(), r.db, "default", stmt); err != nil {
-			// Backward-compatible fallback for storage engines without full ALTER support.
-			if strings.Contains(strings.ToLower(err.Error()), "unknown column") {
-				legacyQ := "INSERT INTO chunks VALUES " + strings.Join(legacyVals, ",")
-				if legacyStmt, parseErr := tinysql.ParseSQL(legacyQ); parseErr == nil {
-					if _, legacyErr := tinysql.Execute(context.Background(), r.db, "default", legacyStmt); legacyErr != nil {
-						r.dbMu.Unlock()
-						return fmt.Errorf("exec legacy bulk insert: %w", legacyErr)
-					}
-				} else {
-					r.dbMu.Unlock()
-					return fmt.Errorf("parse legacy bulk insert: %w", parseErr)
-				}
-			} else {
-				r.dbMu.Unlock()
-				return fmt.Errorf("exec bulk insert: %w", err)
+			sc[j] = storedChunk{
+				ID:              startID + j,
+				ChunkIdx:        idx,
+				Article:         article,
+				Content:         batch[j],
+				Embedding:       v,
+				EmbedModel:      embedModel,
+				RoleScope:       roleScope,
+				ChunkID:         fmt.Sprintf("%s:%d", documentID, idx),
+				DocumentID:      documentID,
+				SourceSystem:    "tinyrag",
+				SourceType:      sourceType,
+				SourceTitle:     article,
+				SourceURL:       "",
+				SourceObjectID:  article,
+				SourceVersion:   "v1",
+				ACLGroups:       roleScope,
+				BusinessOwner:   activeRole,
+				Sensitivity:     sensitivity,
+				TrustLevel:      defaultTrust,
+				SourceQuality:   defaultSourceQuality,
+				FreshnessScore:  defaultFresh,
+				QualityScore:    defaultQuality,
+				FeedbackScore:   defaultFeedback,
+				ImportedAt:      nowTS,
+				UpdatedAt:       nowTS,
+				ContentHash:     stableContentHash(batch[j]),
+				OpenLinkAllowed: true,
 			}
 		}
-		r.dbMu.Unlock()
+		if err := r.chunkStore.insertChunks(sc); err != nil {
+			return err
+		}
 
 		fmt.Printf("  embedded+stored %d/%d chunks\n", end, len(chunks))
 	}
@@ -3204,62 +3084,12 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 
 // docCount returns the total number of stored chunks.
 func (r *ragSystem) docCount() int {
-	r.dbMu.Lock()
-	var (
-		rs  *tinysql.ResultSet
-		err error
-	)
-	if r.countAllStmt != nil {
-		rs, err = tinysql.ExecuteCompiled(context.Background(), r.db, "default", r.countAllStmt)
-	} else {
-		stmt, _ := tinysql.ParseSQL("SELECT COUNT(*) AS cnt FROM chunks")
-		rs, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
-	}
-	r.dbMu.Unlock()
-
-	if err != nil || rs == nil || len(rs.Rows) == 0 {
-		return 0
-	}
-	v, ok := tinysql.GetVal(rs.Rows[0], "cnt")
-	if !ok {
-		return 0
-	}
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return 0
+	return r.chunkStore.countChunks("")
 }
 
 func (r *ragSystem) docCountForRole(role string) int {
 	normRole := normalizeDemoRole(role)
-	q := fmt.Sprintf("SELECT COUNT(*) AS cnt FROM chunks WHERE %s", roleAndACLFilterSQL(normRole))
-	stmt, _ := tinysql.ParseSQL(q)
-
-	r.dbMu.Lock()
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-
-	if err != nil || rs == nil || len(rs.Rows) == 0 {
-		return 0
-	}
-	v, ok := tinysql.GetVal(rs.Rows[0], "cnt")
-	if !ok {
-		return 0
-	}
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return 0
+	return r.chunkStore.countChunks(roleAndACLFilterSQL(normRole))
 }
 
 // searchResult represents a single retrieval hit returned by searchJSON.
@@ -3373,148 +3203,21 @@ func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit,
 	}
 	embedMs := time.Since(t0).Milliseconds()
 
-	q := fmt.Sprintf(
-		"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type, source_title, source_url, source_object_id, source_version, role_scope, acl_groups, business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score, feedback_score, imported_at, updated_at, content_hash, open_link_allowed, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-		escapeSQ(vecJSON(qvec)), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
-	)
-
 	t1 := time.Now()
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		return nil, embedMs, 0, err
-	}
-	r.dbMu.Lock()
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
+	rawHits, err := r.chunkStore.searchTopK(qvec, r.getActiveEmbedModel(), roleAndACLFilterSQL(activeRole), candidateLimitForK(k))
 	if err != nil {
 		return nil, embedMs, 0, err
 	}
 	searchMs := time.Since(t1).Milliseconds()
 
-	hits := make([]retrievalHit, 0, len(rs.Rows))
 	rankPolicy := defaultRankingPolicy()
 	now := time.Now().UTC()
-	for _, row := range rs.Rows {
-		c, ok := tinysql.GetVal(row, "content")
-		art, _ := tinysql.GetVal(row, "article")
-		idxVal, _ := tinysql.GetVal(row, "chunk_idx")
-		scoreVal, _ := tinysql.GetVal(row, "score")
-		if !ok || art == nil || idxVal == nil || scoreVal == nil {
-			continue
-		}
-		idx := 0
-		switch iv := idxVal.(type) {
-		case int:
-			idx = iv
-		case int64:
-			idx = int(iv)
-		case float64:
-			idx = int(iv)
-		}
-		score := 0.0
-		switch sv := scoreVal.(type) {
-		case float64:
-			score = sv
-		case int:
-			score = float64(sv)
-		case int64:
-			score = float64(sv)
-		}
-		parseFloat := func(key string, fb float64) float64 {
-			if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
-				switch tv := vv.(type) {
-				case float64:
-					return tv
-				case int:
-					return float64(tv)
-				case int64:
-					return float64(tv)
-				case string:
-					if f, err := strconv.ParseFloat(strings.TrimSpace(tv), 64); err == nil {
-						return f
-					}
-				}
-			}
-			return fb
-		}
-		parseText := func(key string, fb string) string {
-			if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
-				return fmt.Sprint(vv)
-			}
-			return fb
-		}
-		parseTime := func(key string) time.Time {
-			raw := strings.TrimSpace(parseText(key, ""))
-			if raw == "" {
-				return time.Time{}
-			}
-			if t, err := time.Parse(time.RFC3339, raw); err == nil {
-				return t
-			}
-			return time.Time{}
-		}
-		openLinkAllowed := true
-		if vv, ok := tinysql.GetVal(row, "open_link_allowed"); ok && vv != nil {
-			switch tv := vv.(type) {
-			case int:
-				openLinkAllowed = tv != 0
-			case int64:
-				openLinkAllowed = tv != 0
-			case float64:
-				openLinkAllowed = tv != 0
-			case bool:
-				openLinkAllowed = tv
-			case string:
-				openLinkAllowed = strings.TrimSpace(tv) != "0" && !strings.EqualFold(strings.TrimSpace(tv), "false")
-			}
-		}
-		chunkID := parseText("chunk_id", "")
-		documentID := parseText("document_id", "")
-		if chunkID == "" {
-			if idv, ok := tinysql.GetVal(row, "id"); ok {
-				chunkID = fmt.Sprintf("%v", idv)
-			}
-		}
-		if documentID == "" {
-			documentID = stableContentHash(fmt.Sprint(art))
-		}
-		unit := RetrievalUnit{
-			ChunkID:         chunkID,
-			DocumentID:      documentID,
-			ChunkIdx:        idx,
-			Content:         fmt.Sprint(c),
-			SourceSystem:    parseText("source_system", "tinyrag"),
-			SourceType:      parseText("source_type", normalizeR3SourceType(fmt.Sprint(art))),
-			SourceTitle:     parseText("source_title", fmt.Sprint(art)),
-			SourceURL:       parseText("source_url", ""),
-			SourceObjectID:  parseText("source_object_id", fmt.Sprint(art)),
-			SourceVersion:   parseText("source_version", "v1"),
-			RoleScope:       parseText("role_scope", "|all|"),
-			ACLGroups:       parseText("acl_groups", parseText("role_scope", "|all|")),
-			BusinessOwner:   parseText("business_owner", "it"),
-			Sensitivity:     parseText("sensitivity", "internal"),
-			TrustLevel:      parseFloat("trust_level", 0.5),
-			SourceQuality:   parseFloat("source_quality", sourceTypeQualityDefault(parseText("source_type", ""))),
-			FreshnessScore:  parseFloat("freshness_score", 0.0),
-			QualityScore:    parseFloat("quality_score", 0.5),
-			FeedbackScore:   parseFloat("feedback_score", 0.5),
-			ImportedAt:      parseTime("imported_at"),
-			UpdatedAt:       parseTime("updated_at"),
-			ContentHash:     parseText("content_hash", stableContentHash(fmt.Sprint(c))),
-			OpenLinkAllowed: openLinkAllowed,
-		}
-		r3Score := rankPolicy.Score(unit, score, now)
-		hits = append(hits, retrievalHit{
-			Article:    fmt.Sprint(art),
-			ChunkIdx:   idx,
-			Content:    fmt.Sprint(c),
-			Score:      score,
-			R3Score:    r3Score,
-			Unit:       unit,
-			Citation:   buildCitation(unit, r3Score),
-			ChunkID:    chunkID,
-			DocumentID: documentID,
-		})
+	hits := make([]retrievalHit, 0, len(rawHits))
+	for _, h := range rawHits {
+		r3Score := rankPolicy.Score(h.Unit, h.Score, now)
+		h.R3Score = r3Score
+		h.Citation = buildCitation(h.Unit, r3Score)
+		hits = append(hits, h)
 	}
 	sortHitsDeterministic(hits, func(a, b retrievalHit) bool {
 		if a.R3Score != b.R3Score {
@@ -3559,153 +3262,29 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 	best := map[aggKey]retrievalHit{}
 	var totalSearchMs int64
 
+	rankPolicy := defaultRankingPolicy()
+	now := time.Now().UTC()
+
 	for i, vec := range vecs {
 		if i >= len(variants) {
 			break
 		}
-		q := fmt.Sprintf(
-			"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type, source_title, source_url, source_object_id, source_version, role_scope, acl_groups, business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score, feedback_score, imported_at, updated_at, content_hash, open_link_allowed, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-			escapeSQ(vecJSON(vec)), escapeSQ(r.getActiveEmbedModel()), roleAndACLFilterSQL(activeRole), candidateLimitForK(k),
-		)
 		t1 := time.Now()
-		stmt, err := tinysql.ParseSQL(q)
-		if err != nil {
-			return nil, embedMs, totalSearchMs, err
-		}
-		r.dbMu.Lock()
-		rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-		r.dbMu.Unlock()
+		rawHits, err := r.chunkStore.searchTopK(vec, r.getActiveEmbedModel(), roleAndACLFilterSQL(activeRole), candidateLimitForK(k))
 		if err != nil {
 			return nil, embedMs, totalSearchMs, err
 		}
 		totalSearchMs += time.Since(t1).Milliseconds()
-		rankPolicy := defaultRankingPolicy()
-		now := time.Now().UTC()
-		for _, row := range rs.Rows {
-			c, ok := tinysql.GetVal(row, "content")
-			art, _ := tinysql.GetVal(row, "article")
-			idxVal, _ := tinysql.GetVal(row, "chunk_idx")
-			scoreVal, _ := tinysql.GetVal(row, "score")
-			if !ok || art == nil || idxVal == nil || scoreVal == nil {
-				continue
-			}
-			idx := 0
-			switch iv := idxVal.(type) {
-			case int:
-				idx = iv
-			case int64:
-				idx = int(iv)
-			case float64:
-				idx = int(iv)
-			}
-			score := 0.0
-			switch sv := scoreVal.(type) {
-			case float64:
-				score = sv
-			case int:
-				score = float64(sv)
-			case int64:
-				score = float64(sv)
-			}
-			parseFloat := func(key string, fb float64) float64 {
-				if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
-					switch tv := vv.(type) {
-					case float64:
-						return tv
-					case int:
-						return float64(tv)
-					case int64:
-						return float64(tv)
-					case string:
-						if f, err := strconv.ParseFloat(strings.TrimSpace(tv), 64); err == nil {
-							return f
-						}
-					}
-				}
-				return fb
-			}
-			parseText := func(key string, fb string) string {
-				if vv, ok := tinysql.GetVal(row, key); ok && vv != nil {
-					return fmt.Sprint(vv)
-				}
-				return fb
-			}
-			parseTime := func(key string) time.Time {
-				raw := strings.TrimSpace(parseText(key, ""))
-				if raw == "" {
-					return time.Time{}
-				}
-				if t, err := time.Parse(time.RFC3339, raw); err == nil {
-					return t
-				}
-				return time.Time{}
-			}
-			openLinkAllowed := true
-			if vv, ok := tinysql.GetVal(row, "open_link_allowed"); ok && vv != nil {
-				switch tv := vv.(type) {
-				case int:
-					openLinkAllowed = tv != 0
-				case int64:
-					openLinkAllowed = tv != 0
-				case float64:
-					openLinkAllowed = tv != 0
-				case bool:
-					openLinkAllowed = tv
-				case string:
-					openLinkAllowed = strings.TrimSpace(tv) != "0" && !strings.EqualFold(strings.TrimSpace(tv), "false")
-				}
-			}
-			weightedSemantic := score * variants[i].Weight
-			chunkID := parseText("chunk_id", "")
-			documentID := parseText("document_id", "")
-			if chunkID == "" {
-				if idv, ok := tinysql.GetVal(row, "id"); ok {
-					chunkID = fmt.Sprintf("%v", idv)
-				}
-			}
-			if documentID == "" {
-				documentID = stableContentHash(fmt.Sprint(art))
-			}
-			unit := RetrievalUnit{
-				ChunkID:         chunkID,
-				DocumentID:      documentID,
-				ChunkIdx:        idx,
-				Content:         fmt.Sprint(c),
-				SourceSystem:    parseText("source_system", "tinyrag"),
-				SourceType:      parseText("source_type", normalizeR3SourceType(fmt.Sprint(art))),
-				SourceTitle:     parseText("source_title", fmt.Sprint(art)),
-				SourceURL:       parseText("source_url", ""),
-				SourceObjectID:  parseText("source_object_id", fmt.Sprint(art)),
-				SourceVersion:   parseText("source_version", "v1"),
-				RoleScope:       parseText("role_scope", "|all|"),
-				ACLGroups:       parseText("acl_groups", parseText("role_scope", "|all|")),
-				BusinessOwner:   parseText("business_owner", "it"),
-				Sensitivity:     parseText("sensitivity", "internal"),
-				TrustLevel:      parseFloat("trust_level", 0.5),
-				SourceQuality:   parseFloat("source_quality", sourceTypeQualityDefault(parseText("source_type", ""))),
-				FreshnessScore:  parseFloat("freshness_score", 0.0),
-				QualityScore:    parseFloat("quality_score", 0.5),
-				FeedbackScore:   parseFloat("feedback_score", 0.5),
-				ImportedAt:      parseTime("imported_at"),
-				UpdatedAt:       parseTime("updated_at"),
-				ContentHash:     parseText("content_hash", stableContentHash(fmt.Sprint(c))),
-				OpenLinkAllowed: openLinkAllowed,
-			}
-			r3Score := rankPolicy.Score(unit, weightedSemantic, now)
-			hit := retrievalHit{
-				Article:    fmt.Sprint(art),
-				ChunkIdx:   idx,
-				Content:    fmt.Sprint(c),
-				Score:      weightedSemantic,
-				R3Score:    r3Score,
-				Unit:       unit,
-				Citation:   buildCitation(unit, r3Score),
-				ChunkID:    chunkID,
-				DocumentID: documentID,
-			}
-			key := aggKey{article: hit.Article, chunkIdx: hit.ChunkIdx}
-			if prev, ok := best[key]; !ok || hit.R3Score > prev.R3Score || (hit.R3Score == prev.R3Score && hit.Score > prev.Score) {
-				best[key] = hit
+
+		for _, h := range rawHits {
+			weightedSemantic := h.Score * variants[i].Weight
+			h.Score = weightedSemantic
+			r3Score := rankPolicy.Score(h.Unit, weightedSemantic, now)
+			h.R3Score = r3Score
+			h.Citation = buildCitation(h.Unit, r3Score)
+			key := aggKey{article: h.Article, chunkIdx: h.ChunkIdx}
+			if prev, ok := best[key]; !ok || h.R3Score > prev.R3Score || (h.R3Score == prev.R3Score && h.Score > prev.Score) {
+				best[key] = h
 			}
 		}
 	}
@@ -3783,15 +3362,9 @@ func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64
 	if settings != nil {
 		activeRole = settings.get().ActiveRole
 	}
-	q := fmt.Sprintf("SELECT article, chunk_idx, content, chunk_id, document_id, source_system, source_type, source_title, source_url, sensitivity, trust_level, updated_at, open_link_allowed FROM chunks WHERE LOWER(article) = LOWER('%s') AND %s ORDER BY chunk_idx", escapeSQ(article), roleAndACLFilterSQL(activeRole))
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		return "", nil, false
-	}
-	r.dbMu.Lock()
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-	if err != nil || rs == nil || len(rs.Rows) == 0 {
+
+	rows, err := r.chunkStore.loadArticleChunks(article, roleAndACLFilterSQL(activeRole))
+	if err != nil || len(rows) == 0 {
 		return "", nil, false
 	}
 
@@ -3799,59 +3372,72 @@ func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64
 	var dbgChunks []debugChunk
 	var citations []Citation
 	resolvedArticle := article
-	for _, row := range rs.Rows {
-		c, ok := tinysql.GetVal(row, "content")
-		if !ok {
+
+	getStr := func(row map[string]any, key string) string {
+		if v, ok := row[key]; ok && v != nil {
+			return fmt.Sprint(v)
+		}
+		return ""
+	}
+	getFloat := func(row map[string]any, key string, fb float64) float64 {
+		if v, ok := row[key]; ok && v != nil {
+			switch tv := v.(type) {
+			case float64:
+				return tv
+			case int:
+				return float64(tv)
+			case int64:
+				return float64(tv)
+			}
+		}
+		return fb
+	}
+	getInt := func(row map[string]any, key string) int {
+		if v, ok := row[key]; ok && v != nil {
+			switch tv := v.(type) {
+			case int:
+				return tv
+			case int64:
+				return int(tv)
+			case float64:
+				return int(tv)
+			}
+		}
+		return 0
+	}
+	getBool := func(row map[string]any, key string, fb bool) bool {
+		if v, ok := row[key]; ok && v != nil {
+			switch tv := v.(type) {
+			case bool:
+				return tv
+			case int:
+				return tv != 0
+			case int64:
+				return tv != 0
+			case float64:
+				return tv != 0
+			case string:
+				return strings.TrimSpace(tv) != "0" && !strings.EqualFold(strings.TrimSpace(tv), "false")
+			}
+		}
+		return fb
+	}
+
+	for _, row := range rows {
+		content := getStr(row, "content")
+		if content == "" {
 			continue
 		}
-		if artVal, ok := tinysql.GetVal(row, "article"); ok && fmt.Sprint(artVal) != "" {
-			resolvedArticle = fmt.Sprint(artVal)
+		if artVal := getStr(row, "article"); artVal != "" {
+			resolvedArticle = artVal
 		}
-		idx := 0
-		if idxVal, ok := tinysql.GetVal(row, "chunk_idx"); ok {
-			switch iv := idxVal.(type) {
-			case int:
-				idx = iv
-			case int64:
-				idx = int(iv)
-			case float64:
-				idx = int(iv)
-			}
-		}
-		content := fmt.Sprint(c)
-		openLinkAllowed := true
-		if vv, ok := tinysql.GetVal(row, "open_link_allowed"); ok && vv != nil {
-			switch tv := vv.(type) {
-			case int:
-				openLinkAllowed = tv != 0
-			case int64:
-				openLinkAllowed = tv != 0
-			case float64:
-				openLinkAllowed = tv != 0
-			}
-		}
-		trust := 0.5
-		if vv, ok := tinysql.GetVal(row, "trust_level"); ok && vv != nil {
-			switch tv := vv.(type) {
-			case float64:
-				trust = tv
-			case int:
-				trust = float64(tv)
-			case int64:
-				trust = float64(tv)
-			}
-		}
-		updatedAt := ""
-		if vv, ok := tinysql.GetVal(row, "updated_at"); ok && vv != nil {
-			updatedAt = fmt.Sprint(vv)
-		}
-		chunkID := ""
-		if vv, ok := tinysql.GetVal(row, "chunk_id"); ok && vv != nil {
-			chunkID = fmt.Sprint(vv)
-		}
-		documentID := stableContentHash(resolvedArticle)
-		if vv, ok := tinysql.GetVal(row, "document_id"); ok && vv != nil && fmt.Sprint(vv) != "" {
-			documentID = fmt.Sprint(vv)
+		idx := getInt(row, "chunk_idx")
+		openLinkAllowed := getBool(row, "open_link_allowed", true)
+		trust := getFloat(row, "trust_level", 0.5)
+		chunkID := getStr(row, "chunk_id")
+		documentID := getStr(row, "document_id")
+		if documentID == "" {
+			documentID = stableContentHash(resolvedArticle)
 		}
 		citation := Citation{
 			ChunkID:       chunkID,
@@ -3859,28 +3445,26 @@ func (r *ragSystem) loadArticleContext(article string, debug bool, embedMs int64
 			Title:         resolvedArticle,
 			SourceSystem:  "tinyrag",
 			SourceType:    normalizeR3SourceType(resolvedArticle),
-			UpdatedAt:     updatedAt,
+			UpdatedAt:     getStr(row, "updated_at"),
 			TrustLevel:    trust,
 			Sensitivity:   "internal",
 			R3Score:       0.75,
 			OpenLinkAllow: openLinkAllowed,
 		}
-		if vv, ok := tinysql.GetVal(row, "source_system"); ok && vv != nil {
-			citation.SourceSystem = fmt.Sprint(vv)
+		if ss := getStr(row, "source_system"); ss != "" {
+			citation.SourceSystem = ss
 		}
-		if vv, ok := tinysql.GetVal(row, "source_type"); ok && vv != nil && fmt.Sprint(vv) != "" {
-			citation.SourceType = fmt.Sprint(vv)
+		if st := getStr(row, "source_type"); st != "" {
+			citation.SourceType = st
 		}
-		if vv, ok := tinysql.GetVal(row, "source_title"); ok && vv != nil && fmt.Sprint(vv) != "" {
-			citation.Title = fmt.Sprint(vv)
+		if stitle := getStr(row, "source_title"); stitle != "" {
+			citation.Title = stitle
 		}
-		if vv, ok := tinysql.GetVal(row, "source_url"); ok && vv != nil {
-			if openLinkAllowed {
-				citation.SourceURL = fmt.Sprint(vv)
-			}
+		if openLinkAllowed {
+			citation.SourceURL = getStr(row, "source_url")
 		}
-		if vv, ok := tinysql.GetVal(row, "sensitivity"); ok && vv != nil && fmt.Sprint(vv) != "" {
-			citation.Sensitivity = fmt.Sprint(vv)
+		if sens := getStr(row, "sensitivity"); sens != "" {
+			citation.Sensitivity = sens
 		}
 		parts = append(parts, formatContextChunkWithCitation(resolvedArticle, idx, content, citation))
 		citations = append(citations, citation)
@@ -6163,27 +5747,7 @@ func (r *ragSystem) fetchNeighborContent(article string, chunkIdx int) (string, 
 	if settings != nil {
 		activeRole = settings.get().ActiveRole
 	}
-	q := fmt.Sprintf(
-		"SELECT content FROM chunks WHERE article = '%s' AND chunk_idx = %d AND %s",
-		escapeSQ(article), chunkIdx, roleAndACLFilterSQL(activeRole),
-	)
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		return "", false
-	}
-
-	r.dbMu.Lock()
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-
-	if err != nil || rs == nil || len(rs.Rows) == 0 {
-		return "", false
-	}
-	c, ok := tinysql.GetVal(rs.Rows[0], "content")
-	if !ok {
-		return "", false
-	}
-	return fmt.Sprintf("%v", c), true
+	return r.chunkStore.fetchNeighborContent(article, chunkIdx, roleAndACLFilterSQL(activeRole))
 }
 
 // listSources returns distinct article names with their chunk counts
@@ -6197,28 +5761,7 @@ func (r *ragSystem) listSources() []map[string]any {
 }
 
 func (r *ragSystem) listSourcesForRole(role string) []map[string]any {
-	q := fmt.Sprintf("SELECT article, COUNT(*) AS cnt FROM chunks WHERE %s GROUP BY article ORDER BY article", roleAndACLFilterSQL(role))
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		return nil
-	}
-
-	r.dbMu.Lock()
-	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-
-	if err != nil || rs == nil {
-		return nil
-	}
-	var sources []map[string]any
-	for _, row := range rs.Rows {
-		art, ok1 := tinysql.GetVal(row, "article")
-		cnt, ok2 := tinysql.GetVal(row, "cnt")
-		if ok1 && ok2 {
-			sources = append(sources, map[string]any{"article": fmt.Sprintf("%v", art), "chunks": cnt})
-		}
-	}
-	return sources
+	return r.chunkStore.listSources(roleAndACLFilterSQL(role))
 }
 
 // deleteSource removes all chunks belonging to `article` and persists
@@ -6232,15 +5775,7 @@ func (r *ragSystem) deleteSource(article string) error {
 }
 
 func (r *ragSystem) deleteSourceForRole(article, role string) error {
-	q := fmt.Sprintf("DELETE FROM chunks WHERE article = '%s' AND %s", escapeSQ(article), roleAndACLFilterSQL(role))
-	stmt, err := tinysql.ParseSQL(q)
-	if err != nil {
-		return err
-	}
-	r.dbMu.Lock()
-	_, err = tinysql.Execute(context.Background(), r.db, "default", stmt)
-	r.dbMu.Unlock()
-	if err != nil {
+	if err := r.chunkStore.deleteSource(article, roleAndACLFilterSQL(role)); err != nil {
 		return err
 	}
 	return r.save()
@@ -6503,6 +6038,9 @@ func providerHintFromURL(base string) string {
 		if port == "1234" {
 			return "LM Studio"
 		}
+		if port == "8080" {
+			return "llmster"
+		}
 		return "Local LLM"
 	}
 
@@ -6539,6 +6077,9 @@ func providerHintFromURL(base string) string {
 	if port == "1234" {
 		return "LM Studio"
 	}
+	if port == "8080" {
+		return "llmster"
+	}
 
 	return "OpenAI-compatible"
 }
@@ -6552,7 +6093,10 @@ func recommendModels(models []string) (chat []string, embed []string) {
 		if strings.Contains(ml, "embed") || strings.Contains(ml, "embedding") ||
 			strings.Contains(ml, "e5-") || strings.Contains(ml, "bge-") ||
 			strings.Contains(ml, "minilm") || strings.Contains(ml, "nomic") ||
-			strings.Contains(ml, "gte-") || strings.Contains(ml, "jina-embed") {
+			strings.Contains(ml, "gte-") || strings.Contains(ml, "jina-embed") ||
+			strings.Contains(ml, "paraphrase") || strings.Contains(ml, "multilingual") ||
+			strings.Contains(ml, "mpnet") || strings.Contains(ml, "sentence-transformers") ||
+			strings.Contains(ml, "sentence_transformers") {
 			embed = append(embed, m)
 		}
 		// Common chat-ish hints
@@ -6619,6 +6163,7 @@ func isLocalLLMBase(base string) bool {
 func localLLMCandidates() []string {
 	return []string{
 		"http://localhost:1234",
+		"http://localhost:8080",
 		"http://localhost:11434",
 	}
 }

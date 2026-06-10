@@ -207,6 +207,8 @@
     }
   ],
   "vector_search_threshold": 0,
+  "vector_backend": "tinysql",
+  "storage_mode": "",
   "allow_code_exec": false,
   "allow_nanogo": false,
   "allow_shell_exec": false,
