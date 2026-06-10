@@ -68,11 +68,11 @@ type vectorChunkStore interface {
 // The caller (ragSystem) is responsible for computing the Embedding and
 // assigning the ID before passing the slice to insertChunks.
 type storedChunk struct {
-	ID        int
-	ChunkIdx  int
-	Article   string
-	Content   string
-	Embedding []float64
+	ID         int
+	ChunkIdx   int
+	Article    string
+	Content    string
+	Embedding  []float64
 	EmbedModel string
 	RoleScope  string
 
@@ -398,28 +398,28 @@ func rowToRetrievalHit(row map[string]any, rawScore float64) retrievalHit {
 	}
 
 	unit := RetrievalUnit{
-		ChunkID:        chunkID,
-		DocumentID:     documentID,
-		ChunkIdx:       chunkIdx,
-		Content:        content,
-		SourceSystem:   getStr("source_system", "tinyrag"),
-		SourceType:     getStr("source_type", normalizeR3SourceType(article)),
-		SourceTitle:    getStr("source_title", article),
-		SourceURL:      getStr("source_url", ""),
-		SourceObjectID: getStr("source_object_id", article),
-		SourceVersion:  getStr("source_version", "v1"),
-		RoleScope:      getStr("role_scope", "|all|"),
-		ACLGroups:      getStr("acl_groups", getStr("role_scope", "|all|")),
-		BusinessOwner:  getStr("business_owner", "it"),
-		Sensitivity:    getStr("sensitivity", "internal"),
-		TrustLevel:     getFloat("trust_level", 0.5),
-		SourceQuality:  getFloat("source_quality", sourceTypeQualityDefault(getStr("source_type", ""))),
-		FreshnessScore: getFloat("freshness_score", 0.0),
-		QualityScore:   getFloat("quality_score", 0.5),
-		FeedbackScore:  getFloat("feedback_score", 0.5),
-		ImportedAt:     getTime("imported_at"),
-		UpdatedAt:      getTime("updated_at"),
-		ContentHash:    getStr("content_hash", stableContentHash(content)),
+		ChunkID:         chunkID,
+		DocumentID:      documentID,
+		ChunkIdx:        chunkIdx,
+		Content:         content,
+		SourceSystem:    getStr("source_system", "tinyrag"),
+		SourceType:      getStr("source_type", normalizeR3SourceType(article)),
+		SourceTitle:     getStr("source_title", article),
+		SourceURL:       getStr("source_url", ""),
+		SourceObjectID:  getStr("source_object_id", article),
+		SourceVersion:   getStr("source_version", "v1"),
+		RoleScope:       getStr("role_scope", "|all|"),
+		ACLGroups:       getStr("acl_groups", getStr("role_scope", "|all|")),
+		BusinessOwner:   getStr("business_owner", "it"),
+		Sensitivity:     getStr("sensitivity", "internal"),
+		TrustLevel:      getFloat("trust_level", 0.5),
+		SourceQuality:   getFloat("source_quality", sourceTypeQualityDefault(getStr("source_type", ""))),
+		FreshnessScore:  getFloat("freshness_score", 0.0),
+		QualityScore:    getFloat("quality_score", 0.5),
+		FeedbackScore:   getFloat("feedback_score", 0.5),
+		ImportedAt:      getTime("imported_at"),
+		UpdatedAt:       getTime("updated_at"),
+		ContentHash:     getStr("content_hash", stableContentHash(content)),
 		OpenLinkAllowed: getBool("open_link_allowed", true),
 	}
 
@@ -660,7 +660,7 @@ func newSQLiteVecChunkStore(_ string) (*sqliteVecChunkStore, error) {
 	)
 }
 
-func (s *sqliteVecChunkStore) init() error { return errSQLiteVecUnavailable }
+func (s *sqliteVecChunkStore) init() error     { return errSQLiteVecUnavailable }
 func (s *sqliteVecChunkStore) maxChunkID() int { return -1 }
 func (s *sqliteVecChunkStore) checkArticleExists(_, _ string) (bool, error) {
 	return false, errSQLiteVecUnavailable
