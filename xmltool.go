@@ -64,6 +64,11 @@ type xmlToolRaw struct {
 // It returns the parsed call and true on success, or zero value and false
 // on any parse/validation failure.
 func parseXMLBlock(block string) (XMLToolCall, bool) {
+	if strings.Contains(strings.TrimPrefix(block, xmlToolOpen), xmlToolOpen) {
+		log.Printf("xmltool: nested tool block rejected: %q", truncate(block, 120))
+		return XMLToolCall{}, false
+	}
+
 	var raw xmlToolRaw
 	if err := xml.Unmarshal([]byte(block), &raw); err != nil {
 		log.Printf("xmltool: parse error (%v) for block: %q", err, truncate(block, 120))

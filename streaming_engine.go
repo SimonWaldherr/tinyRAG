@@ -208,6 +208,7 @@ func (e *StreamingEngine) Run(
 
 			result := parser.Feed(tok)
 			tel.XMLParseErrors += result.ParseErrors
+			tel.XMLBlocksEmitted += len(result.Calls)
 
 			// Forward visible text to client
 			if result.Visible != "" {

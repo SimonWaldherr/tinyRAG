@@ -91,6 +91,14 @@ func TestParseXMLBlock_InvalidXML(t *testing.T) {
 	}
 }
 
+func TestParseXMLBlock_NestedToolRejected(t *testing.T) {
+	block := `<tool name="outer"><query>before <tool name="inner"><query>x</query></tool> after</query></tool>`
+	_, ok := parseXMLBlock(block)
+	if ok {
+		t.Error("expected parse failure for nested tool block")
+	}
+}
+
 func TestParseXMLBlock_Whitespace(t *testing.T) {
 	block := `<tool name="  websearch  "><query>  hello world  </query></tool>`
 	call, ok := parseXMLBlock(block)
@@ -185,6 +193,21 @@ func TestFeed_InvalidXMLHandledSafely(t *testing.T) {
 	_ = res
 	if res.ParseErrors != 1 {
 		t.Errorf("expected 1 parse error for empty name attr, got %d", res.ParseErrors)
+	}
+}
+
+func TestFeed_NestedToolHandledSafely(t *testing.T) {
+	p := &XMLParseState{}
+	input := `text <tool name="outer"><query>before <tool name="inner"><query>x</query></tool> after</query></tool> more`
+	res := p.Feed(input)
+	if len(res.Calls) != 0 {
+		t.Fatalf("nested tool block must not trigger execution, got %d calls", len(res.Calls))
+	}
+	if res.ParseErrors == 0 {
+		t.Error("expected parse error for nested tool block")
+	}
+	if !strings.Contains(res.Visible, `<tool name="outer"`) {
+		t.Errorf("expected invalid XML to remain visible, got %q", res.Visible)
 	}
 }
 

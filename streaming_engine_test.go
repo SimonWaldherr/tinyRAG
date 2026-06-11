@@ -208,6 +208,33 @@ func TestEngine_InvalidXMLHandledSafely(t *testing.T) {
 	}
 }
 
+func TestEngine_ValidXMLBlockedToolStillCounted(t *testing.T) {
+	response := `Need external data. <tool name="websearch"><query>tinyRAG release</query></tool>`
+	eng, _ := buildTestEngine(response)
+
+	rec := httptest.NewRecorder()
+	rf := &recordingFlusher{rec}
+	sw := &sseWriter{w: rec, flusher: rf}
+	tel := newRequestTelemetry("test-blocked-tool", "chat-1", "test")
+
+	_, err := eng.Run(context.Background(), EngineRequest{
+		RequestID:    "test-blocked-tool",
+		Question:     "test",
+		SystemPrompt: "sys",
+		Messages:     []chatMsg{{Role: "user", Content: "test"}},
+		AutoSearch:   false,
+	}, sw, tel)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tel.XMLBlocksEmitted != 1 {
+		t.Fatalf("expected 1 emitted XML block, got %d", tel.XMLBlocksEmitted)
+	}
+	if len(tel.ToolInvocations) != 0 {
+		t.Fatalf("expected blocked tool not to execute, got %d invocations", len(tel.ToolInvocations))
+	}
+}
+
 func TestEngine_MaxContinuationsConfig(t *testing.T) {
 	cfg := defaultEngineConfig()
 	if cfg.MaxContinuations <= 0 {

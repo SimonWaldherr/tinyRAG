@@ -86,12 +86,8 @@ func newRequestTelemetry(reqID, chatID, question string) *RequestTelemetry {
 }
 
 // recordTool adds a completed tool invocation record.
-// Only non-deduplicated calls increment XMLBlocksEmitted.
 func (t *RequestTelemetry) recordTool(rec ToolInvocationRecord) {
 	t.ToolInvocations = append(t.ToolInvocations, rec)
-	if !rec.Deduplicated {
-		t.XMLBlocksEmitted++
-	}
 }
 
 // finalize sets timing and emits the telemetry log line.
