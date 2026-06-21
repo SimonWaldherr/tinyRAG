@@ -321,6 +321,7 @@ function applyRolePermissionsUI(perms){
   const noBulk = !p.can_bulk_ingest;
   setDisabled('#wikiBtn', noWeb, 'Für diese Rolle nicht erlaubt');
   setDisabled('#urlBtn', noWeb, 'Für diese Rolle nicht erlaubt');
+  setDisabled('#ckanBtn', noWeb || noBulk, 'Für diese Rolle nicht erlaubt');
   setDisabled('#folderBtn', noBulk, 'Für diese Rolle nicht erlaubt');
   setDisabled('#fileInput', noBulk, 'Für diese Rolle nicht erlaubt');
 }
@@ -535,6 +536,7 @@ const _translations = {
     text: 'Text',
     upload: 'Upload',
     folder: 'Ordner',
+    open_data: 'Open Data',
     wiki_label: 'Wikipedia-Artikel laden',
     wiki_placeholder: 'z.B. Sonnensystem',
     wiki_lang_label: 'Wikipedia-Sprachcode',
@@ -554,6 +556,32 @@ const _translations = {
     folder_placeholder: '/pfad/zum/ordner',
     recursive: 'Rekursiv',
     import: 'Importieren',
+    ckan_title: 'Open-Data-Portal importieren',
+    ckan_hint: 'Importiert CKAN-Datensatzkarten mit Lizenz, Herausgeber, Ressourcen und Schemafeldern.',
+    ckan_badge: 'Metadaten zuerst',
+    ckan_portal: 'CKAN-Portal',
+    ckan_portal_placeholder: 'https://www.data.gv.at',
+    ckan_limit: 'Limit',
+    ckan_query: 'Suche',
+    ckan_query_placeholder: 'z.B. Luftqualität',
+    ckan_package: 'Oder Package-ID',
+    ckan_package_placeholder: 'optional',
+    ckan_import: 'Dataset-Karten importieren',
+    ckan_need_portal: 'Bitte CKAN-Portal eingeben.',
+    ckan_need_query: 'Bitte Suche oder Package-ID eingeben.',
+    ckan_empty: 'Keine Datensätze gefunden.',
+    ckan_done: (datasets, chunks) => `OK: ${datasets} Datensätze · ${chunks} Chunks`,
+    pull_source_id: 'Pull-ID',
+    pull_interval: 'Intervall Sekunden',
+    enabled: 'Aktiv',
+    r3_metadata_json: 'R³-Metadaten JSON (optional)',
+    save_pull_source: 'Pull-Quelle speichern',
+    refresh: 'Aktualisieren',
+    pull_saved: 'Pull-Quelle gespeichert.',
+    pull_loaded: (count) => `${count} Pull-Quellen geladen.`,
+    invalid_metadata: 'R³-Metadaten sind kein gültiges JSON.',
+    run_now: 'Jetzt starten',
+    delete: 'Löschen',
     settings_title: 'Einstellungen',
     general: 'Allgemein',
     llm_backend: 'LLM Backend',
@@ -666,6 +694,7 @@ const _translations = {
     text: 'Text',
     upload: 'Upload',
     folder: 'Folder',
+    open_data: 'Open Data',
     wiki_label: 'Load Wikipedia article',
     wiki_placeholder: 'e.g., Solar System',
     wiki_lang_label: 'Wikipedia language code',
@@ -685,6 +714,32 @@ const _translations = {
     folder_placeholder: '/path/to/folder',
     recursive: 'Recursive',
     import: 'Import',
+    ckan_title: 'Import open data portal',
+    ckan_hint: 'Imports CKAN dataset cards with license, publisher, resources, and schema fields.',
+    ckan_badge: 'Metadata first',
+    ckan_portal: 'CKAN Portal',
+    ckan_portal_placeholder: 'https://catalog.data.gov',
+    ckan_limit: 'Limit',
+    ckan_query: 'Search',
+    ckan_query_placeholder: 'e.g., air quality',
+    ckan_package: 'Or Package ID',
+    ckan_package_placeholder: 'optional',
+    ckan_import: 'Import Dataset Cards',
+    ckan_need_portal: 'Enter a CKAN portal.',
+    ckan_need_query: 'Enter a search term or package ID.',
+    ckan_empty: 'No datasets found.',
+    ckan_done: (datasets, chunks) => `OK: ${datasets} datasets · ${chunks} chunks`,
+    pull_source_id: 'Pull ID',
+    pull_interval: 'Interval seconds',
+    enabled: 'Enabled',
+    r3_metadata_json: 'R3 metadata JSON (optional)',
+    save_pull_source: 'Save Pull Source',
+    refresh: 'Refresh',
+    pull_saved: 'Pull source saved.',
+    pull_loaded: (count) => `${count} pull sources loaded.`,
+    invalid_metadata: 'R3 metadata is not valid JSON.',
+    run_now: 'Run Now',
+    delete: 'Delete',
     settings_title: 'Settings',
     general: 'General',
     llm_backend: 'LLM Backend',
@@ -876,6 +931,7 @@ function showTab(group, name){
     $('#ingest-text').style.display = (name === 'text') ? '' : 'none';
     $('#ingest-upload').style.display = (name === 'upload') ? '' : 'none';
     $('#ingest-folder').style.display = (name === 'folder') ? '' : 'none';
+    $('#ingest-ckan').style.display = (name === 'ckan') ? '' : 'none';
   }
 }
 
@@ -3451,8 +3507,9 @@ async function addFolder(){
   try{
     const embedModel = getIngestEmbedModel();
     const roles = getIngestRoleScopes();
-    const r = await apiPost('/api/add-folder', {path, recursive, embed_model: embedModel, roles});
-    let msg = `OK: ${r.files} Dateien · ${r.total_chunks} Chunks · Total: ${r.total}`;
+    const metadata = readR3MetadataInput('#folderMetadata');
+    const r = await apiPost('/api/add-folder', {path, recursive, embed_model: embedModel, roles, metadata});
+    let msg = `OK: ${r.files_seen || r.files || 0} Dateien geprüft · ${r.files || 0} geändert · ${r.files_skipped || 0} übersprungen · ${r.total_chunks} Chunks · Total: ${r.total}`;
     if(r.errors && r.errors.length){
       msg += ` · Fehler: ${r.errors.length}`;
     }
@@ -3462,6 +3519,199 @@ async function addFolder(){
     setStatus($('#folderStatus'), t('error_prefix') + (e.message||String(e)), 'err');
   }finally{
     setLoading('#folderBtn', false);
+  }
+}
+
+function readR3MetadataInput(selector){
+  const el = $(selector);
+  const raw = el ? el.value.trim() : '';
+  if(!raw) return {};
+  try{
+    const parsed = JSON.parse(raw);
+    if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)){
+      throw new Error('metadata must be an object');
+    }
+    return parsed;
+  }catch(e){
+    const err = new Error(t('invalid_metadata'));
+    err.cause = e;
+    throw err;
+  }
+}
+
+function renderPullSources(sources){
+  const box = $('#folderPullSources');
+  if(!box) return;
+  if(!sources || !sources.length){
+    box.innerHTML = `<p class="muted">${escHtml(uiLang === 'de' ? 'Keine Pull-Quellen konfiguriert.' : 'No pull sources configured.')}</p>`;
+    return;
+  }
+  box.innerHTML = '';
+  sources.forEach(src => {
+    const div = document.createElement('div');
+    div.className = 'pull-source-item';
+    const interval = Number(src.interval_seconds || 0);
+    div.innerHTML = `
+      <div class="pull-source-main">
+        <div class="pull-source-title">${escHtml(src.id || src.path || 'folder')}</div>
+        <div class="pull-source-meta">${escHtml(src.path || '')} · ${src.recursive ? 'recursive' : 'flat'} · ${interval}s · ${src.enabled ? 'enabled' : 'disabled'}</div>
+      </div>
+      <div class="pull-source-actions">
+        <button class="btn-small run" type="button">${escHtml(t('run_now'))}</button>
+        <button class="btn-small delete" type="button">${escHtml(t('delete'))}</button>
+      </div>`;
+    div.querySelector('.run')?.addEventListener('click', ()=>runPullSource(src.id));
+    div.querySelector('.delete')?.addEventListener('click', ()=>deletePullSource(src.id));
+    box.appendChild(div);
+  });
+}
+
+async function loadPullSources(){
+  const box = $('#folderPullSources');
+  if(!box) return;
+  try{
+    const sources = await apiGet('/api/pull-sources');
+    renderPullSources(sources || []);
+    setStatus($('#folderPullStatus'), t('pull_loaded', (sources||[]).length), 'ok');
+  }catch(e){
+    setStatus($('#folderPullStatus'), t('error_prefix') + (e.message||String(e)), 'err');
+  }
+}
+
+async function savePullSource(){
+  const path = $('#folderPath')?.value.trim() || '';
+  if(!path){
+    setStatus($('#folderPullStatus'), t('error_prefix') + 'missing path', 'err');
+    return;
+  }
+  setLoading('#folderPullSaveBtn', true);
+  try{
+    const metadata = readR3MetadataInput('#folderMetadata');
+    const payload = {
+      id: $('#folderPullId')?.value.trim() || '',
+      kind: 'folder',
+      path,
+      recursive: !!$('#folderRecursive')?.checked,
+      enabled: !!$('#folderPullEnabled')?.checked,
+      interval_seconds: Math.max(60, parseInt($('#folderPullInterval')?.value || '300', 10) || 300),
+      embed_model: getIngestEmbedModel(),
+      roles: getIngestRoleScopes(),
+      metadata
+    };
+    const saved = await apiPost('/api/pull-sources', payload);
+    if($('#folderPullId')) $('#folderPullId').value = saved.id || payload.id || '';
+    setStatus($('#folderPullStatus'), t('pull_saved'), 'ok');
+    await loadPullSources();
+  }catch(e){
+    setStatus($('#folderPullStatus'), t('error_prefix') + (e.message||String(e)), 'err');
+  }finally{
+    setLoading('#folderPullSaveBtn', false);
+  }
+}
+
+async function runPullSource(id){
+  if(!id) return;
+  setStatus($('#folderPullStatus'), t('importing'), '');
+  try{
+    const res = await apiPost('/api/pull-sources/run', {id});
+    setStatus($('#folderPullStatus'), `OK: ${res.files_seen || 0} geprüft · ${res.files_changed || 0} geändert · ${res.files_skipped || 0} übersprungen`, res.files_errored ? 'warn' : 'ok');
+    await refreshStats();
+  }catch(e){
+    setStatus($('#folderPullStatus'), t('error_prefix') + (e.message||String(e)), 'err');
+  }
+}
+
+async function deletePullSource(id){
+  if(!id) return;
+  try{
+    await apiPost('/api/pull-sources/delete', {id});
+    await loadPullSources();
+  }catch(e){
+    setStatus($('#folderPullStatus'), t('error_prefix') + (e.message||String(e)), 'err');
+  }
+}
+
+function renderCKANImportResults(payload){
+  const box = $('#ckanResults');
+  if(!box) return;
+  const datasets = Array.isArray(payload?.datasets) ? payload.datasets : [];
+  if(!datasets.length){
+    box.innerHTML = `<p class="muted">${escHtml(uiLang === 'de' ? 'Keine Datensätze importiert.' : 'No datasets imported.')}</p>`;
+    return;
+  }
+  box.innerHTML = '';
+  const summary = document.createElement('div');
+  summary.className = 'ckan-summary';
+  summary.innerHTML = `
+    <div><strong>${datasets.length}</strong><span>${uiLang === 'de' ? 'Datensätze' : 'datasets'}</span></div>
+    <div><strong>${Number(payload.chunks||0)}</strong><span>Chunks</span></div>
+    <div><strong>${Number(payload.redactions||0)}</strong><span>${uiLang === 'de' ? 'Maskierungen' : 'redactions'}</span></div>`;
+  box.appendChild(summary);
+
+  datasets.forEach(item => {
+    const title = item.title || item.document_id || 'Dataset';
+    const chunks = Number(item.chunks || 0);
+    const url = item.source_url || '';
+    const div = document.createElement('div');
+    div.className = 'ckan-result';
+    const urlPart = url ? `<a href="${escHtml(url)}" target="_blank" rel="noopener">${escHtml(url)}</a>` : `<span class="muted">-</span>`;
+    div.innerHTML = `
+      <div class="ckan-result-main">
+        <div class="ckan-result-title">${escHtml(title)}</div>
+        <div class="ckan-result-meta">${chunks} Chunks · ${urlPart}</div>
+      </div>
+      <button class="btn-small" type="button">${escHtml(uiLang === 'de' ? 'Suchen' : 'Search')}</button>`;
+    div.querySelector('button')?.addEventListener('click', ()=>{
+      showTab('main', 'search');
+      const search = $('#searchQ');
+      if(search){
+        search.value = title;
+        runSearch();
+      }
+    });
+    box.appendChild(div);
+  });
+}
+
+async function importCKAN(){
+  const portal = $('#ckanPortalUrl')?.value.trim() || '';
+  const query = $('#ckanQuery')?.value.trim() || '';
+  const packageId = $('#ckanPackageId')?.value.trim() || '';
+  const limitRaw = $('#ckanLimit')?.value.trim() || '10';
+  const limit = Math.max(1, Math.min(50, parseInt(limitRaw, 10) || 10));
+  if(!portal){
+    setStatus($('#ckanStatus'), t('ckan_need_portal'), 'err');
+    return;
+  }
+  if(!query && !packageId){
+    setStatus($('#ckanStatus'), t('ckan_need_query'), 'err');
+    return;
+  }
+
+  setLoading('#ckanBtn', true);
+  setStatus($('#ckanStatus'), t('importing'), '');
+  const results = $('#ckanResults');
+  if(results) results.innerHTML = '';
+  try{
+    const embedModel = getIngestEmbedModel();
+    const roles = getIngestRoleScopes();
+    const payload = {
+      portal_url: portal,
+      query,
+      package_id: packageId,
+      limit,
+      embed_model: embedModel,
+      roles
+    };
+    const r = await apiPost('/api/import/ckan', payload);
+    const datasetCount = Array.isArray(r.datasets) ? r.datasets.length : Number(r.processed || 0);
+    setStatus($('#ckanStatus'), datasetCount ? t('ckan_done', datasetCount, Number(r.chunks || 0)) : t('ckan_empty'), datasetCount ? 'ok' : 'warn');
+    renderCKANImportResults(r);
+    await refreshStats();
+  }catch(e){
+    setStatus($('#ckanStatus'), t('error_prefix') + (e.message||String(e)), 'err');
+  }finally{
+    setLoading('#ckanBtn', false);
   }
 }
 
@@ -3628,12 +3878,19 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#urlBtn').addEventListener('click', addURL);
   $('#textBtn').addEventListener('click', addText);
   $('#folderBtn').addEventListener('click', addFolder);
+  if($('#folderPullSaveBtn')) $('#folderPullSaveBtn').addEventListener('click', savePullSource);
+  if($('#folderPullRefreshBtn')) $('#folderPullRefreshBtn').addEventListener('click', loadPullSources);
+  if($('#ckanBtn')) $('#ckanBtn').addEventListener('click', importCKAN);
   if($('#clearChunksBtn')){
     $('#clearChunksBtn').addEventListener('click', clearChunks);
   }
   onEnter($('#wikiArticle'), addWiki);
   onEnter($('#wikiLang'), addWiki);
   onEnter($('#scrapeUrl'), addURL);
+  onEnter($('#ckanPortalUrl'), importCKAN);
+  onEnter($('#ckanQuery'), importCKAN);
+  onEnter($('#ckanPackageId'), importCKAN);
+  onEnter($('#ckanLimit'), importCKAN);
   onEnter($('#textTitle'), addText);
   // Allow Ctrl/Cmd+Enter on textarea to send
   const txtArea = $('#textContent');
@@ -3647,6 +3904,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   }
   onEnter($('#folderPath'), addFolder);
   initUpload();
+  await loadPullSources();
 
   // Sidebar new chat
   $('#newChatBtn').addEventListener('click', newChat);

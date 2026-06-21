@@ -1754,6 +1754,178 @@ button { font-family: var(--font); cursor: pointer }
   font-size: 12px;
 }
 
+.ckan-admin-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.ckan-admin-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.ckan-admin-head h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.ckan-admin-head .hint { margin: 0 }
+
+.ckan-grid,
+.ckan-mode-grid {
+  display: grid;
+  gap: 12px;
+}
+.ckan-grid { grid-template-columns: minmax(0, 1fr) 92px }
+.ckan-mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+.ckan-grid label,
+.ckan-mode-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ckan-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ckan-actions .tool-status { margin: 0 }
+
+.ckan-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ckan-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.ckan-summary > div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel2);
+}
+.ckan-summary strong {
+  display: block;
+  font-size: 18px;
+  line-height: 1.1;
+}
+.ckan-summary span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.ckan-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+.ckan-result-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.ckan-result-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+.ckan-result-meta a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.ckan-result-meta a:hover { text-decoration: underline }
+
+.folder-pull-admin {
+  margin: 8px 16px 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.folder-pull-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px auto;
+  gap: 10px;
+  align-items: end;
+}
+.folder-pull-grid label:not(.inline-check) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.folder-pull-enabled { margin-bottom: 7px }
+.pull-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pull-source-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+.pull-source-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.pull-source-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+.pull-source-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .ckan-grid,
+  .ckan-mode-grid,
+  .ckan-summary,
+  .folder-pull-grid { grid-template-columns: 1fr }
+  .ckan-result {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .pull-source-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 /* ─── Narrow / fixed-width input (e.g. lang code) ───────────────────── */
 
 .input-narrow { max-width: 62px !important; min-width: 0; width: 62px }

@@ -199,6 +199,7 @@
       <button class="sidebar-tab" data-ingest-tab="text" role="tab" aria-selected="false" aria-controls="ingest-text" id="tab-text" title="Enter text directly to embed into the knowledge base"><span data-i18n="text">Text</span></button>
       <button class="sidebar-tab" data-ingest-tab="upload" role="tab" aria-selected="false" aria-controls="ingest-upload" id="tab-upload" title="Upload a file to the knowledge base"><span data-i18n="upload">Upload</span></button>
       <button class="sidebar-tab" data-ingest-tab="folder" role="tab" aria-selected="false" aria-controls="ingest-folder" id="tab-folder" title="Import all supported files from a server folder"><span data-i18n="folder">Ordner</span></button>
+      <button class="sidebar-tab" data-ingest-tab="ckan" role="tab" aria-selected="false" aria-controls="ingest-ckan" id="tab-ckan" title="Import dataset metadata from a CKAN open data portal"><span data-i18n="open_data">Open Data</span></button>
     </div>
 
     <div class="ingest-embed-row">
@@ -272,7 +273,78 @@
         </label>
         <button class="btn-primary" id="folderBtn" aria-label="Import folder" title="Import all supported files from the specified folder"><span data-i18n="import">Importieren</span></button>
       </div>
+      <div class="folder-pull-admin">
+        <div class="folder-pull-grid">
+          <label for="folderPullId">
+            <span data-i18n="pull_source_id">Pull-ID</span>
+            <input type="text" id="folderPullId" placeholder="optional" aria-label="Pull source ID" title="Stable ID for this scheduled pull source" data-i18n-placeholder="ckan_package_placeholder">
+          </label>
+          <label for="folderPullInterval">
+            <span data-i18n="pull_interval">Intervall Sekunden</span>
+            <input type="text" id="folderPullInterval" value="300" inputmode="numeric" aria-label="Pull interval seconds" title="How often the directory should be checked; minimum 60 seconds">
+          </label>
+          <label class="inline-check folder-pull-enabled" for="folderPullEnabled" title="Enable scheduled checking for this folder">
+            <input type="checkbox" id="folderPullEnabled" checked>
+            <span data-i18n="enabled">Aktiv</span>
+          </label>
+        </div>
+        <label for="folderMetadata" data-i18n="r3_metadata_json">R³-Metadaten JSON (optional)</label>
+        <textarea id="folderMetadata" rows="4" spellcheck="false" placeholder='{"source_system":"sharepoint","source_type":"official_doc","business_owner":"it","sensitivity":"internal","trust_level":0.8}' aria-label="R3 metadata JSON" title="Optional R3 metadata applied to imported folder documents"></textarea>
+        <div class="actions-row">
+          <button class="btn-secondary" id="folderPullSaveBtn" aria-label="Save pull source" title="Save this directory as a scheduled pull source"><span data-i18n="save_pull_source">Pull-Quelle speichern</span></button>
+          <button class="btn-secondary" id="folderPullRefreshBtn" aria-label="Refresh pull sources" title="Refresh configured pull sources"><span data-i18n="refresh">Aktualisieren</span></button>
+        </div>
+        <div id="folderPullStatus" role="status" aria-live="polite"></div>
+        <div id="folderPullSources" class="pull-source-list" role="region" aria-live="polite" aria-label="Configured pull sources"></div>
+      </div>
       <div id="folderStatus" role="status" aria-live="polite"></div>
+    </div>
+
+    <div id="ingest-ckan" style="display:none" role="tabpanel" aria-labelledby="tab-ckan">
+      <div class="ckan-admin-panel">
+        <div class="ckan-admin-head">
+          <div>
+            <h3 data-i18n="ckan_title">Open-Data-Portal importieren</h3>
+            <p class="hint" data-i18n="ckan_hint">Importiert CKAN-Datensatzkarten mit Lizenz, Herausgeber, Ressourcen und Schemafeldern.</p>
+          </div>
+          <span class="panel-badge" data-i18n="ckan_badge">Metadaten zuerst</span>
+        </div>
+
+        <div class="ckan-grid">
+          <label for="ckanPortalUrl">
+            <span data-i18n="ckan_portal">CKAN-Portal</span>
+            <input type="text" id="ckanPortalUrl" list="ckanPortalExamples" placeholder="https://www.data.gv.at" inputmode="url" autocomplete="url" aria-label="CKAN portal URL" title="Base URL of the CKAN portal" data-i18n-placeholder="ckan_portal_placeholder">
+            <datalist id="ckanPortalExamples">
+              <option value="https://www.data.gv.at"></option>
+              <option value="https://www.govdata.de"></option>
+              <option value="https://catalog.data.gov"></option>
+              <option value="https://opendata.swiss"></option>
+            </datalist>
+          </label>
+          <label for="ckanLimit">
+            <span data-i18n="ckan_limit">Limit</span>
+            <input type="text" id="ckanLimit" value="10" inputmode="numeric" aria-label="Maximum datasets to import" title="Maximum number of datasets to import">
+          </label>
+        </div>
+
+        <div class="ckan-mode-grid">
+          <label for="ckanQuery">
+            <span data-i18n="ckan_query">Suche</span>
+            <input type="text" id="ckanQuery" placeholder="z.B. Luftqualität" aria-label="CKAN package search query" title="Search term for CKAN package_search" data-i18n-placeholder="ckan_query_placeholder">
+          </label>
+          <label for="ckanPackageId">
+            <span data-i18n="ckan_package">Oder Package-ID</span>
+            <input type="text" id="ckanPackageId" placeholder="optional" aria-label="CKAN package ID" title="Known CKAN package id or name" data-i18n-placeholder="ckan_package_placeholder">
+          </label>
+        </div>
+
+        <div class="ckan-actions">
+          <button class="btn-primary" id="ckanBtn" aria-label="Import CKAN metadata" title="Import CKAN dataset metadata into the knowledge base"><span data-i18n="ckan_import">Dataset-Karten importieren</span></button>
+          <div id="ckanStatus" role="status" aria-live="polite"></div>
+        </div>
+
+        <div id="ckanResults" class="ckan-results" role="region" aria-live="polite" aria-label="CKAN import results"></div>
+      </div>
     </div>
 
     <!-- Maintenance Section at bottom of Ingest -->

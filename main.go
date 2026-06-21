@@ -171,14 +171,15 @@ type appSettings struct {
 	// Allowed values: "auto" (follow user input), "settings" (force Lang).
 	ResponseLanguageMode string `json:"response_language_mode"`
 	// RedactPII redacts common personally identifiable data on ingest.
-	RedactPII  bool           `json:"redact_pii"`
-	ChunkSize  int            `json:"chunk_size"`
-	K          int            `json:"k"`
-	CustomAPIs []customAPI    `json:"custom_apis"`
-	Modules    []moduleConfig `json:"modules"`
-	Personas   []persona      `json:"personas"`
-	APIUsers   []adminAPIUser `json:"api_users"`
-	APIRoutes  []apiRouteRule `json:"api_routes"`
+	RedactPII   bool            `json:"redact_pii"`
+	ChunkSize   int             `json:"chunk_size"`
+	K           int             `json:"k"`
+	CustomAPIs  []customAPI     `json:"custom_apis"`
+	Modules     []moduleConfig  `json:"modules"`
+	PullSources []ragPullSource `json:"pull_sources"`
+	Personas    []persona       `json:"personas"`
+	APIUsers    []adminAPIUser  `json:"api_users"`
+	APIRoutes   []apiRouteRule  `json:"api_routes"`
 	// VectorSearchThreshold is the minimum cosine-similarity score (0–1) for a
 	// primary retrieval hit to be included in the answer context. Defaults to
 	// 0.60 when zero. Neighbor chunks (Score=-1) are always included.
@@ -972,6 +973,7 @@ func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang strin
 		K:                    k,
 		CustomAPIs:           []customAPI{},
 		Modules:              defaultModules(),
+		PullSources:          []ragPullSource{},
 		Personas:             defaultPersonas(),
 		APIUsers:             []adminAPIUser{},
 		APIRoutes:            defaultAPIRouteRules(),
@@ -1046,6 +1048,12 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 		ss.s.Personas = defaultPersonas()
 	}
 	ss.s.Modules = normalizeModules(ss.s.Modules)
+	if ss.s.PullSources == nil {
+		ss.s.PullSources = []ragPullSource{}
+	}
+	for i := range ss.s.PullSources {
+		ss.s.PullSources[i] = normalizePullSource(ss.s.PullSources[i])
+	}
 	for i := range ss.s.APIUsers {
 		ss.s.APIUsers[i].Role = normalizeDemoRole(ss.s.APIUsers[i].Role)
 	}
@@ -2973,8 +2981,39 @@ func (r *ragSystem) addChunks(article string, chunks []string, embedModel string
 // addChunksWithRoles stores chunks with an explicit role visibility scope.
 // If roles are omitted, the current active role is used.
 func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedModel string, roles []string) error {
+	return r.addChunksWithMetadata(article, chunks, embedModel, roles, R3IngestMetadata{})
+}
+
+func clampUnitInterval(v float64) float64 {
+	switch {
+	case v < 0:
+		return 0
+	case v > 1:
+		return 1
+	default:
+		return v
+	}
+}
+
+type ingestWriteResult struct {
+	DocumentID   string `json:"document_id"`
+	Status       string `json:"status"`
+	Chunks       int    `json:"chunks"`
+	ContentHash  string `json:"content_hash"`
+	PreviousHash string `json:"previous_hash,omitempty"`
+}
+
+// addChunksWithMetadata stores chunks with explicit R3 provenance metadata.
+// Existing callers use addChunks/addChunksWithRoles and receive the historical
+// defaults; source adapters can use this path to preserve external provenance.
+func (r *ragSystem) addChunksWithMetadata(article string, chunks []string, embedModel string, roles []string, meta R3IngestMetadata) error {
+	_, err := r.addChunksWithMetadataResult(article, chunks, embedModel, roles, meta)
+	return err
+}
+
+func (r *ragSystem) addChunksWithMetadataResult(article string, chunks []string, embedModel string, roles []string, meta R3IngestMetadata) (ingestWriteResult, error) {
 	if len(chunks) == 0 {
-		return nil
+		return ingestWriteResult{Status: "empty"}, nil
 	}
 	activeRole := "it"
 	if settings != nil {
@@ -2982,10 +3021,54 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	}
 	normRoles := normalizeRoleScopes(roles, activeRole)
 	roleScope := serializeRoleScope(normRoles)
-	documentID := stableContentHash(article)
-	nowTS := time.Now().UTC().Format(time.RFC3339)
-	sourceType := normalizeR3SourceType(article)
+	documentID := strings.TrimSpace(meta.DocumentID)
+	if documentID == "" {
+		documentID = stableContentHash(article)
+	}
+	contentHash := documentFingerprintFromChunks(chunks)
+	now := time.Now().UTC()
+	importedAt := now
+	if !meta.ImportedAt.IsZero() {
+		importedAt = meta.ImportedAt.UTC()
+	}
+	updatedAt := now
+	if !meta.UpdatedAt.IsZero() {
+		updatedAt = meta.UpdatedAt.UTC()
+	}
+	nowTS := importedAt.Format(time.RFC3339)
+	updatedTS := updatedAt.Format(time.RFC3339)
+	sourceType := strings.TrimSpace(meta.SourceType)
+	if sourceType == "" {
+		sourceType = normalizeR3SourceType(article)
+	}
+	sourceSystem := strings.TrimSpace(meta.SourceSystem)
+	if sourceSystem == "" {
+		sourceSystem = "tinyrag"
+	}
+	sourceTitle := strings.TrimSpace(meta.SourceTitle)
+	if sourceTitle == "" {
+		sourceTitle = article
+	}
+	sourceObjectID := strings.TrimSpace(meta.SourceObjectID)
+	if sourceObjectID == "" {
+		sourceObjectID = article
+	}
+	sourceVersion := strings.TrimSpace(meta.SourceVersion)
+	if sourceVersion == "" {
+		sourceVersion = "v1"
+	}
+	aclGroups := strings.TrimSpace(meta.ACLGroups)
+	if aclGroups == "" {
+		aclGroups = roleScope
+	}
+	businessOwner := strings.TrimSpace(meta.BusinessOwner)
+	if businessOwner == "" {
+		businessOwner = activeRole
+	}
 	defaultSourceQuality := sourceTypeQualityDefault(sourceType)
+	if meta.SourceQuality > 0 {
+		defaultSourceQuality = clampUnitInterval(meta.SourceQuality)
+	}
 	defaultTrust := 0.65
 	if sourceType == "chat" {
 		defaultTrust = 0.40
@@ -2993,17 +3076,70 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	if sourceType == "ticket" {
 		defaultTrust = 0.50
 	}
+	if meta.TrustLevel > 0 {
+		defaultTrust = clampUnitInterval(meta.TrustLevel)
+	}
 	defaultFresh := 1.0
+	if meta.FreshnessScore > 0 {
+		defaultFresh = clampUnitInterval(meta.FreshnessScore)
+	} else if !meta.UpdatedAt.IsZero() {
+		defaultFresh = freshnessDecayScore(updatedAt, now)
+	}
 	defaultQuality := 0.65
+	if meta.QualityScore > 0 {
+		defaultQuality = clampUnitInterval(meta.QualityScore)
+	}
 	defaultFeedback := 0.50
+	if meta.FeedbackScore > 0 {
+		defaultFeedback = clampUnitInterval(meta.FeedbackScore)
+	}
 	sensitivity := "internal"
 	if (SensitivityPolicy{}).MustPseudonymize(detectSensitivityClass(strings.Join(chunks, "\n"))) {
 		sensitivity = "confidential"
 	}
-	// If this article already exists, skip to keep imports idempotent.
-	if exists, err := r.chunkStore.checkArticleExists(documentID, roleScope); err == nil && exists {
-		fmt.Printf("skip addChunks: article '%s' already present\n", article)
-		return nil
+	if strings.TrimSpace(meta.Sensitivity) != "" {
+		sensitivity = strings.ToLower(strings.TrimSpace(meta.Sensitivity))
+	}
+	openLinkAllowed := true
+	if meta.OpenLinkAllowedSet {
+		openLinkAllowed = meta.OpenLinkAllowed
+	}
+	updateMode := normalizeIngestUpdateMode(meta.UpdateMode)
+	existingHash, exists, hashErr := r.documentContentHash(documentID, roleScope)
+	if hashErr != nil {
+		return ingestWriteResult{}, hashErr
+	}
+	result := ingestWriteResult{
+		DocumentID:   documentID,
+		Status:       "inserted",
+		Chunks:       len(chunks),
+		ContentHash:  contentHash,
+		PreviousHash: existingHash,
+	}
+	if exists {
+		switch updateMode {
+		case "upsert":
+			if existingHash == contentHash {
+				result.Status = "skipped_unchanged"
+				result.Chunks = 0
+				fmt.Printf("skip addChunks: document '%s' unchanged\n", article)
+				return result, nil
+			}
+			if err := r.deleteDocumentChunks(documentID, roleScope); err != nil {
+				return ingestWriteResult{}, err
+			}
+			result.Status = "updated"
+		case "replace":
+			if err := r.deleteDocumentChunks(documentID, roleScope); err != nil {
+				return ingestWriteResult{}, err
+			}
+			result.Status = "updated"
+		default:
+			result.Status = "skipped_existing"
+			result.Chunks = 0
+			fmt.Printf("skip addChunks: article '%s' already present\n", article)
+			return result, nil
+		}
 	}
 	batchSize := 16
 
@@ -3017,7 +3153,7 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 		// Embed without holding DB lock.
 		vecs, err := r.getLM().embed(batch)
 		if err != nil {
-			return fmt.Errorf("embed batch %d: %w", i/batchSize, err)
+			return ingestWriteResult{}, fmt.Errorf("embed batch %d: %w", i/batchSize, err)
 		}
 		if r.dim == 0 && len(vecs) > 0 {
 			r.dim = len(vecs[0])
@@ -3040,14 +3176,14 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 				RoleScope:       roleScope,
 				ChunkID:         fmt.Sprintf("%s:%d", documentID, idx),
 				DocumentID:      documentID,
-				SourceSystem:    "tinyrag",
+				SourceSystem:    sourceSystem,
 				SourceType:      sourceType,
-				SourceTitle:     article,
-				SourceURL:       "",
-				SourceObjectID:  article,
-				SourceVersion:   "v1",
-				ACLGroups:       roleScope,
-				BusinessOwner:   activeRole,
+				SourceTitle:     sourceTitle,
+				SourceURL:       strings.TrimSpace(meta.SourceURL),
+				SourceObjectID:  sourceObjectID,
+				SourceVersion:   sourceVersion,
+				ACLGroups:       aclGroups,
+				BusinessOwner:   businessOwner,
 				Sensitivity:     sensitivity,
 				TrustLevel:      defaultTrust,
 				SourceQuality:   defaultSourceQuality,
@@ -3055,13 +3191,13 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 				QualityScore:    defaultQuality,
 				FeedbackScore:   defaultFeedback,
 				ImportedAt:      nowTS,
-				UpdatedAt:       nowTS,
+				UpdatedAt:       updatedTS,
 				ContentHash:     stableContentHash(batch[j]),
-				OpenLinkAllowed: true,
+				OpenLinkAllowed: openLinkAllowed,
 			}
 		}
 		if err := r.chunkStore.insertChunks(sc); err != nil {
-			return err
+			return ingestWriteResult{}, err
 		}
 
 		fmt.Printf("  embedded+stored %d/%d chunks\n", end, len(chunks))
@@ -3070,16 +3206,39 @@ func (r *ragSystem) addChunksWithRoles(article string, chunks []string, embedMod
 	if err := r.save(); err != nil {
 		log.Printf("WARN: save failed: %v", err)
 	}
+	provenance := strings.TrimSpace(meta.Provenance)
+	if provenance == "" {
+		provenance = strings.TrimSpace(meta.SourceURL)
+	}
+	if provenance == "" {
+		provenance = article
+	}
+	ownership := strings.TrimSpace(meta.Ownership)
+	if ownership == "" {
+		ownership = businessOwner
+	}
+	trustTier := strings.TrimSpace(meta.TrustTier)
+	if trustTier == "" {
+		trustTier = fmt.Sprintf("%.2f", defaultTrust)
+	}
+	lifecycle := strings.TrimSpace(meta.Lifecycle)
+	if lifecycle == "" {
+		lifecycle = "active"
+	}
+	retentionPolicy := strings.TrimSpace(meta.RetentionPolicy)
+	if retentionPolicy == "" {
+		retentionPolicy = "default"
+	}
 	_ = r.upsertR3Source(SourceRegistryRecord{
 		DocumentID:      documentID,
-		Provenance:      article,
-		Ownership:       activeRole,
-		TrustTier:       fmt.Sprintf("%.2f", defaultTrust),
-		Lifecycle:       "active",
-		RetentionPolicy: "default",
-		ACLMetadata:     roleScope,
+		Provenance:      provenance,
+		Ownership:       ownership,
+		TrustTier:       trustTier,
+		Lifecycle:       lifecycle,
+		RetentionPolicy: retentionPolicy,
+		ACLMetadata:     aclGroups,
 	})
-	return nil
+	return result, nil
 }
 
 // docCount returns the total number of stored chunks.
@@ -7399,10 +7558,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Path       string   `json:"path"`
-			Recursive  bool     `json:"recursive"`
-			EmbedModel string   `json:"embed_model"`
-			Roles      []string `json:"roles"`
+			Path       string           `json:"path"`
+			Recursive  bool             `json:"recursive"`
+			EmbedModel string           `json:"embed_model"`
+			Roles      []string         `json:"roles"`
+			Metadata   R3IngestMetadata `json:"metadata"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
 			http.Error(w, "missing path", 400)
@@ -7418,15 +7578,6 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 
-		allowedExts := map[string]bool{
-			".txt": true, ".md": true, ".csv": true, ".json": true,
-			".xml": true, ".html": true, ".log": true, ".htm": true,
-			".yaml": true, ".yml": true, ".toml": true, ".ini": true,
-			".cfg": true, ".conf": true, ".sql": true, ".go": true,
-			".py": true, ".js": true, ".ts": true, ".rs": true,
-			".c": true, ".h": true, ".cpp": true, ".java": true,
-		}
-
 		s := settings.get()
 		if !permissionsForRole(s.ActiveRole).CanBulkIngest {
 			http.Error(w, fmt.Sprintf("role %s is not allowed to run bulk ingest", demoRoleLabel(s.ActiveRole)), 403)
@@ -7437,63 +7588,268 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if req.EmbedModel != "" {
 			em = req.EmbedModel
 		}
-		var totalFiles, totalChars, totalChunksN int
-		var errors []string
-
-		walkFn := func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() {
-				if !req.Recursive && path != req.Path {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			ext := strings.ToLower(filepath.Ext(d.Name()))
-			if !allowedExts[ext] {
-				return nil
-			}
-			fi, err := d.Info()
-			if err != nil || fi.Size() > 5*1024*1024 {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				errors = append(errors, filepath.Base(path)+": "+err.Error())
-				return nil
-			}
-			text := string(data)
-			if strings.TrimSpace(text) == "" {
-				return nil
-			}
-			relPath, _ := filepath.Rel(req.Path, path)
-			if relPath == "" {
-				relPath = filepath.Base(path)
-			}
-			source := "folder:" + relPath
-			chunks, _ := chunksForIngest(text, s)
-			if err := rag.addChunksWithRoles(source, chunks, em, roleScopes); err != nil {
-				errors = append(errors, relPath+": "+err.Error())
-				return nil
-			}
-			totalFiles++
-			totalChars += len(text)
-			totalChunksN += len(chunks)
-			return nil
-		}
-
-		filepath.WalkDir(req.Path, walkFn)
+		req.Metadata.UpdateMode = firstNonEmpty(req.Metadata.UpdateMode, "upsert")
+		scan := scanDirectoryIntoRAG(rag, ragFolderScanRequest{
+			Path:       req.Path,
+			Recursive:  req.Recursive,
+			EmbedModel: em,
+			Roles:      roleScopes,
+			Metadata:   req.Metadata,
+		}, "")
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"files":        totalFiles,
-			"total_chars":  totalChars,
-			"total_chunks": totalChunksN,
-			"total":        rag.docCountForRole(s.ActiveRole),
-			"errors":       errors,
-			"roles":        roleScopes,
+			"files":         scan.FilesChanged,
+			"files_seen":    scan.FilesSeen,
+			"files_skipped": scan.FilesSkipped,
+			"files_errored": scan.FilesErrored,
+			"total_chars":   scan.TotalChars,
+			"total_chunks":  scan.TotalChunks,
+			"total":         rag.docCountForRole(s.ActiveRole),
+			"errors":        scan.Errors,
+			"results":       scan.Results,
+			"roles":         roleScopes,
 		})
+	}))
+
+	// POST /api/ingest/push — push one or more documents with optional R3 metadata.
+	mux.HandleFunc("/api/ingest/push", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanBulkIngest {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to run bulk ingest", demoRoleLabel(s.ActiveRole)), http.StatusForbidden)
+			return
+		}
+		var req ragPushIngestRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		docs := req.Documents
+		if len(docs) == 0 {
+			docs = []ragIngestDocument{{
+				Source:     req.Source,
+				Title:      req.Title,
+				Text:       req.Text,
+				EmbedModel: req.EmbedModel,
+				Roles:      req.Roles,
+				Metadata:   req.Metadata,
+			}}
+		}
+		fallbackEmbed := firstNonEmpty(req.EmbedModel, s.EmbedModel)
+		fallbackRoles := normalizeRoleScopes(req.Roles, s.ActiveRole)
+		results := make([]ragIngestDocumentResult, 0, len(docs))
+		var changed, skipped, failed, chunks int
+		for _, doc := range docs {
+			doc.Metadata = mergeR3Metadata(req.Metadata, doc.Metadata)
+			if doc.Text == "" {
+				res := ragIngestDocumentResult{Source: doc.Source, Title: doc.Title, Status: "error", Error: "missing text"}
+				results = append(results, res)
+				failed++
+				continue
+			}
+			res := ingestDocument(rag, doc, fallbackEmbed, fallbackRoles, s)
+			results = append(results, res)
+			chunks += res.Chunks
+			switch res.Status {
+			case "inserted", "updated":
+				changed++
+			case "error":
+				failed++
+			default:
+				skipped++
+			}
+		}
+		rag.logR3Audit(AuditEvent{
+			EventType:   "ingest_push",
+			Actor:       s.ActiveRole,
+			EntityType:  "ingest_batch",
+			EntityID:    stableContentHash(fmt.Sprint(time.Now().UnixNano()))[:16],
+			Decision:    "allow",
+			PolicyClass: "ingestion",
+			Details:     fmt.Sprintf("docs=%d changed=%d skipped=%d failed=%d meta=%s", len(results), changed, skipped, failed, encodeR3MetadataForAudit(req.Metadata)),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"documents": results,
+			"changed":   changed,
+			"skipped":   skipped,
+			"failed":    failed,
+			"chunks":    chunks,
+			"total":     rag.docCountForRole(s.ActiveRole),
+		})
+	}))
+
+	// POST /api/ingest/pull-folder — run a pull-style directory scan once.
+	mux.HandleFunc("/api/ingest/pull-folder", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanBulkIngest {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to run bulk ingest", demoRoleLabel(s.ActiveRole)), http.StatusForbidden)
+			return
+		}
+		var req ragFolderScanRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Path) == "" {
+			http.Error(w, "missing path", http.StatusBadRequest)
+			return
+		}
+		info, err := os.Stat(req.Path)
+		if err != nil {
+			http.Error(w, "path not found: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !info.IsDir() {
+			http.Error(w, "path is not a directory", http.StatusBadRequest)
+			return
+		}
+		if req.EmbedModel == "" {
+			req.EmbedModel = s.EmbedModel
+		}
+		req.Roles = normalizeRoleScopes(req.Roles, s.ActiveRole)
+		req.Metadata.UpdateMode = firstNonEmpty(req.Metadata.UpdateMode, "upsert")
+		res := scanDirectoryIntoRAG(rag, req, "")
+		rag.logR3Audit(AuditEvent{
+			EventType:   "ingest_pull_folder",
+			Actor:       s.ActiveRole,
+			EntityType:  "folder",
+			EntityID:    req.Path,
+			Decision:    "allow",
+			PolicyClass: "ingestion",
+			Details:     fmt.Sprintf("seen=%d changed=%d skipped=%d errors=%d meta=%s", res.FilesSeen, res.FilesChanged, res.FilesSkipped, res.FilesErrored, encodeR3MetadataForAudit(req.Metadata)),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
+	}))
+
+	// GET/POST /api/pull-sources — list or upsert configured pull sources.
+	mux.HandleFunc("/api/pull-sources", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			sources := settings.get().PullSources
+			if sources == nil {
+				sources = []ragPullSource{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(sources)
+		case http.MethodPost:
+			var src ragPullSource
+			if err := json.NewDecoder(r.Body).Decode(&src); err != nil {
+				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			src = normalizePullSource(src)
+			if src.Kind != "folder" {
+				http.Error(w, "only folder pull sources are supported", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(src.Path) == "" {
+				http.Error(w, "missing path", http.StatusBadRequest)
+				return
+			}
+			settings.mu.Lock()
+			replaced := false
+			for i := range settings.s.PullSources {
+				if settings.s.PullSources[i].ID == src.ID {
+					settings.s.PullSources[i] = src
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				settings.s.PullSources = append(settings.s.PullSources, src)
+			}
+			err := settings.saveLocked()
+			settings.mu.Unlock()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(src)
+		default:
+			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	mux.HandleFunc("/api/pull-sources/delete", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		settings.mu.Lock()
+		next := settings.s.PullSources[:0]
+		for _, src := range settings.s.PullSources {
+			if src.ID != req.ID {
+				next = append(next, src)
+			}
+		}
+		settings.s.PullSources = next
+		err := settings.saveLocked()
+		settings.mu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+
+	mux.HandleFunc("/api/pull-sources/run", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		s := settings.get()
+		if !permissionsForRole(s.ActiveRole).CanBulkIngest {
+			http.Error(w, fmt.Sprintf("role %s is not allowed to run bulk ingest", demoRoleLabel(s.ActiveRole)), http.StatusForbidden)
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.ID) == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		var src ragPullSource
+		found := false
+		for _, candidate := range settings.get().PullSources {
+			if candidate.ID == req.ID {
+				src = normalizePullSource(candidate)
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "pull source not found", http.StatusNotFound)
+			return
+		}
+		if src.Kind != "folder" {
+			http.Error(w, "only folder pull sources are supported", http.StatusBadRequest)
+			return
+		}
+		res := scanDirectoryIntoRAG(rag, ragFolderScanRequest{
+			Path:       src.Path,
+			Recursive:  src.Recursive,
+			EmbedModel: firstNonEmpty(src.EmbedModel, s.EmbedModel),
+			Roles:      normalizeRoleScopes(src.Roles, s.ActiveRole),
+			Metadata:   src.Metadata,
+		}, src.ID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(res)
 	}))
 
 	// POST /api/add-text
@@ -8290,6 +8646,115 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"rows_imported": result.RowsInserted,
 			"chunks":        len(chunks),
 			"columns":       result.ColumnNames,
+		})
+	}))
+
+	// POST /api/import/ckan — import CKAN/Open Knowledge metadata as governed
+	// dataset cards. This intentionally imports metadata and schema guidance,
+	// not raw resource files, so admins can stage source quality before bulk data.
+	mux.HandleFunc("/api/import/ckan", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var req ckanImportRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		portal, err := normalizeCKANPortalURL(req.PortalURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.PortalURL = portal
+		cursor := strings.TrimSpace(req.PackageID)
+		if cursor == "" {
+			cursor = strings.TrimSpace(req.Query)
+		}
+		job := ImportJob{
+			JobID:         newRequestID(),
+			SourceSystem:  "ckan_import",
+			Cursor:        portal + "|" + cursor,
+			Status:        ImportJobRunning,
+			StartedAt:     time.Now().UTC(),
+			UpdatedAt:     time.Now().UTC(),
+			IdempotencyID: stableContentHash("ckan|" + portal + "|" + cursor),
+		}
+		rag.upsertImportJob(job)
+
+		packages, _, fetchErr := fetchCKANPackages(r.Context(), newHTTPClient(30*time.Second), req)
+		if fetchErr != nil {
+			job.Status = ImportJobFailed
+			job.LastError = fetchErr.Error()
+			job.UpdatedAt = time.Now().UTC()
+			rag.upsertImportJob(job)
+			http.Error(w, "ckan fetch error: "+fetchErr.Error(), http.StatusBadGateway)
+			return
+		}
+
+		s := settings.get()
+		embedModel := strings.TrimSpace(req.EmbedModel)
+		if embedModel == "" {
+			embedModel = s.EmbedModel
+		}
+		var importedChunks, redactions int
+		importedDatasets := make([]map[string]any, 0, len(packages))
+		for _, pkg := range packages {
+			meta := ckanPackageR3Metadata(portal, pkg)
+			card := buildCKANDatasetCard(portal, pkg)
+			title := strings.TrimSpace(meta.SourceTitle)
+			if title == "" {
+				title = "CKAN dataset " + meta.SourceObjectID
+			}
+			chunks, reds := chunksForIngestWithDoc(card, s, meta.DocumentID, false)
+			redactions += reds
+			if err := rag.addChunksWithMetadata(title, chunks, embedModel, req.Roles, meta); err != nil {
+				job.Status = ImportJobFailed
+				job.LastError = err.Error()
+				job.Processed = len(importedDatasets)
+				job.Imported = importedChunks
+				job.UpdatedAt = time.Now().UTC()
+				rag.upsertImportJob(job)
+				http.Error(w, "ingest error: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			importedChunks += len(chunks)
+			importedDatasets = append(importedDatasets, map[string]any{
+				"title":       title,
+				"document_id": meta.DocumentID,
+				"source_url":  meta.SourceURL,
+				"chunks":      len(chunks),
+			})
+		}
+
+		doneAt := time.Now().UTC()
+		job.Status = ImportJobCompleted
+		job.Processed = len(packages)
+		job.Imported = importedChunks
+		job.Skipped = 0
+		job.LastHash = stableContentHash(fmt.Sprint(importedDatasets))
+		job.UpdatedAt = doneAt
+		job.CompletedAt = &doneAt
+		rag.upsertImportJob(job)
+		rag.logR3Audit(AuditEvent{
+			EventType:   "import_ckan",
+			Actor:       s.ActiveRole,
+			EntityType:  "import_job",
+			EntityID:    job.JobID,
+			Decision:    "allow",
+			PolicyClass: "ingestion",
+			Details:     portal + "|" + cursor,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"job_id":     job.JobID,
+			"portal_url": portal,
+			"datasets":   importedDatasets,
+			"processed":  len(packages),
+			"chunks":     importedChunks,
+			"redactions": redactions,
 		})
 	}))
 
@@ -9327,6 +9792,9 @@ func main() {
 	connectorExec := newConnectorExecutor(connectors)
 
 	if *web {
+		pullCtx, stopPullScheduler := context.WithCancel(context.Background())
+		defer stopPullScheduler()
+		startPullScheduler(pullCtx, rag, settings)
 		runWebServer(rag, *addr, settings, chats, customAPIs, personas, modules, connectors, connectorExec, llmAvailable, llmPingErr)
 		return
 	}

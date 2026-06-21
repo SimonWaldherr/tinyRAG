@@ -863,11 +863,27 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 			relPath, _ := filepath.Rel(root, path)
 			cfg := settings.get()
 			chunks, reds := chunksForIngest(text, cfg)
-			if err := rag.addChunks("module:"+mod.ID+":folder:"+relPath, chunks, embedModel); err != nil {
+			info, _ := d.Info()
+			meta := R3IngestMetadata{
+				DocumentID:      stableContentHash("module|" + mod.ID + "|" + relPath),
+				SourceSystem:    "pull:module:" + mod.ID,
+				SourceType:      "document",
+				SourceTitle:     relPath,
+				SourceObjectID:  path,
+				Provenance:      path,
+				RetentionPolicy: "source-sync",
+				UpdateMode:      "upsert",
+			}
+			if info != nil {
+				meta.UpdatedAt = info.ModTime().UTC()
+				meta.SourceVersion = fmt.Sprintf("%d:%d", info.ModTime().Unix(), info.Size())
+			}
+			res, err := rag.addChunksWithMetadataResult("module:"+mod.ID+":folder:"+relPath, chunks, embedModel, nil, meta)
+			if err != nil {
 				return nil
 			}
 			files++
-			chunksAdded += len(chunks)
+			chunksAdded += res.Chunks
 			redactions += reds
 			return nil
 		})
@@ -895,7 +911,22 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 	relPath, _ := filepath.Rel(root, target)
 	cfg := settings.get()
 	chunks, redactions := chunksForIngest(text, cfg)
-	if err := rag.addChunks("module:"+mod.ID+":folder:"+relPath, chunks, embedModel); err != nil {
+	meta := R3IngestMetadata{
+		DocumentID:      stableContentHash("module|" + mod.ID + "|" + relPath),
+		SourceSystem:    "pull:module:" + mod.ID,
+		SourceType:      "document",
+		SourceTitle:     relPath,
+		SourceObjectID:  target,
+		Provenance:      target,
+		RetentionPolicy: "source-sync",
+		UpdateMode:      "upsert",
+	}
+	if info != nil {
+		meta.UpdatedAt = info.ModTime().UTC()
+		meta.SourceVersion = fmt.Sprintf("%d:%d", info.ModTime().Unix(), info.Size())
+	}
+	res, err := rag.addChunksWithMetadataResult("module:"+mod.ID+":folder:"+relPath, chunks, embedModel, nil, meta)
+	if err != nil {
 		return moduleRunResult{}, err
 	}
 	return moduleRunResult{
@@ -906,7 +937,8 @@ func ingestFolderModulePath(mod moduleConfig, rag *ragSystem, embedModel, rel st
 		Text:     text,
 		Meta: map[string]any{
 			"path":       target,
-			"chunks":     len(chunks),
+			"chunks":     res.Chunks,
+			"status":     res.Status,
 			"redactions": redactions,
 		},
 	}, nil

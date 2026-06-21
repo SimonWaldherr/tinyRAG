@@ -53,6 +53,34 @@ type SourceRegistryRecord struct {
 	ACLMetadata     string `json:"acl_metadata"`
 }
 
+type R3IngestMetadata struct {
+	DocumentID         string    `json:"document_id,omitempty"`
+	SourceSystem       string    `json:"source_system,omitempty"`
+	SourceType         string    `json:"source_type,omitempty"`
+	SourceTitle        string    `json:"source_title,omitempty"`
+	SourceURL          string    `json:"source_url,omitempty"`
+	SourceObjectID     string    `json:"source_object_id,omitempty"`
+	SourceVersion      string    `json:"source_version,omitempty"`
+	ACLGroups          string    `json:"acl_groups,omitempty"`
+	BusinessOwner      string    `json:"business_owner,omitempty"`
+	Sensitivity        string    `json:"sensitivity,omitempty"`
+	TrustLevel         float64   `json:"trust_level,omitempty"`
+	SourceQuality      float64   `json:"source_quality,omitempty"`
+	FreshnessScore     float64   `json:"freshness_score,omitempty"`
+	QualityScore       float64   `json:"quality_score,omitempty"`
+	FeedbackScore      float64   `json:"feedback_score,omitempty"`
+	ImportedAt         time.Time `json:"imported_at,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	OpenLinkAllowed    bool      `json:"open_link_allowed,omitempty"`
+	OpenLinkAllowedSet bool      `json:"open_link_allowed_set,omitempty"`
+	Provenance         string    `json:"provenance,omitempty"`
+	Ownership          string    `json:"ownership,omitempty"`
+	TrustTier          string    `json:"trust_tier,omitempty"`
+	Lifecycle          string    `json:"lifecycle,omitempty"`
+	RetentionPolicy    string    `json:"retention_policy,omitempty"`
+	UpdateMode         string    `json:"update_mode,omitempty"`
+}
+
 type Citation struct {
 	ChunkID       string  `json:"chunk_id"`
 	DocumentID    string  `json:"document_id"`
@@ -206,8 +234,10 @@ func defaultRankingPolicy() RankingPolicy {
 
 func sourceTypeQualityDefault(sourceType string) float64 {
 	switch strings.ToLower(strings.TrimSpace(sourceType)) {
-	case "official_doc", "official", "documentation":
+	case "official_doc", "official", "documentation", "official_dataset", "data_dictionary":
 		return 0.95
+	case "open_dataset":
+		return 0.85
 	case "wiki":
 		return 0.75
 	case "ticket":
@@ -385,6 +415,8 @@ func normalizeR3SourceType(source string) string {
 		return "ticket"
 	case strings.Contains(s, "chat"), strings.Contains(s, "mail"):
 		return "chat"
+	case strings.Contains(s, "dataset"), strings.Contains(s, "ckan"), strings.Contains(s, "data package"), strings.Contains(s, "datapackage"):
+		return "open_dataset"
 	case strings.Contains(s, "doc"), strings.Contains(s, "manual"), strings.Contains(s, "handbook"), strings.Contains(s, "policy"):
 		return "official_doc"
 	default:

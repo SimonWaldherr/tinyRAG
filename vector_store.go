@@ -278,13 +278,13 @@ func (s *tinySQLChunkStore) insertChunks(chunks []storedChunk) error {
 			escapeSQ(vecJSON(c.Embedding)), escapeSQ(c.EmbedModel), escapeSQ(c.RoleScope),
 		))
 		vals = append(vals, fmt.Sprintf(
-			"(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s', '%s', '%s', 'tinyrag', '%s', '%s', '', '%s', '%s', '%s', '%s', '%s', %.4f, %.4f, %.4f, %.4f, %.4f, '%s', '%s', '%s', %d)",
+			"(%d, '%s', %d, '%s', VEC_FROM_JSON('%s'), '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', %.4f, %.4f, %.4f, %.4f, %.4f, '%s', '%s', '%s', %d)",
 			c.ID, escapeSQ(c.Article), c.ChunkIdx, escapeSQ(c.Content),
 			escapeSQ(vecJSON(c.Embedding)), escapeSQ(c.EmbedModel), escapeSQ(c.RoleScope),
 			escapeSQ(c.ChunkID), escapeSQ(c.DocumentID),
-			escapeSQ(c.SourceType), escapeSQ(c.SourceTitle),
-			escapeSQ(c.SourceObjectID), escapeSQ(c.SourceVersion),
-			escapeSQ(c.RoleScope), escapeSQ(c.BusinessOwner), escapeSQ(c.Sensitivity),
+			escapeSQ(c.SourceSystem), escapeSQ(c.SourceType), escapeSQ(c.SourceTitle),
+			escapeSQ(c.SourceURL), escapeSQ(c.SourceObjectID), escapeSQ(c.SourceVersion),
+			escapeSQ(c.ACLGroups), escapeSQ(c.BusinessOwner), escapeSQ(c.Sensitivity),
 			c.TrustLevel, c.SourceQuality, c.FreshnessScore, c.QualityScore, c.FeedbackScore,
 			escapeSQ(c.ImportedAt), escapeSQ(c.UpdatedAt), escapeSQ(c.ContentHash),
 			openInt,
