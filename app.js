@@ -522,6 +522,21 @@ const _translations = {
     auto_search: 'Auto-Search',
     deep_research: 'Deep Research',
     offline_mode: 'Offline',
+    agent_mode: 'Agent',
+    stats: 'Statistik',
+    stats_label: 'Nutzung der letzten Tage',
+    stats_empty: 'Noch keine Daten.',
+    stats_requests: 'Anfragen',
+    stats_success: 'Erfolgsquote',
+    stats_avg_duration: 'Ø Dauer',
+    stats_tokens: 'Tokens',
+    stats_tools: 'Tool-Aufrufe',
+    stats_per_day: 'Anfragen pro Tag',
+    stats_per_role: 'Nach Rolle',
+    stats_per_tool: 'Nach Tool',
+    stats_error: 'Fehler',
+    refresh: 'Aktualisieren',
+    export_no_chat: 'Kein aktiver Chat zum Exportieren.',
     chat_disclaimer: 'tinyRAG kann Fehler machen. Wichtige Informationen prüfen.',
     settings: 'Einstellungen',
     chat_empty_state: 'Stelle eine Frage an deine Wissensbasis.<br>Die Antwort basiert auf den gespeicherten Dokumenten.',
@@ -680,6 +695,21 @@ const _translations = {
     auto_search: 'Auto-Search',
     deep_research: 'Deep Research',
     offline_mode: 'Offline',
+    agent_mode: 'Agent',
+    stats: 'Statistics',
+    stats_label: 'Usage over the recent days',
+    stats_empty: 'No data yet.',
+    stats_requests: 'Requests',
+    stats_success: 'Success rate',
+    stats_avg_duration: 'Avg duration',
+    stats_tokens: 'Tokens',
+    stats_tools: 'Tool calls',
+    stats_per_day: 'Requests per day',
+    stats_per_role: 'By role',
+    stats_per_tool: 'By tool',
+    stats_error: 'Error',
+    refresh: 'Refresh',
+    export_no_chat: 'No active chat to export.',
     chat_disclaimer: 'tinyRAG can make mistakes. Check important info.',
     settings: 'Settings',
     chat_empty_state: 'Ask a question about your knowledge base.<br>The answer is based on stored documents.',
@@ -935,6 +965,85 @@ function showTab(group, name){
   }
 }
 
+// ── Usage statistics dashboard ────────────────────────────────────────────────
+
+function statCard(label, value){
+  const card = document.createElement('div');
+  card.className = 'stat-card';
+  const v = document.createElement('div');
+  v.className = 'stat-value';
+  v.textContent = value;
+  const l = document.createElement('div');
+  l.className = 'stat-label';
+  l.textContent = label;
+  card.appendChild(v); card.appendChild(l);
+  return card;
+}
+
+function statBarChart(title, entries, maxBars){
+  const wrap = document.createElement('div');
+  wrap.className = 'stat-chart';
+  const h = document.createElement('h3');
+  h.textContent = title;
+  wrap.appendChild(h);
+  const rows = entries.slice(0, maxBars || 14);
+  const max = Math.max(1, ...rows.map(e => e.value));
+  rows.forEach(e => {
+    const row = document.createElement('div');
+    row.className = 'stat-bar-row';
+    const label = document.createElement('span');
+    label.className = 'stat-bar-label';
+    label.textContent = e.label;
+    const track = document.createElement('div');
+    track.className = 'stat-bar-track';
+    const bar = document.createElement('div');
+    bar.className = 'stat-bar-fill' + (e.error ? ' error' : '');
+    bar.style.width = Math.max(2, Math.round(e.value / max * 100)) + '%';
+    track.appendChild(bar);
+    const val = document.createElement('span');
+    val.className = 'stat-bar-value';
+    val.textContent = e.value;
+    row.appendChild(label); row.appendChild(track); row.appendChild(val);
+    wrap.appendChild(row);
+  });
+  if(rows.length === 0){
+    const empty = document.createElement('p');
+    empty.className = 'stat-empty';
+    empty.textContent = t('stats_empty') || 'Noch keine Daten.';
+    wrap.appendChild(empty);
+  }
+  return wrap;
+}
+
+async function loadUsageStats(){
+  const cards = $('#statsCards');
+  const charts = $('#statsCharts');
+  if(!cards || !charts) return;
+  const days = $('#statsWindow')?.value || '30';
+  try{
+    const resp = await fetch('/api/stats/usage?days=' + encodeURIComponent(days));
+    if(!resp.ok) throw new Error(await resp.text());
+    const s = await resp.json();
+    cards.innerHTML = '';
+    cards.appendChild(statCard(t('stats_requests') || 'Anfragen', String(s.total_requests)));
+    cards.appendChild(statCard(t('stats_success') || 'Erfolgsquote', Math.round((s.success_rate || 0) * 100) + '%'));
+    cards.appendChild(statCard(t('stats_avg_duration') || 'Ø Dauer', (s.avg_duration_ms || 0) + ' ms'));
+    cards.appendChild(statCard(t('stats_tokens') || 'Tokens', String(s.total_tokens)));
+    cards.appendChild(statCard(t('stats_tools') || 'Tool-Aufrufe', String(s.total_tool_calls)));
+
+    charts.innerHTML = '';
+    const perDay = (s.per_day || []).map(d => ({label: d.day.slice(5), value: d.requests}));
+    charts.appendChild(statBarChart(t('stats_per_day') || 'Anfragen pro Tag', perDay, 31));
+    const toEntries = (m) => Object.entries(m || {}).map(([k, v]) => ({label: k, value: v})).sort((a, b) => b.value - a.value);
+    charts.appendChild(statBarChart(t('stats_per_role') || 'Nach Rolle', toEntries(s.per_role), 8));
+    charts.appendChild(statBarChart(t('stats_per_tool') || 'Nach Tool', toEntries(s.per_tool), 10));
+  }catch(err){
+    cards.innerHTML = '';
+    cards.appendChild(statCard(t('stats_error') || 'Fehler', String(err.message || err)));
+    charts.innerHTML = '';
+  }
+}
+
 // Handle keyboard navigation for tab lists (ARIA best practices)
 function handleTabKeydown(e, selector, group){
   if(!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
@@ -972,6 +1081,7 @@ let debugMode = false;
 let deepMode = false;
 let offlineMode = false;
 let autoSearchMode = true;
+let agentMode = false;
 let typingBubble = null;
 let lastDebugData = null;
 
@@ -2930,6 +3040,7 @@ async function askChat(){
       deep: deepMode,
       offline: offlineMode,
       auto_search: autoSearchMode,
+      agent: agentMode,
       persona_id: currentPersonaId,
       active_role: currentRole
     };
@@ -3768,6 +3879,28 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     autoSearchMode = autoSearchToggle.checked;
     autoSearchToggle.addEventListener('change', (e)=>{ autoSearchMode = e.target.checked; updateWorkspaceStrip(); });
   }
+  const agentToggle = $('#agentMode');
+  if(agentToggle){
+    agentToggle.addEventListener('change', (e)=>{ agentMode = e.target.checked; updateWorkspaceStrip(); });
+  }
+
+  // Chat export buttons
+  const exportChat = (format)=>{
+    if(!currentChatId){ alert(t('export_no_chat') || 'Kein aktiver Chat zum Exportieren.'); return; }
+    window.open('/api/chats/export?id='+encodeURIComponent(currentChatId)+'&format='+format, '_blank');
+  };
+  const exportMdBtn = $('#exportMdBtn');
+  if(exportMdBtn){ exportMdBtn.addEventListener('click', ()=>exportChat('markdown')); }
+  const exportHtmlBtn = $('#exportHtmlBtn');
+  if(exportHtmlBtn){ exportHtmlBtn.addEventListener('click', ()=>exportChat('html')); }
+
+  // Stats panel
+  const statsRefreshBtn = $('#statsRefreshBtn');
+  if(statsRefreshBtn){ statsRefreshBtn.addEventListener('click', loadUsageStats); }
+  const statsWindow = $('#statsWindow');
+  if(statsWindow){ statsWindow.addEventListener('change', loadUsageStats); }
+  const statsTab = document.querySelector('[data-main-tab="stats"]');
+  if(statsTab){ statsTab.addEventListener('click', loadUsageStats); }
 
   // Chat
   $('#chatBtn').addEventListener('click', askChat);

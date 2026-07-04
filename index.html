@@ -49,6 +49,7 @@
     <button class="main-tab active" data-main-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat" id="tab-chat" title="Open chat panel"><span data-i18n="chat">Chat</span></button>
     <button class="main-tab" data-main-tab="search" role="tab" aria-selected="false" aria-controls="panel-search" id="tab-search" title="Open semantic search"><span data-i18n="search">Suche</span></button>
     <button class="main-tab" data-main-tab="ingest" role="tab" aria-selected="false" aria-controls="panel-ingest" id="tab-ingest" title="Add data to the knowledge base"><span data-i18n="ingest">Daten hinzufügen</span></button>
+    <button class="main-tab" data-main-tab="stats" role="tab" aria-selected="false" aria-controls="panel-stats" id="tab-stats" title="Show usage statistics dashboard"><span data-i18n="stats">Statistik</span></button>
 
     <div class="spacer"></div>
 
@@ -108,6 +109,9 @@
       <div class="workspace-pill" id="personaPill">Persona: <strong>-</strong></div>
       <div class="workspace-pill" id="rolePill">Rolle: <strong>-</strong></div>
       <div class="workspace-pill" id="modePill">Modi: <strong>Standard</strong></div>
+      <div class="spacer"></div>
+      <button class="btn-small" id="exportMdBtn" title="Chat als Markdown exportieren" aria-label="Export chat as Markdown">↓ MD</button>
+      <button class="btn-small" id="exportHtmlBtn" title="Chat als druckbare HTML-Seite exportieren (Drucken → PDF)" aria-label="Export chat as HTML">↓ HTML</button>
     </div>
     <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions">
       <div class="empty-state" id="chatEmpty">
@@ -146,6 +150,10 @@
         <label class="chat-mode-toggle" for="offlineMode" title="Answer without searching the knowledge base (uses LLM knowledge only)">
           <input type="checkbox" id="offlineMode">
           <span data-i18n="offline_mode">Offline</span>
+        </label>
+        <label class="chat-mode-toggle" for="agentMode" title="Agent mode: plan and execute the needed tools before answering">
+          <input type="checkbox" id="agentMode">
+          <span data-i18n="agent_mode">Agent</span>
         </label>
       </div>
       <!-- Image attachment preview (hidden until an image is selected) -->
@@ -189,6 +197,24 @@
       <button class="btn-primary" id="searchBtn" aria-label="Execute search" title="Search the knowledge base semantically"><span data-i18n="search_button">Suchen</span></button>
     </div>
     <div class="results" id="searchResults" role="region" aria-live="polite" aria-label="Search results"></div>
+  </section>
+
+  <!-- Stats -->
+  <section id="panel-stats" class="main-panel" role="tabpanel" aria-labelledby="tab-stats">
+    <div class="panel-head">
+      <h2 data-i18n="stats">Statistik</h2>
+      <p class="panel-subline" data-i18n="stats_label">Nutzung der letzten 30 Tage</p>
+      <div class="panel-meta-row">
+        <select id="statsWindow" aria-label="Statistics window" title="Zeitraum wählen">
+          <option value="7">7 Tage</option>
+          <option value="30" selected>30 Tage</option>
+          <option value="90">90 Tage</option>
+        </select>
+        <button class="btn-small" id="statsRefreshBtn" title="Statistik neu laden" data-i18n="refresh">Aktualisieren</button>
+      </div>
+    </div>
+    <div id="statsCards" class="stats-cards" role="region" aria-label="Usage summary"></div>
+    <div id="statsCharts" class="stats-charts" role="region" aria-label="Usage charts"></div>
   </section>
 
   <!-- Ingest -->

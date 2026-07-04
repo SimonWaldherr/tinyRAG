@@ -2122,3 +2122,85 @@ button { font-family: var(--font); cursor: pointer }
   color: #dc2626;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Usage statistics dashboard ─────────────────────────────────────────── */
+.stats-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+.stat-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  min-width: 130px;
+  flex: 1;
+}
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+.stat-label {
+  font-size: .78rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.stats-charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.stat-chart {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  flex: 1 1 300px;
+  min-width: 280px;
+}
+.stat-chart h3 {
+  font-size: .85rem;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+.stat-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.stat-bar-label {
+  flex: 0 0 72px;
+  font-size: .72rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stat-bar-track {
+  flex: 1;
+  background: var(--panel2);
+  border-radius: 4px;
+  height: 14px;
+  overflow: hidden;
+}
+.stat-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width .3s ease;
+}
+.stat-bar-fill.error { background: var(--danger); }
+.stat-bar-value {
+  flex: 0 0 40px;
+  font-size: .72rem;
+  color: var(--text);
+  text-align: right;
+}
+.stat-empty {
+  color: var(--muted);
+  font-size: .8rem;
+}

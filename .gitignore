@@ -6,6 +6,9 @@ tinyRAG.exe
 *.gob
 *.db
 
+# Runtime usage statistics
+usage_stats.jsonl
+
 # Temporary files
 *.tmp
 *.swp

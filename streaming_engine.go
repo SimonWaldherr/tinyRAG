@@ -87,6 +87,9 @@ type EngineRequest struct {
 	Messages     []chatMsg
 	AutoSearch   bool
 	Debug        bool
+	// PlanFirst enables the agent planner: tools are planned and executed
+	// upfront before the first answering round (see agent_planner.go).
+	PlanFirst bool
 }
 
 // sseWriter wraps an http.ResponseWriter + http.Flusher to emit SSE events.
@@ -162,6 +165,14 @@ func (e *StreamingEngine) Run(
 	// dedup set: tool-name+query pairs seen this request
 	seen := make(map[string]bool)
 	totalTools := 0
+
+	// Agent planner: plan + execute tools upfront, inject results as an
+	// additional user message so the answering pass sees all evidence.
+	if req.PlanFirst {
+		if planMsg, ok := e.runPlannerPhase(ctx, req, sw, tel, s, seen, &totalTools); ok {
+			msgs = append(msgs, planMsg)
+		}
+	}
 
 	var fullAnswer strings.Builder
 
