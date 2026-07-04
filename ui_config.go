@@ -70,17 +70,31 @@ type uiSuggestion struct {
 }
 
 // uiConfig controls which parts of the web UI are visible.
+//
+// Defaults are minimalist by design: only what's needed to actually use
+// tinyRAG out of the box (chat, search, ingest, auto-search) is shown; every
+// power-user/admin control (deep research, offline mode, agent planning,
+// debug, the persona/role/LLM pickers, the workspace status strip) is
+// hidden until explicitly enabled — via Settings, a scenario template, or by
+// setting the corresponding field to true here.
 type uiConfig struct {
 	// DefaultPanel is the panel activated on load: chat|search|ingest|stats.
 	DefaultPanel string `json:"default_panel"`
-	// Panels toggles main panels. Missing keys default to true.
+	// Panels toggles main panels. Missing keys default to true, except
+	// "stats" which defaults to false (see uiDefaultPanelVisible).
 	Panels map[string]bool `json:"panels"`
-	// Modes toggles the chat mode checkboxes. Missing keys default to true.
+	// Modes toggles the chat mode checkboxes. Missing keys default to false,
+	// except "auto_search" which defaults to true (see uiDefaultModeVisible).
 	Modes map[string]bool `json:"modes"`
-	// ShowPersonaPicker / ShowRolePicker / ShowLLMSwitcher toggle toolbar pickers.
-	ShowPersonaPicker *bool `json:"show_persona_picker,omitempty"`
-	ShowRolePicker    *bool `json:"show_role_picker,omitempty"`
-	ShowLLMSwitcher   *bool `json:"show_llm_switcher,omitempty"`
+	// ShowPersonaPicker / ShowRolePicker / ShowLLMSwitcher toggle toolbar
+	// pickers. Default false (hidden) — accessible via Settings regardless.
+	ShowPersonaPicker bool `json:"show_persona_picker"`
+	ShowRolePicker    bool `json:"show_role_picker"`
+	ShowLLMSwitcher   bool `json:"show_llm_switcher"`
+	// ShowWorkspaceStrip toggles the status pill row above the chat
+	// (provider/persona/role/mode). Default false (hidden) — it's status
+	// display, not needed to use the chat.
+	ShowWorkspaceStrip bool `json:"show_workspace_strip"`
 	// Suggestions replaces the default empty-state suggestion buttons.
 	Suggestions []uiSuggestion `json:"suggestions,omitempty"`
 	// FooterText replaces the chat disclaimer line. Empty = keep default.
@@ -89,6 +103,12 @@ type uiConfig struct {
 
 var uiKnownPanels = []string{"chat", "search", "ingest", "stats"}
 var uiKnownModes = []string{"auto_search", "deep", "offline", "agent", "debug"}
+
+// uiDefaultPanelVisible / uiDefaultModeVisible give the minimalist defaults
+// applied to any panel/mode key missing from a uiConfig — only the
+// essentials (chat, search, ingest, auto-search) are visible out of the box.
+var uiDefaultPanelVisible = map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false}
+var uiDefaultModeVisible = map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false}
 
 var themeIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 var themeVarNameRe = regexp.MustCompile(`^--[a-z0-9][a-z0-9-]{0,39}$`)
@@ -173,7 +193,7 @@ func normalizeUIConfig(c uiConfig) uiConfig {
 		if v, ok := c.Panels[p]; ok {
 			panels[p] = v
 		} else {
-			panels[p] = true
+			panels[p] = uiDefaultPanelVisible[p]
 		}
 	}
 	// The default panel must stay reachable.
@@ -185,7 +205,7 @@ func normalizeUIConfig(c uiConfig) uiConfig {
 		if v, ok := c.Modes[m]; ok {
 			modes[m] = v
 		} else {
-			modes[m] = true
+			modes[m] = uiDefaultModeVisible[m]
 		}
 	}
 	c.Modes = modes

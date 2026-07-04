@@ -46,8 +46,15 @@ Notes:
 ## 2. Themes
 
 Six built-in themes ship in `style.css` (`dark`, `light`, `nord`, `solarized`,
-`monokai`, `dracula`). **Custom themes** are CSS-variable maps layered on top
-of a built-in base theme:
+`monokai`, `dracula`), plus 14 ready-made custom themes and 14 scenario
+templates (see §5). **Browse all of them visually at `/gallery`** — a static,
+self-contained reference page (`examples/gallery.html`, embedded into the
+binary via `go:embed`, no server calls) that renders a live-looking preview
+of every theme and scenario, plus a copy button for the matching
+`tinyRAG -apply-template <id>` command.
+
+**Custom themes** are CSS-variable maps layered on top of a built-in base
+theme:
 
 ```jsonc
 {
@@ -78,7 +85,45 @@ they contain `{ } ; < > \`, `url(`, `expression`, `@import` or
 filter is defense in depth. Available variables: see the `:root` block at the
 top of `style.css` (`--bg`, `--panel`, `--text`, `--accent`, `--border`, …).
 
-## 3. Headless / CLI / TUI usage
+Also seeded automatically on first run (and into any pre-existing
+`settings.json` missing the field): `corporate`, `healthcare`, `legal`,
+`education`, `high-contrast`, `terminal`, `sunset`, `print`, `cyberpunk`,
+`ocean`, `forest`, `midnight` (AMOLED), `finance`, `government` — see
+`defaultCustomThemes()` in `ui_templates.go`.
+
+## 3. Scenario templates
+
+A **scenario template** bundles a theme, a density, and a full `ui` config
+into one named preset — a one-click starting point for a specific
+deployment shape, not a lock-in (everything stays editable afterwards).
+
+```go
+// ui_templates.go
+type uiScenarioTemplate struct {
+    ID          string
+    Label       string
+    Description string
+    Theme       string   // built-in or custom theme id
+    Density     string   // "comfortable" | "compact" | "" (leave unchanged)
+    Config      uiConfig
+}
+```
+
+14 ship built-in (`support-widget`, `knowledge-kiosk`, `internal-helpdesk`,
+`developer-console`, `research-assistant`, `legal-archive`,
+`education-portal`, `accessibility-kiosk`, `finance-dashboard`,
+`government-portal`, `focus-mode`, `community-bot`, `nonprofit-portal`,
+`mobile-lite`) — browse them all at `/gallery`.
+
+| Endpoint | Method | Auth | Purpose |
+|---|---|---|---|
+| `/api/ui/templates` | GET | – | List built-in scenario templates |
+| `/api/ui/templates/apply` | POST | admin | Apply a template's theme + density + UI config: `{"id": "support-widget"}` |
+
+Also applicable headlessly for provisioning (see §4):
+`tinyRAG -apply-template support-widget`.
+
+## 4. Headless / CLI / TUI usage
 
 The same binary is a scriptable RAG engine — the building block for CLI
 tools, cron jobs, or your own TUI:
@@ -133,7 +178,7 @@ graceful shutdown that flushes the RAG store before exiting — required
 because in-memory storage modes only persist their GOB snapshot on a clean
 `Close()`, which the OS's default signal handling would otherwise skip.
 
-## 4. Putting it together: shipping a differently-shaped RAG product
+## 5. Putting it together: shipping a differently-shaped RAG product
 
 A minimal "search-only knowledge kiosk" deployment, for example:
 

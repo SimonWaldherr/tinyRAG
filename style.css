@@ -13,14 +13,14 @@
   --border:             #1e2230;
   --border-focus:       #3a4560;
   --accent:             #4c8bf5;
-  --accent-subtle:      rgba(76,139,245,.12);
-  --accent-subtle2:     rgba(76,139,245,.22);
+  --accent-subtle:      rgba(76,139,245,.10);
+  --accent-subtle2:     rgba(76,139,245,.18);
   --gradient-secondary: #8b5cf6;
   --danger:             #e8546f;
   --ok:                 #3ecf8e;
   --warn:               #f5a623;
-  --shadow:             0 10px 40px rgba(0,0,0,.55);
-  --shadow-sm:          0 2px 8px  rgba(0,0,0,.30);
+  --shadow:             0 4px 16px rgba(0,0,0,.30);
+  --shadow-sm:          0 1px 4px  rgba(0,0,0,.18);
   --radius:             16px;
   --radius-sm:          8px;
   --radius-lg:          22px;
@@ -2251,3 +2251,13 @@ button { font-family: var(--font); cursor: pointer }
 .scenario-card .btn-small {
   align-self: flex-start;
 }
+
+/* ── Scenario templates hint: gallery link ──────────────────────────────── */
+.hint a {
+  display: inline-block;
+  margin-top: .3rem;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.hint a:hover { text-decoration: underline; }

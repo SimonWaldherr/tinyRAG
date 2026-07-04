@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "embed"
+	"embed"
 
 	tinysql "github.com/SimonWaldherr/tinySQL"
 	smallr "simonwaldherr.de/go/smallr"
@@ -58,6 +58,16 @@ var styleCSS string
 
 //go:embed app.js
 var appJS string
+
+// examplesFS embeds the static theme/scenario gallery (examples/*.html) as a
+// standalone reference — pure static HTML/CSS/JS, no server-side rendering
+// or API calls, browsable even outside the running app. Kept as a directory
+// embed.FS (rather than single-file string embeds like the assets above) so
+// more static example pages can be dropped into examples/ without touching
+// main.go. See examples/gallery.html and docs/ui-customization.md.
+//
+//go:embed examples
+var examplesFS embed.FS
 
 // loginPageHTML is a minimal self-contained login page served at /login.
 // Two %s placeholders: (1) page title / (2) app name shown as heading.
@@ -152,6 +162,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 		fmt.Fprint(w, appJS)
 	}))
+
+	// Static theme/scenario gallery — self-contained reference page(s) embedded
+	// via examplesFS, no auth required (no sensitive data, same tier as style.css).
+	mux.Handle("/examples/", http.FileServer(http.FS(examplesFS)))
+	mux.HandleFunc("/gallery", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/examples/gallery.html", http.StatusFound)
+	})
 
 	// GET /api/settings — current settings
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {

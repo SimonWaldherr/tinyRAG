@@ -74,20 +74,32 @@ func TestSanitizeCustomThemeDefaults(t *testing.T) {
 	}
 }
 
+// TestNormalizeUIConfigDefaults locks in the minimalist-by-default policy:
+// a blank uiConfig{} shows only what's needed to use tinyRAG (chat, search,
+// ingest, auto-search) and hides every power-user/admin control.
 func TestNormalizeUIConfigDefaults(t *testing.T) {
 	c := normalizeUIConfig(uiConfig{})
 	if c.DefaultPanel != "chat" {
 		t.Errorf("default panel should be chat, got %q", c.DefaultPanel)
 	}
-	for _, p := range uiKnownPanels {
-		if !c.Panels[p] {
-			t.Errorf("panel %q should default to enabled", p)
+	wantPanels := map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false}
+	for p, want := range wantPanels {
+		if c.Panels[p] != want {
+			t.Errorf("panel %q default = %v, want %v", p, c.Panels[p], want)
 		}
 	}
-	for _, m := range uiKnownModes {
-		if !c.Modes[m] {
-			t.Errorf("mode %q should default to enabled", m)
+	wantModes := map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false}
+	for m, want := range wantModes {
+		if c.Modes[m] != want {
+			t.Errorf("mode %q default = %v, want %v", m, c.Modes[m], want)
 		}
+	}
+	if c.ShowPersonaPicker || c.ShowRolePicker || c.ShowLLMSwitcher {
+		t.Errorf("toolbar pickers should be hidden by default, got persona=%v role=%v llm=%v",
+			c.ShowPersonaPicker, c.ShowRolePicker, c.ShowLLMSwitcher)
+	}
+	if c.ShowWorkspaceStrip {
+		t.Error("workspace strip should be hidden by default")
 	}
 }
 

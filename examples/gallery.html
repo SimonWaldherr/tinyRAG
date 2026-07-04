@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tinyRAG — Theme &amp; Scenario Gallery</title>
+<style>
+  :root {
+    --gbg: #0c0e14; --gpanel: #141820; --gtext: #dde1eb; --gmuted: #6b7280; --gborder: #1e2230;
+    --gaccent: #4c8bf5; --gradius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 4rem;
+    background: var(--gbg); color: var(--gtext);
+    font-family: -apple-system, "Segoe UI", Roboto, "Inter", sans-serif;
+    line-height: 1.5;
+  }
+  header {
+    padding: 3rem 1.5rem 2rem; text-align: center;
+    border-bottom: 1px solid var(--gborder);
+    background: linear-gradient(180deg, rgba(76,139,245,.08), transparent);
+  }
+  header h1 { margin: 0 0 .5rem; font-size: 1.9rem; }
+  header p { margin: 0 auto; max-width: 620px; color: var(--gmuted); font-size: .95rem; }
+  header code {
+    background: var(--gpanel); border: 1px solid var(--gborder); border-radius: 4px;
+    padding: .1rem .4rem; font-size: .85em;
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 0 1.5rem; }
+  section { margin-top: 3rem; }
+  section > h2 { font-size: 1.3rem; margin: 0 0 .3rem; }
+  section > .hint { color: var(--gmuted); font-size: .88rem; margin: 0 0 1.4rem; }
+
+  /* ── Theme grid ─────────────────────────────────────────────────── */
+  .theme-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1rem;
+  }
+  .theme-card {
+    border-radius: var(--gradius); overflow: hidden; border: 1px solid var(--gborder);
+    background: var(--card-panel); color: var(--card-text);
+  }
+  .theme-card .mock {
+    display: flex; height: 90px; background: var(--card-bg);
+  }
+  .theme-card .mock .sidebar { width: 34%; background: var(--card-sidebar); border-right: 1px solid var(--card-border); }
+  .theme-card .mock .content { flex: 1; padding: .6rem; display: flex; flex-direction: column; gap: .35rem; }
+  .theme-card .mock .bubble { height: 8px; border-radius: 4px; background: var(--card-border); width: 80%; }
+  .theme-card .mock .bubble.accent { background: var(--card-accent); width: 45%; }
+  .theme-card .meta { padding: .7rem .85rem .85rem; }
+  .theme-card .meta .name { font-weight: 600; font-size: .92rem; }
+  .theme-card .meta .base { font-size: .72rem; color: var(--card-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .theme-card .swatches { display: flex; gap: 5px; margin-top: .5rem; }
+  .theme-card .swatches span { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+
+  /* ── Scenario grid ──────────────────────────────────────────────── */
+  .scenario-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem;
+  }
+  .scenario-card {
+    border-radius: var(--gradius); border: 1px solid var(--gborder);
+    background: var(--card-panel); color: var(--card-text);
+    padding: 1rem 1.1rem 1.1rem; display: flex; flex-direction: column; gap: .5rem;
+    border-top: 3px solid var(--card-accent);
+  }
+  .scenario-card .label { font-weight: 700; font-size: 1rem; }
+  .scenario-card .desc { font-size: .85rem; color: var(--card-muted); flex: 1; }
+  .scenario-card .badges { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .scenario-card .badge {
+    font-size: .68rem; padding: .15rem .5rem; border-radius: 999px;
+    background: var(--card-bg); border: 1px solid var(--card-border); color: var(--card-muted);
+  }
+  .scenario-card .cli {
+    margin-top: .3rem; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .74rem;
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px;
+    padding: .5rem .6rem; color: var(--card-text); display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  }
+  .scenario-card .cli button {
+    font: inherit; font-size: .68rem; cursor: pointer; border: 1px solid var(--card-border);
+    background: transparent; color: var(--card-muted); border-radius: 6px; padding: .2rem .5rem;
+  }
+  .scenario-card .cli button:hover { color: var(--card-text); border-color: var(--card-accent); }
+
+  footer { text-align: center; color: var(--gmuted); font-size: .82rem; margin-top: 4rem; }
+  footer a { color: var(--gaccent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>tinyRAG — Theme &amp; Scenario Gallery</h1>
+  <p>
+    A static, self-contained reference (shipped inside the binary via <code>go:embed</code>)
+    for every built-in theme and deployment scenario template. Apply any of them from
+    Settings → Appearance, via <code>POST /api/ui/templates/apply</code>, or headlessly with
+    <code>tinyRAG -apply-template &lt;id&gt;</code>.
+  </p>
+</header>
+
+<main>
+  <section id="themes">
+    <h2>Themes</h2>
+    <p class="hint">14 ready-made CSS-variable themes, layered on a light or dark base. See <code>docs/ui-customization.md</code> for the custom-theme format.</p>
+    <div class="theme-grid" id="themeGrid"></div>
+  </section>
+
+  <section id="scenarios">
+    <h2>Scenario templates</h2>
+    <p class="hint">Each bundles a theme, a density, and a full UI configuration (panels, chat modes, pickers, suggestions) — a one-click starting point for a specific product shape.</p>
+    <div class="scenario-grid" id="scenarioGrid"></div>
+  </section>
+</main>
+
+<footer>
+  tinyRAG · <a href="/">Back to app</a> · <a href="https://github.com/SimonWaldherr/tinyRAG">github.com/SimonWaldherr/tinyRAG</a>
+</footer>
+
+<script>
+// Static data mirroring defaultCustomThemes() / builtinThemes / scenarioTemplates()
+// in ui_templates.go and style.css. This page is a pure static asset (embedded
+// via go:embed, no server calls) — if you add/change a theme or scenario in Go,
+// update the corresponding entry here too.
+const THEMES = [
+  {id:'dark', label:'Dark', base:'dark', bg:'#0f1115', panel:'#151922', panel2:'#0f1117', text:'#dde1eb', muted:'#6b7280', border:'#1e2230', accent:'#5aa7ff', sidebar:'#0f1117'},
+  {id:'light', label:'Light', base:'light', bg:'#f5f5f7', panel:'#ffffff', panel2:'#eef0f4', text:'#1a1d26', muted:'#6e7380', border:'#e0e3eb', accent:'#0071e3', sidebar:'#ffffff'},
+  {id:'nord', label:'Nord', base:'dark', bg:'#2e3440', panel:'#3b4252', panel2:'#1e2430', text:'#eceff4', muted:'#8090a0', border:'#3a4354', accent:'#88c0d0', sidebar:'#1e2430'},
+  {id:'solarized', label:'Solarized', base:'dark', bg:'#002b36', panel:'#073642', panel2:'#012c38', text:'#eee8d5', muted:'#839496', border:'#1a4455', accent:'#268bd2', sidebar:'#012c38'},
+  {id:'monokai', label:'Monokai', base:'dark', bg:'#1a1b19', panel:'#272822', panel2:'#1e1f1c', text:'#f8f8f2', muted:'#8f908a', border:'#3a3b33', accent:'#66d9ef', sidebar:'#1e1f1c'},
+  {id:'dracula', label:'Dracula', base:'dark', bg:'#282a36', panel:'#343746', panel2:'#1a1c26', text:'#f8f8f2', muted:'#9395a8', border:'#38394e', accent:'#bd93f9', sidebar:'#1a1c26'},
+  {id:'corporate', label:'Corporate', base:'light', bg:'#f3f5f9', panel:'#ffffff', panel2:'#eaeef5', text:'#1c2536', muted:'#5b6478', border:'#dfe4ee', accent:'#1d4ed8', sidebar:'#ffffff'},
+  {id:'healthcare', label:'Healthcare', base:'light', bg:'#f2f8f7', panel:'#ffffff', panel2:'#e7f3f1', text:'#173430', muted:'#5c7a75', border:'#d9ece8', accent:'#0f9488', sidebar:'#ffffff'},
+  {id:'legal', label:'Legal', base:'dark', bg:'#11141c', panel:'#181c27', panel2:'#0e1119', text:'#e6e2d3', muted:'#8a8778', border:'#2a2f3d', accent:'#c8a24d', sidebar:'#0e1119'},
+  {id:'education', label:'Education', base:'light', bg:'#faf7fd', panel:'#ffffff', panel2:'#f1e9fb', text:'#2c2438', muted:'#6f6480', border:'#e6dbf5', accent:'#7c3aed', sidebar:'#ffffff'},
+  {id:'high-contrast', label:'High Contrast', base:'dark', bg:'#000000', panel:'#0a0a0a', panel2:'#000000', text:'#ffffff', muted:'#d0d0d0', border:'#ffffff', accent:'#ffd60a', sidebar:'#000000'},
+  {id:'terminal', label:'Terminal', base:'dark', bg:'#0a0f0a', panel:'#0e150e', panel2:'#080c08', text:'#c8ffc8', muted:'#5f8f5f', border:'#1e3a1e', accent:'#39ff6a', sidebar:'#080c08'},
+  {id:'sunset', label:'Sunset', base:'light', bg:'#fff4ec', panel:'#ffffff', panel2:'#ffe7d6', text:'#3a2418', muted:'#8a6a58', border:'#ffd9bd', accent:'#ea580c', sidebar:'#ffffff'},
+  {id:'print', label:'Print / Grayscale', base:'light', bg:'#ffffff', panel:'#ffffff', panel2:'#f2f2f2', text:'#111111', muted:'#5a5a5a', border:'#cccccc', accent:'#333333', sidebar:'#ffffff'},
+  {id:'cyberpunk', label:'Cyberpunk', base:'dark', bg:'#0a0014', panel:'#15021f', panel2:'#08000d', text:'#f2e9ff', muted:'#9b7fc4', border:'#3a1256', accent:'#ff2bd6', sidebar:'#08000d'},
+  {id:'ocean', label:'Ocean', base:'light', bg:'#eef7fb', panel:'#ffffff', panel2:'#e0f0f7', text:'#0e2c38', muted:'#4f7688', border:'#cde7f0', accent:'#0891b2', sidebar:'#ffffff'},
+  {id:'forest', label:'Forest', base:'dark', bg:'#0f1710', panel:'#162117', panel2:'#0b110c', text:'#e3ecdf', muted:'#7c9578', border:'#233524', accent:'#5eae52', sidebar:'#0b110c'},
+  {id:'midnight', label:'Midnight (AMOLED)', base:'dark', bg:'#000000', panel:'#050505', panel2:'#000000', text:'#e6e6e6', muted:'#7a7a7a', border:'#1a1a1a', accent:'#5b8cff', sidebar:'#000000'},
+  {id:'finance', label:'Finance', base:'light', bg:'#f4f6f5', panel:'#ffffff', panel2:'#e9efec', text:'#101d16', muted:'#526158', border:'#dce6e0', accent:'#0a6e3c', sidebar:'#ffffff'},
+  {id:'government', label:'Government / Official', base:'light', bg:'#f5f6f8', panel:'#ffffff', panel2:'#e8ebef', text:'#1b2430', muted:'#5a6472', border:'#dde1e7', accent:'#1f3a5f', sidebar:'#ffffff'},
+];
+
+const SCENARIOS = [
+  {id:'support-widget', label:'Support Widget', theme:'corporate', density:'', panels:['chat'], modes:['auto_search'], desc:'Slim customer-support window: chat only, no internal admin panels.'},
+  {id:'knowledge-kiosk', label:'Knowledge Kiosk', theme:'high-contrast', density:'', panels:['chat','search'], modes:['auto_search'], desc:'Public terminal focused on search, high contrast for accessibility.'},
+  {id:'internal-helpdesk', label:'Internal Helpdesk', theme:'corporate', density:'', panels:['chat','search','ingest','stats'], modes:['auto_search','deep','agent','debug'], desc:'Full-featured IT helpdesk: all panels, role switching, agent mode.'},
+  {id:'developer-console', label:'Developer Console', theme:'terminal', density:'', panels:['chat','search','ingest','stats'], modes:['auto_search','deep','offline','agent','debug'], desc:'Terminal look, agent + debug active, model switcher visible.'},
+  {id:'research-assistant', label:'Research Assistant', theme:'nord', density:'', panels:['chat','search','ingest','stats'], modes:['auto_search','deep','offline','agent','debug'], desc:'Deep-research and agent mode active for extended multi-step research.'},
+  {id:'legal-archive', label:'Legal Archive', theme:'legal', density:'', panels:['chat','search'], modes:['auto_search','deep'], desc:'Chat + search for case research; ingest stays admin-only (hidden).'},
+  {id:'education-portal', label:'Education Portal', theme:'education', density:'', panels:['chat','search','ingest'], modes:['auto_search'], desc:'Chat, search and self-serve upload for learning material — no agent/debug.'},
+  {id:'accessibility-kiosk', label:'Accessibility Kiosk', theme:'high-contrast', density:'', panels:['chat'], modes:['auto_search'], desc:'Maximum contrast, minimal controls for public terminals.'},
+  {id:'finance-dashboard', label:'Finance Dashboard', theme:'finance', density:'compact', panels:['chat','search','stats'], modes:['auto_search','deep'], desc:'Dense layout for finance teams: chat, search and stats side by side.'},
+  {id:'government-portal', label:'Government Portal', theme:'government', density:'', panels:['chat','search'], modes:['auto_search'], desc:'Formal citizen-service front end: chat and search, no technical controls.'},
+  {id:'focus-mode', label:'Focus Mode', theme:'midnight', density:'', panels:['chat'], modes:['auto_search'], desc:'Distraction-free chat view for presentations and screen-sharing.'},
+  {id:'community-bot', label:'Community Bot', theme:'cyberpunk', density:'compact', panels:['chat','search','ingest'], modes:['auto_search','deep','agent'], desc:'Playful knowledge bot for gaming/community wikis, agent planning on.'},
+  {id:'nonprofit-portal', label:'Nonprofit Portal', theme:'forest', density:'', panels:['chat','search'], modes:['auto_search'], desc:'Friendly front end for donation/volunteer info, no admin switches.'},
+  {id:'mobile-lite', label:'Mobile Lite', theme:'ocean', density:'compact', panels:['chat'], modes:['auto_search'], desc:'Reduced surface for small screens: chat only, compact layout.'},
+];
+
+function themeById(id){ return THEMES.find(t => t.id === id); }
+
+function renderThemes(){
+  const grid = document.getElementById('themeGrid');
+  THEMES.forEach(t => {
+    const card = document.createElement('div');
+    card.className = 'theme-card';
+    card.style.setProperty('--card-bg', t.bg);
+    card.style.setProperty('--card-panel', t.panel);
+    card.style.setProperty('--card-sidebar', t.sidebar);
+    card.style.setProperty('--card-border', t.border);
+    card.style.setProperty('--card-text', t.text);
+    card.style.setProperty('--card-muted', t.muted);
+    card.style.setProperty('--card-accent', t.accent);
+    card.innerHTML = `
+      <div class="mock">
+        <div class="sidebar"></div>
+        <div class="content">
+          <div class="bubble"></div>
+          <div class="bubble" style="width:55%"></div>
+          <div class="bubble accent"></div>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="name">${t.label}</div>
+        <div class="base">${t.base} base &middot; id: ${t.id}</div>
+        <div class="swatches">
+          <span style="background:${t.bg}"></span>
+          <span style="background:${t.panel}"></span>
+          <span style="background:${t.accent}"></span>
+        </div>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+function renderScenarios(){
+  const grid = document.getElementById('scenarioGrid');
+  SCENARIOS.forEach(s => {
+    const t = themeById(s.theme) || THEMES[0];
+    const card = document.createElement('div');
+    card.className = 'scenario-card';
+    card.style.setProperty('--card-bg', t.bg);
+    card.style.setProperty('--card-panel', t.panel);
+    card.style.setProperty('--card-border', t.border);
+    card.style.setProperty('--card-text', t.text);
+    card.style.setProperty('--card-muted', t.muted);
+    card.style.setProperty('--card-accent', t.accent);
+
+    const badges = [
+      ...s.panels.map(p => `<span class="badge">panel:${p}</span>`),
+      ...s.modes.map(m => `<span class="badge">${m}</span>`),
+      s.density ? `<span class="badge">density:${s.density}</span>` : '',
+      `<span class="badge">theme:${s.theme}</span>`,
+    ].join('');
+
+    card.innerHTML = `
+      <div class="label">${s.label}</div>
+      <div class="desc">${s.desc}</div>
+      <div class="badges">${badges}</div>
+      <div class="cli">
+        <span>tinyRAG -apply-template ${s.id}</span>
+        <button type="button" data-copy="${s.id}">Copy</button>
+      </div>`;
+    grid.appendChild(card);
+  });
+
+  grid.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-copy]');
+    if(!btn) return;
+    const cmd = 'tinyRAG -apply-template ' + btn.dataset.copy;
+    navigator.clipboard?.writeText(cmd).then(() => {
+      const prev = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = prev; }, 1400);
+    }).catch(() => {});
+  });
+}
+
+renderThemes();
+renderScenarios();
+</script>
+</body>
+</html>

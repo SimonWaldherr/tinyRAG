@@ -614,6 +614,7 @@ const _translations = {
     scenario_templates_hint: 'Ein Klick setzt Theme und UI-Konfiguration passend zum Szenario. Danach frei anpassbar.',
     scenario_apply: 'Anwenden',
     scenario_applied: 'Vorlage angewendet.',
+    scenario_gallery_link: 'Alle Themes & Vorlagen in der Galerie ansehen ↗',
     density: 'Layout-Dichte',
     density_comfortable: 'Comfortable',
     density_compact: 'Compact',
@@ -794,6 +795,7 @@ const _translations = {
     scenario_templates_hint: 'One click sets the theme and UI configuration for the scenario. Freely adjustable afterwards.',
     scenario_apply: 'Apply',
     scenario_applied: 'Template applied.',
+    scenario_gallery_link: 'View all themes & templates in the gallery ↗',
     density: 'Layout density',
     density_comfortable: 'Comfortable',
     density_compact: 'Compact',
@@ -1001,8 +1003,10 @@ async function setTheme(id){
 // ═══════ UI configuration (panels, modes, suggestions, footer) ═══════
 
 // applyUIConfig reshapes the UI according to the server-side uiConfig.
-// Everything defaults to visible; operators can hide panels, chat modes,
-// toolbar pickers, replace the suggestion buttons and the footer line.
+// Defaults are minimalist: only chat/search/ingest panels and auto-search
+// are visible out of the box; power-user controls (deep/offline/agent/debug
+// modes, the persona/role/LLM pickers, the workspace status strip) stay
+// hidden until explicitly enabled (via Settings or a scenario template).
 function applyUIConfig(cfg){
   if(!cfg) return;
   const panels = cfg.panels || {};
@@ -1023,20 +1027,24 @@ function applyUIConfig(cfg){
     if(!enabled && input.checked){ input.checked = false; input.dispatchEvent(new Event('change')); }
   });
 
-  // Toolbar pickers
+  // Toolbar pickers: hidden unless explicitly enabled.
   const pickerMap = [
     [cfg.show_persona_picker, '#personaSelect'],
     [cfg.show_role_picker, '#roleSelect'],
     [cfg.show_llm_switcher, '#llmSwitcher'],
   ];
   pickerMap.forEach(([show, sel]) => {
-    if(show === false){
-      const el = document.querySelector(sel);
-      const label = el && el.closest('label');
-      if(label) label.style.display = 'none';
-      else if(el) el.style.display = 'none';
-    }
+    const el = document.querySelector(sel);
+    if(!el) return;
+    const label = el.closest('label');
+    const target = label || el;
+    target.style.display = show ? '' : 'none';
   });
+
+  // Workspace status strip (provider/persona/role/mode pills): hidden
+  // unless explicitly enabled — it's status display, not needed to chat.
+  const strip = document.querySelector('.workspace-strip');
+  if(strip) strip.style.display = cfg.show_workspace_strip ? '' : 'none';
 
   // Custom suggestion buttons on the empty chat screen
   if(Array.isArray(cfg.suggestions) && cfg.suggestions.length){

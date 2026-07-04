@@ -185,7 +185,6 @@ func scenarioTemplates() []uiScenarioTemplate {
 	allModesOn := func() map[string]bool {
 		return map[string]bool{"auto_search": true, "deep": true, "offline": true, "agent": true, "debug": true}
 	}
-	boolPtr := func(b bool) *bool { return &b }
 
 	return []uiScenarioTemplate{
 		{
@@ -195,7 +194,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": false, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 				FooterText: "Antworten können Fehler enthalten. Bei dringenden Anliegen kontaktiere den Support direkt.",
 				Suggestions: []uiSuggestion{
 					{Label: "Rückgabe", Prompt: "Wie kann ich eine Bestellung zurückgeben?"},
@@ -210,7 +209,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "search",
 				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 				FooterText: "Öffentlicher Zugang – bitte keine persönlichen Daten eingeben.",
 			},
 		},
@@ -219,8 +218,9 @@ func scenarioTemplates() []uiScenarioTemplate {
 			Description: "Vollausgestatteter IT-Helpdesk: alle Panels, Rollenwechsel, Agent-Modus verfügbar.",
 			Config: uiConfig{
 				DefaultPanel: "chat", Panels: allOn(),
-				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": true},
-				ShowPersonaPicker: boolPtr(true), ShowRolePicker: boolPtr(true), ShowLLMSwitcher: boolPtr(false),
+				Modes:              map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": true},
+				ShowPersonaPicker:  true, ShowRolePicker: true, ShowLLMSwitcher: false,
+				ShowWorkspaceStrip: true,
 				Suggestions: []uiSuggestion{
 					{Label: "VPN-Problem", Prompt: "Wie behebe ich VPN-Verbindungsprobleme?"},
 					{Label: "Passwort-Reset", Prompt: "Wie setze ich mein Passwort zurück?"},
@@ -232,8 +232,9 @@ func scenarioTemplates() []uiScenarioTemplate {
 			Description: "Terminal-Optik, Agent- und Debug-Modus aktiv, Modellwechsel sichtbar.",
 			Config: uiConfig{
 				DefaultPanel: "chat", Panels: allOn(),
-				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": true, "agent": true, "debug": true},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(true),
+				Modes:              map[string]bool{"auto_search": true, "deep": true, "offline": true, "agent": true, "debug": true},
+				ShowPersonaPicker:  false, ShowRolePicker: false, ShowLLMSwitcher: true,
+				ShowWorkspaceStrip: true,
 			},
 		},
 		{
@@ -241,7 +242,8 @@ func scenarioTemplates() []uiScenarioTemplate {
 			Description: "Deep-Research- und Agent-Modus aktiv, für ausführliche mehrstufige Recherchen.",
 			Config: uiConfig{
 				DefaultPanel: "chat", Panels: allOn(), Modes: allModesOn(),
-				ShowPersonaPicker: boolPtr(true), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker:  true, ShowRolePicker: false, ShowLLMSwitcher: false,
+				ShowWorkspaceStrip: true,
 			},
 		},
 		{
@@ -251,7 +253,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "search",
 				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(true), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: true, ShowLLMSwitcher: false,
 				FooterText: "Keine Rechtsberatung. Antworten sind Recherchehilfen und ersetzen keine juristische Prüfung.",
 			},
 		},
@@ -262,7 +264,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(true), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: true, ShowRolePicker: false, ShowLLMSwitcher: false,
 				Suggestions: []uiSuggestion{
 					{Label: "Zusammenfassung", Prompt: "Fasse das aktuelle Kapitel zusammen"},
 					{Label: "Übungsfragen", Prompt: "Erstelle drei Übungsfragen zum Thema"},
@@ -276,7 +278,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": false, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 				FooterText: "Öffentliches Terminal – bitte keine persönlichen Daten eingeben.",
 			},
 		},
@@ -287,7 +289,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": true},
 				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(true), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: true, ShowLLMSwitcher: false,
 				Suggestions: []uiSuggestion{
 					{Label: "Quartalsbericht", Prompt: "Fasse den aktuellen Quartalsbericht zusammen"},
 					{Label: "Kennzahlen", Prompt: "Welche Kennzahlen haben sich diesen Monat am stärksten verändert?"},
@@ -301,7 +303,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 				FooterText: "Automatisierte Auskunft ohne Gewähr. Für verbindliche Anliegen wenden Sie sich an die zuständige Stelle.",
 			},
 		},
@@ -312,17 +314,18 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": false, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 			},
 		},
 		{
 			ID: "community-bot", Label: "Community-Bot", Theme: "cyberpunk", Density: "compact",
 			Description: "Verspielter Wissens-Bot für Gaming-/Community-Wikis mit Agent-Planung für Mehrschritt-Fragen.",
 			Config: uiConfig{
-				DefaultPanel:      "chat",
-				Panels:            map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false},
-				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": false},
-				ShowPersonaPicker: boolPtr(true), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				DefaultPanel:       "chat",
+				Panels:             map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false},
+				Modes:              map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": false},
+				ShowPersonaPicker:  true, ShowRolePicker: false, ShowLLMSwitcher: false,
+				ShowWorkspaceStrip: true,
 				Suggestions: []uiSuggestion{
 					{Label: "Build-Guide", Prompt: "Was ist aktuell der beste Build für Einsteiger?"},
 					{Label: "Patch-Notes", Prompt: "Was hat sich im letzten Patch geändert?"},
@@ -336,7 +339,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 				Suggestions: []uiSuggestion{
 					{Label: "Spenden", Prompt: "Wie kann ich spenden und wofür wird das Geld verwendet?"},
 					{Label: "Mitmachen", Prompt: "Wie kann ich mich ehrenamtlich engagieren?"},
@@ -350,7 +353,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 				DefaultPanel:      "chat",
 				Panels:            map[string]bool{"chat": true, "search": false, "ingest": false, "stats": false},
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
-				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: false,
 			},
 		},
 	}
