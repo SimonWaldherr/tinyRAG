@@ -71,6 +71,60 @@ OpenAI) since not every provider offers an embeddings endpoint.
 - Default base URL: `http://localhost:8080` (shares the port convention with
   llama.cpp — pick "LocalAI" explicitly in the switcher).
 
+## Demo mode: embedded GopherLLM (no external tool at all)
+
+For trying tinyRAG with **zero setup** — no LM Studio, no Ollama, no
+llama.cpp, nothing to install or start separately — it can run
+[GopherLLM](https://github.com/SimonWaldherr/GopherLLM), a pure-Go GGUF
+inference runtime, **in-process**. This is a demo/evaluation convenience,
+not a production inference path: no chat UI, no tool calling, no request
+concurrency tuning — whatever tiny model is loaded answers every request,
+on CPU, at whatever speed pure-Go inference gets you (noticeably slower
+than llama.cpp/LM Studio's hand-tuned C++ kernels, especially for anything
+bigger than a ~1B-parameter model).
+
+Not part of the default build — it pulls in GopherLLM's full GGUF/tokenizer/
+SIMD stack, which most deployments don't need. Build with:
+
+```bash
+go build -tags demo_llm ./...
+```
+
+Then either point at a specific `.gguf` file, or let it auto-discover one:
+
+```bash
+# Explicit model file
+./tinyRAG -demo-llm-model /path/to/model.Q4_K_M.gguf
+
+# Auto-discover: scans GopherLLM's default model directory
+# ($RUSTY_LLM_MODEL_DIR, or LM Studio's community model cache under $HOME)
+# for the first supported, non-projector GGUF file it finds.
+./tinyRAG -demo-llm-model auto
+
+# Change the local port the embedded server listens on (default 127.0.0.1:8091)
+./tinyRAG -demo-llm-model auto -demo-llm-addr 127.0.0.1:9000
+```
+
+On startup tinyRAG loads the model, starts GopherLLM's OpenAI-compatible
+server as a background goroutine on `-demo-llm-addr`, waits for it to
+answer, then points `chat_base`/`embed_base` at it automatically — no
+manual Settings step needed. GopherLLM does not auto-download models; you
+need a `.gguf` file already on disk. Good demo-sized picks (small enough to
+run acceptably on CPU):
+
+| Model | Approx. size (Q4_K_M) | Notes |
+|---|---|---|
+| Qwen2.5-0.5B-Instruct | ~400 MB | Good instruction-following for its size |
+| SmolLM2-360M-Instruct | ~250 MB | Smaller/faster, weaker reasoning |
+| SmolLM2-135M-Instruct | ~100 MB | Fastest, best for quick UI demos |
+
+Supported architectures: llama, llama2, llama3, mistral, mistral3, qwen2,
+gemma, gemma2, gpt-oss. See `demo_llm.go`
+(`startEmbeddedDemoLLM`/`resolveDemoLLMModel`) for the integration; the
+important gotcha: **`go mod tidy` without `-tags=demo_llm` will drop the
+GopherLLM requirement from go.mod** since it can't see the build-tag-gated
+import — run `go mod tidy -tags=demo_llm` instead when tidying this module.
+
 ## Cloud providers
 
 | Provider | Base URL | Notes |

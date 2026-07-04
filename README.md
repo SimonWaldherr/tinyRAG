@@ -140,6 +140,12 @@ the list — any OpenAI-compatible server works even if it isn't listed.
 Full setup instructions (install commands, default models, quirks per
 provider) are in **[docs/llm-providers.md](docs/llm-providers.md)**.
 
+**Zero-install demo option**: build with `-tags demo_llm` and run
+`./tinyRAG -demo-llm-model auto` to run a tiny pure-Go model
+([GopherLLM](https://github.com/SimonWaldherr/GopherLLM)) in-process — no
+LM Studio/Ollama/llama.cpp needed. Demo quality only; see
+[docs/llm-providers.md](docs/llm-providers.md#demo-mode-embedded-gopherllm-no-external-tool-at-all).
+
 Quick start with the two most common local runners:
 
 1. **LM Studio**:
