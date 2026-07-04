@@ -88,7 +88,7 @@ func RunSafe(source string, timeout time.Duration) (string, error) {
 	outBuf := &bytes.Buffer{}
 	done := make(chan error, 1)
 	go func() {
-		done <- runInterpreted(source, outBuf)
+		done <- runInterpreted(ctx, source, outBuf)
 	}()
 
 	select {
@@ -101,10 +101,23 @@ func RunSafe(source string, timeout time.Duration) (string, error) {
 
 // runInterpreted creates a sandboxed interpreter, registers only the
 // host functions we choose to expose, and executes the source.
-func runInterpreted(source string, out *bytes.Buffer) error {
+//
+// Known limitation: the nanoGo interpreter exposes no cancellation hook, so
+// a script that never returns (e.g. an unbounded loop) keeps running in its
+// goroutine even after RunSafe's caller sees a timeout error, holding its
+// nanoGoSem slot until it eventually finishes on its own. To keep
+// *subsequent* requests from piling up behind that leaked goroutine
+// indefinitely, acquiring the slot itself respects ctx: once the caller's
+// own timeout elapses, a still-queued request fails fast with a clear
+// "sandbox busy" error instead of silently hanging past its stated timeout.
+func runInterpreted(ctx context.Context, source string, out *bytes.Buffer) error {
 	// Limit concurrent interpreter instances to avoid spikes.
-	nanoGoSem <- struct{}{}
-	defer func() { <-nanoGoSem }()
+	select {
+	case nanoGoSem <- struct{}{}:
+		defer func() { <-nanoGoSem }()
+	case <-ctx.Done():
+		return fmt.Errorf("sandbox busy: no execution slot became free before the timeout")
+	}
 
 	vm := nanogo.NewInterpreter()
 	registerSafeNatives(vm, out)

@@ -263,9 +263,14 @@ function resolveProviderName(url){
   if(hostname === 'api.x.ai' || hostname.endsWith('.x.ai')) return 'xAI';
   if(hostname === 'api.cohere.com' || hostname.endsWith('.cohere.com') || hostname === 'api.cohere.ai') return 'Cohere';
   if(hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai')) return 'OpenRouter';
-  if(hostname === 'localhost' || hostname === '127.0.0.1'){
+  if(hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'){
     if(port === '11434') return 'Ollama';
     if(port === '1234') return 'LM Studio';
+    if(port === '8080') return 'llmster';
+    if(port === '8000') return 'vLLM';
+    if(port === '5000') return 'text-generation-webui';
+    if(port === '5001') return 'KoboldCpp';
+    if(port === '1337') return 'Jan';
     return 'Local LLM';
   }
   return 'Remote LLM';
@@ -609,6 +614,9 @@ const _translations = {
     scenario_templates_hint: 'Ein Klick setzt Theme und UI-Konfiguration passend zum Szenario. Danach frei anpassbar.',
     scenario_apply: 'Anwenden',
     scenario_applied: 'Vorlage angewendet.',
+    density: 'Layout-Dichte',
+    density_comfortable: 'Comfortable',
+    density_compact: 'Compact',
     language: 'Sprache / Language',
     usage_profile: 'Nutzungsprofil',
     usage_profile_personal: 'Persönlich',
@@ -786,6 +794,9 @@ const _translations = {
     scenario_templates_hint: 'One click sets the theme and UI configuration for the scenario. Freely adjustable afterwards.',
     scenario_apply: 'Apply',
     scenario_applied: 'Template applied.',
+    density: 'Layout density',
+    density_comfortable: 'Comfortable',
+    density_compact: 'Compact',
     language: 'Language',
     usage_profile: 'Usage Profile',
     usage_profile_personal: 'Personal',
@@ -935,6 +946,21 @@ function applyTheme(id){
   });
 }
 
+// ═══════ Density (compact/comfortable) ═══════
+let currentDensity = 'comfortable';
+
+function applyDensity(id){
+  currentDensity = (id === 'compact') ? 'compact' : 'comfortable';
+  document.body.setAttribute('data-density', currentDensity);
+  const sel = $('#densitySelect');
+  if(sel) sel.value = currentDensity;
+}
+
+async function setDensity(id){
+  applyDensity(id);
+  try{ await apiPost('/api/settings/density', {density: id}); }catch(e){}
+}
+
 // renderCustomThemeCards appends one selectable card per custom theme to the
 // theme grid in settings (existing built-in cards stay untouched).
 function renderCustomThemeCards(){
@@ -1071,6 +1097,7 @@ function renderScenarioTemplates(templates){
         btn.disabled = true;
         const resp = await apiPost('/api/ui/templates/apply', {id: tmpl.id});
         if(resp && resp.theme) applyTheme(resp.theme);
+        if(resp && resp.density) applyDensity(resp.density);
         if(resp && resp.config) applyUIConfig(resp.config);
         const prevText = btn.textContent;
         btn.textContent = '✓ ' + (t('scenario_applied') || 'Angewendet');
@@ -2005,6 +2032,14 @@ async function initLLMSwitcher(s){
     'OpenAI': 'openai', 'LM Studio': 'lmstudio', 'Ollama': 'ollama',
     'Groq': 'groq', 'Anthropic': 'anthropic', 'Mistral AI': 'mistral',
     'DeepSeek': 'deepseek', 'OpenRouter': 'openrouter',
+    'Google Gemini': 'gemini', 'Together AI': 'togetherai', 'xAI': 'xai',
+    'Cohere': 'cohere', 'Perplexity': 'perplexity',
+    'vLLM': 'vllm', 'text-generation-webui': 'textgenwebui',
+    'KoboldCpp': 'koboldcpp', 'Jan': 'jan',
+    // "llmster" is ambiguous (llama.cpp/LocalAI/llmster all default to
+    // :8080) — pre-select llama.cpp as the most common case; the user can
+    // still pick LocalAI explicitly from the dropdown.
+    'llmster': 'llamacpp',
   };
   sel.value = provToVal[provName] || 'custom';
 
@@ -2022,13 +2057,26 @@ async function initLLMSwitcher(s){
     }
     // Map selection to base URL
     const map = {
-      openai: 'https://api.openai.com',
+      // Local
       lmstudio: 'http://localhost:1234',
       ollama: 'http://localhost:11434',
+      llamacpp: 'http://localhost:8080',
+      vllm: 'http://localhost:8000',
+      textgenwebui: 'http://localhost:5000',
+      koboldcpp: 'http://localhost:5001',
+      jan: 'http://localhost:1337',
+      localai: 'http://localhost:8080',
+      // Cloud
+      openai: 'https://api.openai.com',
       groq: 'https://api.groq.com/openai',
       anthropic: 'https://api.anthropic.com',
+      gemini: 'https://generativelanguage.googleapis.com',
       mistral: 'https://api.mistral.ai',
       deepseek: 'https://api.deepseek.com',
+      togetherai: 'https://api.together.xyz',
+      xai: 'https://api.x.ai',
+      cohere: 'https://api.cohere.ai',
+      perplexity: 'https://api.perplexity.ai',
       openrouter: 'https://openrouter.ai/api',
     };
     const baseUrl = map[v];
@@ -4019,6 +4067,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       renderScenarioTemplates(ui.templates || []);
       applyUIConfig(ui.config || {});
       if(ui.theme) applyTheme(ui.theme);
+      applyDensity(ui.density || 'comfortable');
     }
   }catch(e){}
 
@@ -4087,6 +4136,9 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   if(exportMdBtn){ exportMdBtn.addEventListener('click', ()=>exportChat('markdown')); }
   const exportHtmlBtn = $('#exportHtmlBtn');
   if(exportHtmlBtn){ exportHtmlBtn.addEventListener('click', ()=>exportChat('html')); }
+
+  const densitySelect = $('#densitySelect');
+  if(densitySelect){ densitySelect.addEventListener('change', (e)=>setDensity(e.target.value)); }
 
   // Stats panel
   const statsRefreshBtn = $('#statsRefreshBtn');

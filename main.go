@@ -17,10 +17,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "embed"
@@ -165,6 +167,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				"embed_model":            s.EmbedModel,
 				"lang":                   s.Lang,
 				"theme":                  s.Theme,
+				"density":                s.Density,
 				"active_role":            s.ActiveRole,
 				"role_permissions":       permissionsForRole(s.ActiveRole),
 				"usage_profile":          s.UsageProfile,
@@ -357,6 +360,27 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		_ = settings.saveLocked()
 		settings.mu.Unlock()
 		writeJSON(w, map[string]any{"ok": true, "theme": req.Theme})
+	})
+
+	// POST /api/settings/density — persist the UI layout density (comfortable|compact)
+	mux.HandleFunc("/api/settings/density", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			writeError(w, 405, "POST only")
+			return
+		}
+		var req struct {
+			Density string `json:"density"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, 400, "invalid JSON")
+			return
+		}
+		settings.mu.Lock()
+		settings.s.Density = normalizeDensity(req.Density)
+		_ = settings.saveLocked()
+		density := settings.s.Density
+		settings.mu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "density": density})
 	})
 
 	// POST /api/settings/lang — persist UI/wiki default language
@@ -2545,6 +2569,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"themes":        builtinThemes,
 			"custom_themes": s.CustomThemes,
 			"templates":     scenarioTemplates(),
+			"density":       s.Density,
+			"densities":     builtinDensities,
 			"app_name":      s.AppName,
 			"app_logo_url":  s.AppLogoURL,
 		})
@@ -2657,9 +2683,12 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if themeValid {
 			settings.s.Theme = tmpl.Theme
 		}
+		if tmpl.Density != "" {
+			settings.s.Density = normalizeDensity(tmpl.Density)
+		}
 		settings.s.UI = normalizeUIConfig(tmpl.Config)
 		_ = settings.saveLocked()
-		out := map[string]any{"ok": true, "theme": settings.s.Theme, "config": settings.s.UI}
+		out := map[string]any{"ok": true, "theme": settings.s.Theme, "density": settings.s.Density, "config": settings.s.UI}
 		settings.mu.Unlock()
 		writeJSON(w, out)
 	}))
@@ -2695,11 +2724,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		switch format {
 		case "html":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Header().Set("Content-Disposition", `attachment; filename="`+exportFilename(conv, "html")+`"`)
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", exportFilename(conv, "html")))
 			_, _ = w.Write([]byte(conv.exportHTML(appName)))
 		default:
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-			w.Header().Set("Content-Disposition", `attachment; filename="`+exportFilename(conv, "md")+`"`)
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", exportFilename(conv, "md")))
 			_, _ = w.Write([]byte(conv.exportMarkdown(appName)))
 		}
 	})
@@ -3452,6 +3481,8 @@ func main() {
 	dbPath := flag.String("db", "tinyrag.gob", "Database file/directory path (empty=in-memory only)")
 	settingsPath := flag.String("settings", "settings.json", "Settings JSON path")
 	chatsPath := flag.String("chats", "chats.json", "Persisted chats JSON path (empty=memory only)")
+	usageStatsPath := flag.String("usage-stats", "usage_stats.jsonl", "Usage statistics JSONL path (empty=memory only, not persisted)")
+	connectorsPath := flag.String("connectors", "connectors.json", "Connector registry JSON path")
 	storageFlag := flag.String("storage-mode", "memory", "Storage mode: memory, wal, disk, index, hybrid")
 	maxMemMB := flag.Int64("max-mem-mb", 256, "Max memory in MB for hybrid/index mode")
 
@@ -3468,6 +3499,9 @@ func main() {
 	searchFlag := flag.String("searchq", "", "One-shot: run a semantic search and exit (overrides -web)")
 	jsonOut := flag.Bool("jsonout", false, "One-shot: emit machine-readable JSON")
 	noColor := flag.Bool("nocolor", false, "CLI: disable ANSI colors (NO_COLOR env is also honored)")
+	listThemes := flag.Bool("list-themes", false, "One-shot: print available theme ids as JSON and exit")
+	listTemplates := flag.Bool("list-templates", false, "One-shot: print built-in scenario templates as JSON and exit")
+	applyTemplateFlag := flag.String("apply-template", "", "One-shot: apply a scenario template (theme+UI config) and exit — for provisioning")
 
 	flag.Parse()
 
@@ -3483,6 +3517,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load settings: %v", err)
 	}
+
+	// Provisioning one-shots: pure settings/config operations that need
+	// neither an LLM endpoint nor the RAG store, so they run before the LLM
+	// probe below and exit immediately. Useful for deployment scripts, e.g.
+	// a Docker entrypoint calling `tinyRAG -apply-template support-widget`.
+	if *listThemes {
+		os.Exit(runListThemes())
+	}
+	if *listTemplates {
+		os.Exit(runListTemplates())
+	}
+	if *applyTemplateFlag != "" {
+		os.Exit(runApplyTemplate(*applyTemplateFlag))
+	}
+
 	s := maybePreferOfflineLLM(settings)
 	// Prefer persisted OpenAI key from settings; fallback to env var if none present
 	openaiKey := s.OpenAIKey
@@ -3545,6 +3594,25 @@ func main() {
 		}
 	}()
 
+	// Flush the RAG store on Ctrl+C / SIGTERM instead of losing unsaved
+	// in-memory data: Go's default signal handling terminates the process
+	// immediately without running deferred functions, so without this the
+	// GOB snapshot (memory/WAL modes) or final Sync (disk/hybrid/index
+	// modes) would never happen.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-sigCtx.Done()
+		log.Println("Shutting down, flushing data…")
+		if err := rag.save(); err != nil {
+			log.Printf("Warning: failed to save RAG store on shutdown: %v", err)
+		}
+		if err := rag.db.Close(); err != nil {
+			log.Printf("Warning: failed to close database on shutdown: %v", err)
+		}
+		os.Exit(0)
+	}()
+
 	existing := rag.docCount()
 	if existing > 0 {
 		fmt.Printf("Database has %d existing chunks.\n", existing)
@@ -3554,9 +3622,9 @@ func main() {
 	modules := newModuleStore(settings)
 	personas := newPersonaStore(settings)
 	chats := newChatStore(*chatsPath)
-	usageStats = newUsageStore("usage_stats.jsonl")
+	usageStats = newUsageStore(*usageStatsPath)
 
-	connectors, err := newConnectorStore("connectors.json")
+	connectors, err := newConnectorStore(*connectorsPath)
 	if err != nil {
 		log.Fatalf("Failed to load connector store: %v", err)
 	}
@@ -3587,5 +3655,5 @@ func main() {
 	}
 
 	// Interactive CLI/TUI mode
-	runCLI(rag, newCLIPalette(*noColor))
+	runCLI(rag, personas, newCLIPalette(*noColor))
 }

@@ -79,14 +79,29 @@
     </button>
     <label class="llm-switcher" title="Choose which LLM provider backend to use for chat completions">
       <select id="llmSwitcher" aria-label="Select LLM provider" title="Choose which LLM provider backend to use for chat completions">
-        <option value="openai">ChatGPT (OpenAI)</option>
-        <option value="lmstudio">LM Studio (local)</option>
-        <option value="ollama">Ollama (local)</option>
-        <option value="groq">Groq</option>
-        <option value="anthropic">Anthropic</option>
-        <option value="mistral">Mistral AI</option>
-        <option value="deepseek">DeepSeek</option>
-        <option value="openrouter">OpenRouter</option>
+        <optgroup label="Local">
+          <option value="lmstudio">LM Studio</option>
+          <option value="ollama">Ollama</option>
+          <option value="llamacpp">llama.cpp</option>
+          <option value="vllm">vLLM</option>
+          <option value="textgenwebui">text-generation-webui</option>
+          <option value="koboldcpp">KoboldCpp</option>
+          <option value="jan">Jan</option>
+          <option value="localai">LocalAI</option>
+        </optgroup>
+        <optgroup label="Cloud">
+          <option value="openai">ChatGPT (OpenAI)</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="mistral">Mistral AI</option>
+          <option value="groq">Groq</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="togetherai">Together AI</option>
+          <option value="xai">xAI (Grok)</option>
+          <option value="cohere">Cohere</option>
+          <option value="perplexity">Perplexity</option>
+          <option value="openrouter">OpenRouter</option>
+        </optgroup>
         <option value="custom">Custom...</option>
       </select>
     </label>
@@ -480,6 +495,12 @@
           <div class="label">Dracula</div>
         </div>
       </div>
+
+      <label for="densitySelect" data-i18n="density">Layout-Dichte</label>
+      <select id="densitySelect" aria-label="Select layout density" title="Comfortable: mehr Abstand. Compact: dichteres Layout für kleine Bildschirme oder viel Information.">
+        <option value="comfortable" data-i18n="density_comfortable">Comfortable</option>
+        <option value="compact" data-i18n="density_compact">Compact</option>
+      </select>
 
       <label data-i18n="scenario_templates">Vorlagen für Anwendungsfälle</label>
       <div class="hint" data-i18n="scenario_templates_hint">Ein Klick setzt Theme und UI-Konfiguration passend zum Szenario. Danach frei anpassbar.</div>

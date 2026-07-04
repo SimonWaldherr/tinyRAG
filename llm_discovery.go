@@ -46,15 +46,27 @@ func providerHintFromURL(base string) string {
 	port := parsed.Port()
 
 	// Local endpoints identified by known host + port combinations.
+	// Note: several local runners default to the same port (e.g. llama.cpp's
+	// llama-server, LocalAI and llmster all commonly use 8080), so the hint
+	// is a best-effort guess — the user-selected provider in the UI (or the
+	// -url flag) is the source of truth, this is only used to pre-select a
+	// sensible default.
 	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-		if port == "11434" {
+		switch port {
+		case "11434":
 			return "Ollama"
-		}
-		if port == "1234" {
+		case "1234":
 			return "LM Studio"
-		}
-		if port == "8080" {
+		case "8080":
 			return "llmster"
+		case "8000":
+			return "vLLM"
+		case "5000":
+			return "text-generation-webui"
+		case "5001":
+			return "KoboldCpp"
+		case "1337":
+			return "Jan"
 		}
 		return "Local LLM"
 	}
@@ -85,15 +97,23 @@ func providerHintFromURL(base string) string {
 		return "OpenRouter"
 	}
 
-	// Fallback: port-based hints for non-standard local deployments.
-	if port == "11434" {
+	// Fallback: port-based hints for non-standard local deployments
+	// (e.g. a LAN IP or hostname running one of the same local servers).
+	switch port {
+	case "11434":
 		return "Ollama"
-	}
-	if port == "1234" {
+	case "1234":
 		return "LM Studio"
-	}
-	if port == "8080" {
+	case "8080":
 		return "llmster"
+	case "8000":
+		return "vLLM"
+	case "5000":
+		return "text-generation-webui"
+	case "5001":
+		return "KoboldCpp"
+	case "1337":
+		return "Jan"
 	}
 
 	return "OpenAI-compatible"
@@ -175,11 +195,19 @@ func isLocalLLMBase(base string) bool {
 	return strings.Contains(u, "localhost") || strings.Contains(u, "127.0.0.1")
 }
 
+// localLLMCandidates lists base URLs for common local model runners, probed
+// in order by maybePreferOfflineLLM on startup when the configured endpoint
+// is unreachable. Covers LM Studio, llmster/llama.cpp/LocalAI (8080),
+// Ollama, vLLM, text-generation-webui, KoboldCpp and Jan.
 func localLLMCandidates() []string {
 	return []string{
 		"http://localhost:1234",
 		"http://localhost:8080",
 		"http://localhost:11434",
+		"http://localhost:8000",
+		"http://localhost:5000",
+		"http://localhost:5001",
+		"http://localhost:1337",
 	}
 }
 

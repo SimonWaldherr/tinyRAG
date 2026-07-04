@@ -46,6 +46,23 @@ type uiThemeDef struct {
 	Vars  map[string]string `json:"vars"` // e.g. "--accent": "#ff6600"
 }
 
+// builtinDensities lists the layout density modes the frontend understands.
+// Unlike themes these are pure CSS-variable presets baked into style.css
+// ([data-density="compact"]); there is no custom-density mechanism.
+var builtinDensities = []map[string]string{
+	{"id": "comfortable", "label": "Comfortable"},
+	{"id": "compact", "label": "Compact"},
+}
+
+// normalizeDensity maps arbitrary input to a valid density mode. Empty or
+// unrecognized input defaults to "comfortable".
+func normalizeDensity(raw string) string {
+	if strings.ToLower(strings.TrimSpace(raw)) == "compact" {
+		return "compact"
+	}
+	return "comfortable"
+}
+
 // uiSuggestion is one suggestion button on the empty chat screen.
 type uiSuggestion struct {
 	Label  string `json:"label"`

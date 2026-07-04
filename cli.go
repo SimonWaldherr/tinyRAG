@@ -9,10 +9,14 @@ package main
 //     tinyRAG -web=false -ask "Wie funktioniert X?"          → answer to stdout
 //     tinyRAG -web=false -ask "…" -jsonout                    → JSON envelope
 //     tinyRAG -web=false -searchq "begriff" [-jsonout]        → top-k matches
+//     tinyRAG -list-themes | -list-templates                  → provisioning helpers
+//     tinyRAG -apply-template support-widget                  → apply a scenario headlessly
 //
-//   Interactive REPL:
+//   Interactive REPL (multi-turn — keeps conversation history like the web
+//   chat, up to cliHistoryLimit messages):
 //     tinyRAG -web=false
-//     Commands: /help /search /add /url /sources /count /role /stats /quit
+//     Commands: /help /search /add /url /sources /count /role /persona
+//               /model /export /new /stats /quit
 //
 // Colors honour the NO_COLOR convention and the -nocolor flag.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,8 +26,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // cliPalette renders ANSI colors when enabled.
@@ -50,8 +56,12 @@ func newCLIPalette(noColorFlag bool) cliPalette {
 	return cliPalette{on: true}
 }
 
-// cliAskSystemPrompt is the system prompt for CLI single-turn answers.
+// cliAskSystemPrompt is the base system prompt for CLI answers.
 const cliAskSystemPrompt = "Du bist ein hilfreicher Assistent. Beantworte Fragen basierend auf dem bereitgestellten Kontext. Wenn der Kontext die Antwort nicht enthält, sage das ehrlich."
+
+// cliHistoryLimit caps how many prior messages are kept as conversation
+// context, mirroring the web chat's history window (see /api/ask).
+const cliHistoryLimit = 10
 
 // runOneShotAsk answers a single question and exits. With jsonOut the full
 // answer is captured and emitted as a JSON envelope for scripting.
@@ -110,26 +120,129 @@ func runOneShotSearch(rag *ragSystem, query string, jsonOut bool) int {
 	return 0
 }
 
+// runListThemes prints available theme ids (builtin + custom) as JSON, for
+// provisioning scripts that want to validate a theme id before applying it.
+func runListThemes() int {
+	s := settings.get()
+	all := append([]map[string]string{}, builtinThemes...)
+	for _, t := range s.CustomThemes {
+		all = append(all, map[string]string{"id": t.ID, "label": t.Label})
+	}
+	b, _ := json.MarshalIndent(all, "", "  ")
+	fmt.Println(string(b))
+	return 0
+}
+
+// runListTemplates prints the built-in scenario templates as JSON.
+func runListTemplates() int {
+	b, _ := json.MarshalIndent(scenarioTemplates(), "", "  ")
+	fmt.Println(string(b))
+	return 0
+}
+
+// runApplyTemplate applies a scenario template's theme/density/UI config to
+// the persisted settings and exits — useful for provisioning a deployment
+// (e.g. a Docker entrypoint) without going through the web UI.
+func runApplyTemplate(id string) int {
+	tmpl, ok := findScenarioTemplate(strings.TrimSpace(id))
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Error: unknown template id %q\n", id)
+		return 1
+	}
+	settings.mu.Lock()
+	themeValid := isBuiltinTheme(tmpl.Theme)
+	if !themeValid {
+		for _, t := range settings.s.CustomThemes {
+			if t.ID == tmpl.Theme {
+				themeValid = true
+				break
+			}
+		}
+	}
+	if themeValid {
+		settings.s.Theme = tmpl.Theme
+	}
+	if tmpl.Density != "" {
+		settings.s.Density = normalizeDensity(tmpl.Density)
+	}
+	settings.s.UI = normalizeUIConfig(tmpl.Config)
+	err := settings.saveLocked()
+	settings.mu.Unlock()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to save settings: %v\n", err)
+		return 1
+	}
+	fmt.Printf("Applied template %q (theme=%s, density=%s)\n", tmpl.ID, tmpl.Theme, normalizeDensity(tmpl.Density))
+	return 0
+}
+
 // printCLIHelp lists the REPL commands.
 func printCLIHelp(p cliPalette) {
 	fmt.Println(p.accent("Befehle:"))
-	fmt.Println("  /search <query>   semantische Suche in der Wissensbasis")
-	fmt.Println("  /add <Artikel>    Wikipedia-Artikel ingesten")
-	fmt.Println("  /url <https://…>  Webseite laden und ingesten")
-	fmt.Println("  /sources          gespeicherte Quellen auflisten")
-	fmt.Println("  /count            Anzahl gespeicherter Chunks")
-	fmt.Println("  /role [rolle]     aktive Rolle anzeigen/setzen (it|logistik|vertrieb|hr)")
-	fmt.Println("  /stats            Nutzungsstatistik (30 Tage)")
-	fmt.Println("  /help             diese Hilfe")
-	fmt.Println("  /quit             beenden")
-	fmt.Println(p.dim("Alles andere wird als Frage an die Wissensbasis interpretiert."))
+	fmt.Println("  /search <query>     semantische Suche in der Wissensbasis")
+	fmt.Println("  /add <Artikel>      Wikipedia-Artikel ingesten")
+	fmt.Println("  /url <https://…>    Webseite laden und ingesten")
+	fmt.Println("  /sources            gespeicherte Quellen auflisten")
+	fmt.Println("  /count              Anzahl gespeicherter Chunks")
+	fmt.Println("  /role [rolle]       aktive Rolle anzeigen/setzen (it|logistik|vertrieb|hr)")
+	fmt.Println("  /persona [id]       Personas auflisten oder für diese Session setzen")
+	fmt.Println("  /model [name]       aktuelles Chat-Modell anzeigen oder wechseln")
+	fmt.Println("  /export <md|html> [datei]   Sitzungsverlauf exportieren (stdout ohne Datei)")
+	fmt.Println("  /new                Konversationsverlauf dieser Session zurücksetzen")
+	fmt.Println("  /stats              Nutzungsstatistik (30 Tage)")
+	fmt.Println("  /help               diese Hilfe")
+	fmt.Println("  /quit               beenden")
+	fmt.Println(p.dim("Alles andere wird als Frage an die Wissensbasis interpretiert (mit Gedächtnis über die Session)."))
 }
 
-// runCLI starts the interactive REPL.
-func runCLI(rag *ragSystem, p cliPalette) {
+// cliSession holds the state of one interactive REPL run: the running
+// conversation history (so follow-up questions like "und was noch?" work)
+// and the currently selected persona.
+type cliSession struct {
+	history   []chatMessage
+	personaID string
+}
+
+// systemPrompt returns the base system prompt, optionally prefixed with the
+// active persona's prompt (mirrors buildToolSystemPrompt's persona handling
+// in the web chat path, without the tool-calling machinery).
+func (cs *cliSession) systemPrompt(personas *personaStore) string {
+	if cs.personaID == "" || personas == nil {
+		return cliAskSystemPrompt
+	}
+	if persona, ok := personas.get(cs.personaID); ok && persona.Prompt != "" {
+		return persona.Prompt + "\n\n" + cliAskSystemPrompt
+	}
+	return cliAskSystemPrompt
+}
+
+// recentHistory returns up to cliHistoryLimit prior messages as chatMsg,
+// suitable for passing to chatStream alongside the current turn.
+func (cs *cliSession) recentHistory() []chatMsg {
+	start := 0
+	if len(cs.history) > cliHistoryLimit {
+		start = len(cs.history) - cliHistoryLimit
+	}
+	out := make([]chatMsg, 0, len(cs.history)-start)
+	for _, m := range cs.history[start:] {
+		out = append(out, chatMsg{Role: m.Role, Content: m.Content})
+	}
+	return out
+}
+
+// asConversation renders the session history through the same export
+// pipeline used by the web UI's chat export (see chat_export.go), so /export
+// produces identical Markdown/HTML formatting from the CLI.
+func (cs *cliSession) asConversation() *conversation {
+	return &conversation{ID: "cli-session", Title: "tinyRAG CLI Session", Messages: cs.history}
+}
+
+// runCLI starts the interactive, multi-turn REPL.
+func runCLI(rag *ragSystem, personas *personaStore, p cliPalette) {
 	fmt.Println(p.accent("tinyRAG CLI") + p.dim(" — /help für Befehle"))
 	fmt.Println()
 
+	session := &cliSession{}
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print(p.accent("tinyRAG> "))
@@ -149,6 +262,10 @@ func runCLI(rag *ragSystem, p cliPalette) {
 
 		case line == "/help":
 			printCLIHelp(p)
+
+		case line == "/new":
+			session.history = nil
+			fmt.Println(p.dim("Konversationsverlauf zurückgesetzt."))
 
 		case line == "/count":
 			fmt.Printf("%s chunks\n", p.ok(fmt.Sprintf("%d", rag.docCount())))
@@ -181,6 +298,90 @@ func runCLI(rag *ragSystem, p cliPalette) {
 			_ = settings.saveLocked()
 			settings.mu.Unlock()
 			fmt.Printf("Aktive Rolle: %s\n", p.ok(demoRoleLabel(role)))
+
+		case line == "/persona":
+			if personas == nil {
+				fmt.Println(p.dim("Keine Personas verfügbar."))
+				continue
+			}
+			for _, persona := range personas.list() {
+				marker := "  "
+				if persona.ID == session.personaID || (session.personaID == "" && persona.ID == personas.defaultID()) {
+					marker = p.ok("→ ")
+				}
+				fmt.Printf("%s%s %s\n", marker, persona.ID, p.dim(persona.Name))
+			}
+
+		case strings.HasPrefix(line, "/persona "):
+			id := strings.TrimSpace(strings.TrimPrefix(line, "/persona "))
+			if personas == nil {
+				fmt.Println(p.fail("Keine Personas verfügbar."))
+				continue
+			}
+			if _, ok := personas.get(id); !ok {
+				fmt.Println(p.fail(fmt.Sprintf("Unbekannte Persona: %q", id)))
+				continue
+			}
+			session.personaID = id
+			fmt.Printf("Persona gesetzt: %s\n", p.ok(id))
+
+		case line == "/model":
+			fmt.Printf("Chat-Modell: %s\n", p.ok(s.ChatModel))
+
+		case strings.HasPrefix(line, "/model "):
+			newModel := strings.TrimSpace(strings.TrimPrefix(line, "/model "))
+			if newModel == "" {
+				fmt.Println(p.fail("Modellname fehlt."))
+				continue
+			}
+			settings.mu.Lock()
+			settings.s.ChatModel = newModel
+			_ = settings.saveLocked()
+			applied := settings.s
+			settings.mu.Unlock()
+			key := applied.OpenAIKey
+			if key == "" {
+				key = os.Getenv("OPENAI_API_KEY")
+			}
+			chatLM := newLMClient(applied.ChatBase, applied.EmbedModel, applied.ChatModel, key)
+			embedLM := newLMClient(applied.EmbedBase, applied.EmbedModel, applied.ChatModel, key)
+			var provider lmProvider = chatLM
+			if applied.ChatBase != applied.EmbedBase {
+				provider = &compositeLM{embedClient: embedLM, chatClient: chatLM}
+			}
+			rag.setLM(provider)
+			fmt.Printf("Chat-Modell gewechselt zu: %s\n", p.ok(newModel))
+
+		case strings.HasPrefix(line, "/export"):
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "/export"))
+			parts := strings.Fields(rest)
+			if len(parts) == 0 {
+				fmt.Println(p.fail("Format fehlt: /export <md|html> [datei]"))
+				continue
+			}
+			format := strings.ToLower(parts[0])
+			appName := s.AppName
+			if appName == "" {
+				appName = "tinyRAG"
+			}
+			conv := session.asConversation()
+			var content string
+			switch format {
+			case "html":
+				content = conv.exportHTML(appName)
+			default:
+				content = conv.exportMarkdown(appName)
+			}
+			if len(parts) >= 2 {
+				filename := parts[1]
+				if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+					fmt.Println(p.fail(fmt.Sprintf("Fehler beim Schreiben: %v", err)))
+					continue
+				}
+				fmt.Printf("Exportiert nach %s\n", p.ok(filename))
+			} else {
+				fmt.Println(content)
+			}
 
 		case strings.HasPrefix(line, "/add "):
 			art := strings.TrimSpace(strings.TrimPrefix(line, "/add "))
@@ -232,16 +433,37 @@ func runCLI(rag *ragSystem, p cliPalette) {
 			}
 
 		default:
-			// Single-turn ask: top-k context + streamed answer.
+			// Multi-turn ask: prior turns + fresh RAG context for this question.
+			now := time.Now().Format(time.RFC3339)
+			session.history = append(session.history, chatMessage{Role: "user", Content: line, Time: now})
+
 			ctxText, _, err := rag.prepareContext(line, false)
 			if err != nil {
 				fmt.Println(p.fail(fmt.Sprintf("Fehler: %v", err)))
 				continue
 			}
-			msgs := []chatMsg{{Role: "user", Content: fmt.Sprintf("Kontext:\n%s\n\nFrage: %s", ctxText, line)}}
+			history := session.recentHistory()
+			// Drop the just-appended raw question from history and replace
+			// it with a context-augmented version for this turn only; prior
+			// turns stay as originally exchanged.
+			if len(history) > 0 {
+				history = history[:len(history)-1]
+			}
+			msgs := append(history, chatMsg{Role: "user", Content: fmt.Sprintf("Kontext:\n%s\n\nFrage: %s", ctxText, line)})
+
 			fmt.Print("\n" + p.ok(">> "))
-			_ = rag.getLM().chatStream(context.Background(), cliAskSystemPrompt, msgs, os.Stdout)
+			var answer strings.Builder
+			out := io.MultiWriter(os.Stdout, &answer)
+			err = rag.getLM().chatStream(context.Background(), session.systemPrompt(personas), msgs, out)
 			fmt.Println()
+			if err != nil {
+				fmt.Println(p.fail(fmt.Sprintf("Fehler: %v", err)))
+				continue
+			}
+			session.history = append(session.history, chatMessage{
+				Role: "assistant", Content: strings.TrimSpace(stripInternalThinking(answer.String())),
+				Time: time.Now().Format(time.RFC3339), Model: s.ChatModel,
+			})
 		}
 		fmt.Println()
 	}

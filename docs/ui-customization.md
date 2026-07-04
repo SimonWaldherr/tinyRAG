@@ -96,14 +96,42 @@ tools, cron jobs, or your own TUI:
 
 # Interactive REPL (colored; NO_COLOR or -nocolor disables ANSI)
 ./tinyRAG -web=false
+
+# Provisioning one-shots — no LLM endpoint needed, useful in a Docker
+# entrypoint or setup script to configure a fresh deployment headlessly:
+./tinyRAG -list-themes                       # → JSON array of available theme ids
+./tinyRAG -list-templates                    # → JSON array of scenario templates
+./tinyRAG -apply-template support-widget     # sets theme + UI config, exits
 ```
 
-REPL commands: `/search`, `/add` (Wikipedia), `/url` (web page), `/sources`,
-`/count`, `/role [it|logistik|vertrieb|hr]`, `/stats`, `/help`, `/quit` —
-anything else is answered as a RAG question.
+The REPL is **multi-turn**: it keeps the last 10 exchanged messages as
+conversation history (same window as the web chat), so follow-up questions
+like "und was noch?" work as expected. `/new` resets the history.
+
+REPL commands:
+
+| Command | Purpose |
+|---|---|
+| `/search <query>` | semantic search in the knowledge base |
+| `/add <article>` | ingest a Wikipedia article |
+| `/url <https://…>` | ingest a web page |
+| `/sources` | list stored sources |
+| `/count` | number of stored chunks |
+| `/role [it\|logistik\|vertrieb\|hr]` | show/set the active role |
+| `/persona [id]` | list personas, or set one for this session (prefixes its prompt) |
+| `/model [name]` | show/switch the chat model at runtime |
+| `/export <md\|html> [file]` | export the session transcript (stdout if no file), reusing the same renderer as the web UI's chat export |
+| `/new` | reset the conversation history |
+| `/stats` | usage statistics (30 days) |
+| `/help`, `/quit` | help / exit |
+
+Anything else is answered as a RAG question with conversation memory.
 
 `-ask`/`-searchq` take precedence over `-web`, so a pipeline can call the
-binary directly without extra flags.
+binary directly without extra flags. Pressing Ctrl+C (or SIGTERM) triggers a
+graceful shutdown that flushes the RAG store before exiting — required
+because in-memory storage modes only persist their GOB snapshot on a clean
+`Close()`, which the OS's default signal handling would otherwise skip.
 
 ## 4. Putting it together: shipping a differently-shaped RAG product
 

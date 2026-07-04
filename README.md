@@ -108,6 +108,40 @@ Example configuration:
 
 ### Setting up LLM Backend
 
+tinyRAG talks to any OpenAI-compatible chat/embeddings endpoint, local or
+cloud. The **provider switcher** in the top toolbar lists common presets
+(grouped Local / Cloud) and pre-fills the default base URL for each; picking
+one probes the endpoint, lists available models, and lets you apply a chat
+model in a couple of clicks. "Custom..." opens Settings for anything not in
+the list — any OpenAI-compatible server works even if it isn't listed.
+
+| Provider | Type | Default base URL |
+|---|---|---|
+| LM Studio | Local | `http://localhost:1234` |
+| Ollama | Local | `http://localhost:11434` |
+| llama.cpp (`llama-server`) | Local | `http://localhost:8080` |
+| vLLM | Local | `http://localhost:8000` |
+| text-generation-webui | Local | `http://localhost:5000` |
+| KoboldCpp | Local | `http://localhost:5001` |
+| Jan | Local | `http://localhost:1337` |
+| LocalAI | Local | `http://localhost:8080` |
+| OpenAI | Cloud | `https://api.openai.com` |
+| Anthropic | Cloud | `https://api.anthropic.com` |
+| Google Gemini | Cloud | `https://generativelanguage.googleapis.com` |
+| Mistral AI | Cloud | `https://api.mistral.ai` |
+| Groq | Cloud | `https://api.groq.com/openai` |
+| DeepSeek | Cloud | `https://api.deepseek.com` |
+| Together AI | Cloud | `https://api.together.xyz` |
+| xAI (Grok) | Cloud | `https://api.x.ai` |
+| Cohere | Cloud | `https://api.cohere.ai` |
+| Perplexity | Cloud | `https://api.perplexity.ai` |
+| OpenRouter | Cloud | `https://openrouter.ai/api` |
+
+Full setup instructions (install commands, default models, quirks per
+provider) are in **[docs/llm-providers.md](docs/llm-providers.md)**.
+
+Quick start with the two most common local runners:
+
 1. **LM Studio**:
    - Download and install [LM Studio](https://lmstudio.ai/)
    - Load a chat model (e.g., Mistral, Llama)
@@ -126,12 +160,17 @@ Example configuration:
 
 3. Configure tinyRAG:
    - Open the web interface
-   - Click the settings (⚙) button
-   - Go to "LLM Backend" tab
-   - Enter your API endpoint
+   - Click the provider switcher in the toolbar and pick your backend, **or**
+     click the settings (⚙) button → "LLM Backend" tab for manual entry
+   - Enter your API endpoint (if not using the switcher)
    - Click "Test & Load Models"
    - Select your chat and embedding models
    - Click "Save"
+
+On startup, if the configured endpoint is unreachable, tinyRAG automatically
+probes the common local ports above (LM Studio, Ollama, llama.cpp, vLLM,
+text-generation-webui, KoboldCpp, Jan) and switches to the first one it finds
+— see `maybePreferOfflineLLM` in [llm_discovery.go](llm_discovery.go).
 
 ## Web Interface
 

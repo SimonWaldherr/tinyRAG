@@ -42,6 +42,9 @@ func TestScenarioTemplatesReferenceValidThemes(t *testing.T) {
 		if !isBuiltinTheme(tmpl.Theme) && !known[tmpl.Theme] {
 			t.Errorf("template %q references unknown theme %q", tmpl.ID, tmpl.Theme)
 		}
+		if tmpl.Density != "" && normalizeDensity(tmpl.Density) != tmpl.Density {
+			t.Errorf("template %q has non-canonical density %q", tmpl.ID, tmpl.Density)
+		}
 		norm := normalizeUIConfig(tmpl.Config)
 		if !norm.Panels[norm.DefaultPanel] {
 			t.Errorf("template %q: default panel %q ends up disabled after normalization", tmpl.ID, norm.DefaultPanel)

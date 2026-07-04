@@ -102,6 +102,67 @@ func defaultCustomThemes() []uiThemeDef {
 				"--sidebar-bg": "#ffffff", "--input-bg": "#ffffff", "--header-bg": "rgba(255,255,255,.98)", "--shadow": "none", "--shadow-sm": "none",
 			},
 		},
+		{
+			ID: "cyberpunk", Label: "Cyberpunk", Base: "dark",
+			Vars: map[string]string{
+				"--bg": "#0a0014", "--panel": "#15021f", "--panel2": "#08000d",
+				"--text": "#f2e9ff", "--muted": "#9b7fc4", "--border": "#3a1256",
+				"--accent": "#ff2bd6", "--accent-subtle": "rgba(255,43,214,.14)", "--accent-subtle2": "rgba(255,43,214,.26)",
+				"--gradient-secondary": "#00f0ff", "--ok": "#00ff9c", "--warn": "#faff00", "--danger": "#ff2b4c",
+				"--sidebar-bg": "#08000d", "--input-bg": "#15021f", "--header-bg": "rgba(8,0,13,.94)", "--code-bg": "#08000d",
+			},
+		},
+		{
+			ID: "ocean", Label: "Ocean", Base: "light",
+			Vars: map[string]string{
+				"--bg": "#eef7fb", "--panel": "#ffffff", "--panel2": "#e0f0f7",
+				"--text": "#0e2c38", "--muted": "#4f7688", "--border": "#cde7f0",
+				"--accent": "#0891b2", "--accent-subtle": "rgba(8,145,178,.10)", "--accent-subtle2": "rgba(8,145,178,.20)",
+				"--gradient-secondary": "#0e7490", "--ok": "#0d9488", "--warn": "#c2820c", "--danger": "#dc2626",
+				"--sidebar-bg": "#ffffff", "--input-bg": "#ffffff", "--header-bg": "rgba(255,255,255,.94)",
+			},
+		},
+		{
+			ID: "forest", Label: "Forest", Base: "dark",
+			Vars: map[string]string{
+				"--bg": "#0f1710", "--panel": "#162117", "--panel2": "#0b110c",
+				"--text": "#e3ecdf", "--muted": "#7c9578", "--border": "#233524",
+				"--accent": "#5eae52", "--accent-subtle": "rgba(94,174,82,.14)", "--accent-subtle2": "rgba(94,174,82,.24)",
+				"--gradient-secondary": "#8fbc6a", "--ok": "#5eae52", "--warn": "#d1b34a", "--danger": "#c0605a",
+				"--sidebar-bg": "#0b110c", "--input-bg": "#162117", "--header-bg": "rgba(11,17,12,.94)", "--code-bg": "#0b110c",
+			},
+		},
+		{
+			ID: "midnight", Label: "Midnight (AMOLED)", Base: "dark",
+			Vars: map[string]string{
+				"--bg": "#000000", "--panel": "#050505", "--panel2": "#000000",
+				"--text": "#e6e6e6", "--muted": "#7a7a7a", "--border": "#1a1a1a",
+				"--accent": "#5b8cff", "--accent-subtle": "rgba(91,140,255,.12)", "--accent-subtle2": "rgba(91,140,255,.22)",
+				"--gradient-secondary": "#8f6bff", "--ok": "#3ecf8e", "--warn": "#e0b84a", "--danger": "#e8546f",
+				"--sidebar-bg": "#000000", "--input-bg": "#050505", "--header-bg": "rgba(0,0,0,.98)", "--code-bg": "#000000",
+				"--shadow": "none", "--shadow-sm": "none",
+			},
+		},
+		{
+			ID: "finance", Label: "Finance", Base: "light",
+			Vars: map[string]string{
+				"--bg": "#f4f6f5", "--panel": "#ffffff", "--panel2": "#e9efec",
+				"--text": "#101d16", "--muted": "#526158", "--border": "#dce6e0",
+				"--accent": "#0a6e3c", "--accent-subtle": "rgba(10,110,60,.10)", "--accent-subtle2": "rgba(10,110,60,.20)",
+				"--gradient-secondary": "#1f3d2e", "--ok": "#0a6e3c", "--warn": "#a97a12", "--danger": "#a3241f",
+				"--sidebar-bg": "#ffffff", "--input-bg": "#ffffff", "--header-bg": "rgba(255,255,255,.95)",
+			},
+		},
+		{
+			ID: "government", Label: "Government / Official", Base: "light",
+			Vars: map[string]string{
+				"--bg": "#f5f6f8", "--panel": "#ffffff", "--panel2": "#e8ebef",
+				"--text": "#1b2430", "--muted": "#5a6472", "--border": "#dde1e7",
+				"--accent": "#1f3a5f", "--accent-subtle": "rgba(31,58,95,.10)", "--accent-subtle2": "rgba(31,58,95,.20)",
+				"--gradient-secondary": "#8a1f2b", "--ok": "#256d3b", "--warn": "#9c6a10", "--danger": "#8a1f2b",
+				"--sidebar-bg": "#ffffff", "--input-bg": "#ffffff", "--header-bg": "rgba(255,255,255,.96)",
+			},
+		},
 	}
 }
 
@@ -112,6 +173,7 @@ type uiScenarioTemplate struct {
 	Label       string   `json:"label"`
 	Description string   `json:"description"`
 	Theme       string   `json:"theme"`
+	Density     string   `json:"density,omitempty"` // "comfortable" or "compact"; empty leaves density unchanged
 	Config      uiConfig `json:"config"`
 }
 
@@ -216,6 +278,79 @@ func scenarioTemplates() []uiScenarioTemplate {
 				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
 				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
 				FooterText: "Öffentliches Terminal – bitte keine persönlichen Daten eingeben.",
+			},
+		},
+		{
+			ID: "finance-dashboard", Label: "Finance-Dashboard", Theme: "finance", Density: "compact",
+			Description: "Dichtes Layout für Finanzteams: Chat, Suche und Statistik nebeneinander, kein Ingest für Endnutzer.",
+			Config: uiConfig{
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": true},
+				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": false, "debug": false},
+				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(true), ShowLLMSwitcher: boolPtr(false),
+				Suggestions: []uiSuggestion{
+					{Label: "Quartalsbericht", Prompt: "Fasse den aktuellen Quartalsbericht zusammen"},
+					{Label: "Kennzahlen", Prompt: "Welche Kennzahlen haben sich diesen Monat am stärksten verändert?"},
+				},
+			},
+		},
+		{
+			ID: "government-portal", Label: "Behördenportal", Theme: "government",
+			Description: "Formeller Bürgerservice-Auftritt: Chat und Suche, ohne technische Bedienelemente.",
+			Config: uiConfig{
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": false},
+				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
+				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				FooterText: "Automatisierte Auskunft ohne Gewähr. Für verbindliche Anliegen wenden Sie sich an die zuständige Stelle.",
+			},
+		},
+		{
+			ID: "focus-mode", Label: "Fokus-Modus", Theme: "midnight",
+			Description: "Ablenkungsfreie Chat-Ansicht für Präsentationen und Screensharing: nur Chat, keine Picker.",
+			Config: uiConfig{
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": false, "ingest": false, "stats": false},
+				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
+				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+			},
+		},
+		{
+			ID: "community-bot", Label: "Community-Bot", Theme: "cyberpunk", Density: "compact",
+			Description: "Verspielter Wissens-Bot für Gaming-/Community-Wikis mit Agent-Planung für Mehrschritt-Fragen.",
+			Config: uiConfig{
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false},
+				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": false},
+				ShowPersonaPicker: boolPtr(true), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				Suggestions: []uiSuggestion{
+					{Label: "Build-Guide", Prompt: "Was ist aktuell der beste Build für Einsteiger?"},
+					{Label: "Patch-Notes", Prompt: "Was hat sich im letzten Patch geändert?"},
+				},
+			},
+		},
+		{
+			ID: "nonprofit-portal", Label: "NGO-Wissensportal", Theme: "forest",
+			Description: "Freundlicher Auftritt für Spenden-/Ehrenamtsinformationen: Chat und Suche, ohne Admin-Schalter.",
+			Config: uiConfig{
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": true, "ingest": false, "stats": false},
+				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
+				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
+				Suggestions: []uiSuggestion{
+					{Label: "Spenden", Prompt: "Wie kann ich spenden und wofür wird das Geld verwendet?"},
+					{Label: "Mitmachen", Prompt: "Wie kann ich mich ehrenamtlich engagieren?"},
+				},
+			},
+		},
+		{
+			ID: "mobile-lite", Label: "Mobile Lite", Theme: "ocean", Density: "compact",
+			Description: "Reduzierte Oberfläche für kleine Bildschirme: nur Chat, kompaktes Layout, keine Picker.",
+			Config: uiConfig{
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": false, "ingest": false, "stats": false},
+				Modes:             map[string]bool{"auto_search": true, "deep": false, "offline": false, "agent": false, "debug": false},
+				ShowPersonaPicker: boolPtr(false), ShowRolePicker: boolPtr(false), ShowLLMSwitcher: boolPtr(false),
 			},
 		},
 	}

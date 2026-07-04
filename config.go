@@ -28,6 +28,9 @@ type appSettings struct {
 	OpenAIKey string `json:"openai_api_key"`
 	Lang      string `json:"lang"`
 	Theme     string `json:"theme"`
+	// Density selects the UI spacing scale: "comfortable" (default) or
+	// "compact" (tighter sidebar/message/list spacing, smaller base font).
+	Density string `json:"density"`
 	// ActiveRole is the currently selected demo role (light RBAC).
 	// Intended as placeholder until AD/LDAP integration.
 	ActiveRole string `json:"active_role"`
@@ -426,6 +429,12 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 			if len(ss.s.CustomThemes) == 0 {
 				ss.s.CustomThemes = defaultCustomThemes()
 			}
+			// Same field-level normalization applied below for existing
+			// settings files, so a freshly created settings.json never
+			// persists empty/un-normalized values for these fields.
+			ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
+			ss.s.Density = normalizeDensity(ss.s.Density)
+			ss.s.UI = normalizeUIConfig(ss.s.UI)
 			if err := ss.saveLocked(); err != nil {
 				return nil, err
 			}
@@ -447,6 +456,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	ss.s.UsageProfile = normalizeUsageProfile(ss.s.UsageProfile)
 	ss.s.ResponseLanguageMode = normalizeResponseLanguageMode(ss.s.ResponseLanguageMode)
 	ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
+	ss.s.Density = normalizeDensity(ss.s.Density)
 	ss.s.UI = normalizeUIConfig(ss.s.UI)
 	validThemes := ss.s.CustomThemes[:0]
 	for _, t := range ss.s.CustomThemes {
