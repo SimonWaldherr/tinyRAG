@@ -85,6 +85,14 @@ type appSettings struct {
 	// Default: false for security reasons.
 	AllowTinyGo bool `json:"allow_tinygo"`
 
+	// ── UI configuration & theming ────────────────────────────────────────────
+	// UI controls which panels, chat modes, pickers and suggestions the web
+	// frontend renders. Defaults to everything enabled (see normalizeUIConfig).
+	UI uiConfig `json:"ui"`
+	// CustomThemes holds operator-defined themes (CSS-variable maps applied
+	// on top of a built-in base theme).
+	CustomThemes []uiThemeDef `json:"custom_themes"`
+
 	// ── Branding (white-label) ────────────────────────────────────────────────
 	// AppName replaces "tinyRAG" throughout the UI. Empty → "tinyRAG".
 	AppName string `json:"app_name"`
@@ -415,6 +423,9 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 			if len(ss.s.Modules) == 0 {
 				ss.s.Modules = defaultModules()
 			}
+			if len(ss.s.CustomThemes) == 0 {
+				ss.s.CustomThemes = defaultCustomThemes()
+			}
 			if err := ss.saveLocked(); err != nil {
 				return nil, err
 			}
@@ -436,6 +447,14 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	ss.s.UsageProfile = normalizeUsageProfile(ss.s.UsageProfile)
 	ss.s.ResponseLanguageMode = normalizeResponseLanguageMode(ss.s.ResponseLanguageMode)
 	ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
+	ss.s.UI = normalizeUIConfig(ss.s.UI)
+	validThemes := ss.s.CustomThemes[:0]
+	for _, t := range ss.s.CustomThemes {
+		if clean, err := sanitizeCustomTheme(t); err == nil {
+			validThemes = append(validThemes, clean)
+		}
+	}
+	ss.s.CustomThemes = validThemes
 	if ss.s.AgentMaxPlanSteps <= 0 {
 		ss.s.AgentMaxPlanSteps = 3
 	}
@@ -462,6 +481,9 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	// OpenAIKey may be empty; keep as-is (don't normalize)
 	if len(ss.s.Personas) == 0 {
 		ss.s.Personas = defaultPersonas()
+	}
+	if len(ss.s.CustomThemes) == 0 {
+		ss.s.CustomThemes = defaultCustomThemes()
 	}
 	ss.s.Modules = normalizeModules(ss.s.Modules)
 	if ss.s.PullSources == nil {

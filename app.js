@@ -605,6 +605,10 @@ const _translations = {
     modules_hint: 'Module verbinden externe Quellen mit tinyRAG. Testen zeigt Rohdaten, Ingest uebernimmt normalisierten Text in die Wissensbasis.',
     personas: 'Personas',
     appearance: 'Erscheinungsbild',
+    scenario_templates: 'Vorlagen für Anwendungsfälle',
+    scenario_templates_hint: 'Ein Klick setzt Theme und UI-Konfiguration passend zum Szenario. Danach frei anpassbar.',
+    scenario_apply: 'Anwenden',
+    scenario_applied: 'Vorlage angewendet.',
     language: 'Sprache / Language',
     usage_profile: 'Nutzungsprofil',
     usage_profile_personal: 'Persönlich',
@@ -778,6 +782,10 @@ const _translations = {
     modules_hint: 'Modules connect external sources to tinyRAG. Test previews raw data, ingest writes normalized text into the knowledge base.',
     personas: 'Personas',
     appearance: 'Appearance',
+    scenario_templates: 'Scenario templates',
+    scenario_templates_hint: 'One click sets the theme and UI configuration for the scenario. Freely adjustable afterwards.',
+    scenario_apply: 'Apply',
+    scenario_applied: 'Template applied.',
     language: 'Language',
     usage_profile: 'Usage Profile',
     usage_profile_personal: 'Personal',
@@ -885,14 +893,39 @@ function autosize(el){
 // ═══════ Theme system ═══════
 const THEMES = ['dark','light','nord','solarized','monokai','dracula'];
 let currentTheme = 'dark';
+// customThemes: id → {id, label, base, vars} — loaded from /api/ui
+let customThemes = {};
+// Names of CSS vars currently overridden inline (for clean removal on switch)
+let appliedThemeVars = [];
+
+function clearThemeVars(){
+  const root = document.documentElement;
+  appliedThemeVars.forEach(name => root.style.removeProperty(name));
+  appliedThemeVars = [];
+}
 
 function applyTheme(id){
-  if(!THEMES.includes(id)) id = 'dark';
+  const custom = customThemes[id];
+  if(!custom && !THEMES.includes(id)) id = 'dark';
   currentTheme = id;
-  document.body.setAttribute('data-theme', id);
+  clearThemeVars();
+  const base = custom ? (custom.base || 'dark') : id;
+  document.body.setAttribute('data-theme', base);
+  document.body.dataset.customTheme = custom ? id : '';
+  if(custom && custom.vars){
+    const root = document.documentElement;
+    Object.entries(custom.vars).forEach(([name, value]) => {
+      // Values come pre-sanitized from the server; setProperty cannot
+      // escape the declaration, so this is injection-safe by construction.
+      if(/^--[a-z0-9-]+$/.test(name)){
+        root.style.setProperty(name, value);
+        appliedThemeVars.push(name);
+      }
+    });
+  }
   // Update meta color-scheme for browser chrome
   const meta = document.querySelector('meta[name="color-scheme"]');
-  if(meta) meta.content = (id === 'light') ? 'light' : 'dark';
+  if(meta) meta.content = (base === 'light') ? 'light' : 'dark';
   // Update theme cards active state and ARIA attributes
   $$('.theme-card').forEach(c => {
     const isActive = c.dataset.themeId === id;
@@ -902,9 +935,158 @@ function applyTheme(id){
   });
 }
 
+// renderCustomThemeCards appends one selectable card per custom theme to the
+// theme grid in settings (existing built-in cards stay untouched).
+function renderCustomThemeCards(){
+  const grid = $('#themeGrid');
+  if(!grid) return;
+  grid.querySelectorAll('.theme-card.custom').forEach(c => c.remove());
+  Object.values(customThemes).forEach(t => {
+    const card = document.createElement('div');
+    card.className = 'theme-card custom';
+    card.dataset.themeId = t.id;
+    card.setAttribute('role', 'radio');
+    card.setAttribute('aria-checked', currentTheme === t.id ? 'true' : 'false');
+    card.setAttribute('tabindex', currentTheme === t.id ? '0' : '-1');
+    card.title = t.label;
+    const preview = document.createElement('div');
+    preview.className = 'preview';
+    ['--bg','--panel','--accent'].forEach(v => {
+      const span = document.createElement('span');
+      if(t.vars && t.vars[v]) span.style.background = t.vars[v];
+      preview.appendChild(span);
+    });
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = t.label;
+    card.appendChild(preview);
+    card.appendChild(label);
+    card.addEventListener('click', ()=>setTheme(t.id));
+    card.addEventListener('keydown', (e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setTheme(t.id); } });
+    grid.appendChild(card);
+  });
+}
+
 async function setTheme(id){
   applyTheme(id);
   try{ await apiPost('/api/settings/theme', {theme: id}); }catch(e){}
+}
+
+// ═══════ UI configuration (panels, modes, suggestions, footer) ═══════
+
+// applyUIConfig reshapes the UI according to the server-side uiConfig.
+// Everything defaults to visible; operators can hide panels, chat modes,
+// toolbar pickers, replace the suggestion buttons and the footer line.
+function applyUIConfig(cfg){
+  if(!cfg) return;
+  const panels = cfg.panels || {};
+  const modeToggleIds = {auto_search:'autoSearchMode', deep:'deepMode', offline:'offlineMode', agent:'agentMode', debug:'debugMode'};
+
+  // Main panels: hide tab buttons of disabled panels.
+  Object.entries(panels).forEach(([name, enabled]) => {
+    const tab = document.querySelector('[data-main-tab="'+name+'"]');
+    if(tab) tab.style.display = enabled ? '' : 'none';
+  });
+
+  // Chat mode toggles: hide the surrounding label of disabled modes.
+  Object.entries(cfg.modes || {}).forEach(([name, enabled]) => {
+    const input = document.getElementById(modeToggleIds[name] || '');
+    if(!input) return;
+    const label = input.closest('label');
+    if(label) label.style.display = enabled ? '' : 'none';
+    if(!enabled && input.checked){ input.checked = false; input.dispatchEvent(new Event('change')); }
+  });
+
+  // Toolbar pickers
+  const pickerMap = [
+    [cfg.show_persona_picker, '#personaSelect'],
+    [cfg.show_role_picker, '#roleSelect'],
+    [cfg.show_llm_switcher, '#llmSwitcher'],
+  ];
+  pickerMap.forEach(([show, sel]) => {
+    if(show === false){
+      const el = document.querySelector(sel);
+      const label = el && el.closest('label');
+      if(label) label.style.display = 'none';
+      else if(el) el.style.display = 'none';
+    }
+  });
+
+  // Custom suggestion buttons on the empty chat screen
+  if(Array.isArray(cfg.suggestions) && cfg.suggestions.length){
+    const wrap = $('#chatSuggestions');
+    if(wrap){
+      wrap.innerHTML = '';
+      cfg.suggestions.forEach(s => {
+        const btn = document.createElement('button');
+        btn.className = 'suggestion-btn';
+        btn.textContent = s.label;
+        btn.title = s.prompt;
+        btn.addEventListener('click', ()=>fillChat(s.prompt));
+        wrap.appendChild(btn);
+      });
+    }
+  }
+
+  // Footer text
+  if(cfg.footer_text){
+    const footer = document.querySelector('.chat-footer [data-i18n="chat_disclaimer"]');
+    if(footer){ footer.textContent = cfg.footer_text; footer.removeAttribute('data-i18n'); }
+  }
+
+  // Default panel
+  if(cfg.default_panel && cfg.default_panel !== 'chat' && panels[cfg.default_panel] !== false){
+    showTab('main', cfg.default_panel);
+    if(cfg.default_panel === 'stats'){ try{ loadUsageStats(); }catch(e){} }
+  }
+}
+
+// renderScenarioTemplates fills the "scenario templates" grid in Settings →
+// Appearance. Each card shows label + description and applies theme + UI
+// config for that deployment shape in one click.
+function renderScenarioTemplates(templates){
+  const grid = $('#scenarioGrid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  (templates || []).forEach(tmpl => {
+    const card = document.createElement('div');
+    card.className = 'scenario-card';
+    card.setAttribute('role', 'listitem');
+
+    const label = document.createElement('div');
+    label.className = 'scenario-label';
+    label.textContent = tmpl.label;
+
+    const desc = document.createElement('div');
+    desc.className = 'scenario-desc';
+    desc.textContent = tmpl.description;
+
+    const btn = document.createElement('button');
+    const applyLabel = t('scenario_apply') || 'Anwenden';
+    btn.className = 'btn-small';
+    btn.textContent = applyLabel;
+    btn.title = tmpl.label;
+    btn.addEventListener('click', async ()=>{
+      try{
+        btn.disabled = true;
+        const resp = await apiPost('/api/ui/templates/apply', {id: tmpl.id});
+        if(resp && resp.theme) applyTheme(resp.theme);
+        if(resp && resp.config) applyUIConfig(resp.config);
+        const prevText = btn.textContent;
+        btn.textContent = '✓ ' + (t('scenario_applied') || 'Angewendet');
+        setTimeout(()=>{ btn.textContent = prevText; }, 1800);
+      }catch(e){
+        alert('Fehler: ' + (e.message || e));
+      }finally{
+        btn.disabled = false;
+      }
+    });
+
+    card.appendChild(label);
+    card.appendChild(desc);
+    card.appendChild(btn);
+    grid.appendChild(card);
+  });
 }
 
 // ═══════ Settings tabs ═══════
@@ -3828,6 +4010,18 @@ async function importCKAN(){
 
 // Main init
 window.addEventListener('DOMContentLoaded', async ()=>{
+  // load UI configuration (themes, panel/mode visibility, suggestions)
+  try{
+    const ui = await apiGet('/api/ui');
+    if(ui){
+      (ui.custom_themes || []).forEach(ct => { customThemes[ct.id] = ct; });
+      renderCustomThemeCards();
+      renderScenarioTemplates(ui.templates || []);
+      applyUIConfig(ui.config || {});
+      if(ui.theme) applyTheme(ui.theme);
+    }
+  }catch(e){}
+
   // load settings to determine UI language + theme
   try{
     const s = await apiGet('/api/settings');

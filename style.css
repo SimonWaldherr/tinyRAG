@@ -2204,3 +2204,34 @@ button { font-family: var(--font); cursor: pointer }
   color: var(--muted);
   font-size: .8rem;
 }
+
+/* ── Scenario templates ─────────────────────────────────────────────────── */
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 8px 0 16px;
+}
+.scenario-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scenario-label {
+  font-weight: 600;
+  font-size: .88rem;
+  color: var(--text);
+}
+.scenario-desc {
+  font-size: .76rem;
+  color: var(--muted);
+  line-height: 1.35;
+  flex: 1;
+}
+.scenario-card .btn-small {
+  align-self: flex-start;
+}

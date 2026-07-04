@@ -337,12 +337,26 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, "invalid JSON", 400)
 			return
 		}
+		req.Theme = strings.ToLower(strings.TrimSpace(req.Theme))
 		settings.mu.Lock()
+		valid := isBuiltinTheme(req.Theme)
+		if !valid {
+			for _, t := range settings.s.CustomThemes {
+				if t.ID == req.Theme {
+					valid = true
+					break
+				}
+			}
+		}
+		if !valid {
+			settings.mu.Unlock()
+			writeError(w, 400, "unknown theme id")
+			return
+		}
 		settings.s.Theme = req.Theme
 		_ = settings.saveLocked()
 		settings.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "theme": req.Theme})
+		writeJSON(w, map[string]any{"ok": true, "theme": req.Theme})
 	})
 
 	// POST /api/settings/lang — persist UI/wiki default language
@@ -2522,6 +2536,134 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		writeJSON(w, chats.list())
 	})
 
+	// GET /api/ui — UI configuration, theme list and branding for the frontend
+	mux.HandleFunc("/api/ui", func(w http.ResponseWriter, r *http.Request) {
+		s := settings.get()
+		writeJSON(w, map[string]any{
+			"config":        s.UI,
+			"theme":         s.Theme,
+			"themes":        builtinThemes,
+			"custom_themes": s.CustomThemes,
+			"templates":     scenarioTemplates(),
+			"app_name":      s.AppName,
+			"app_logo_url":  s.AppLogoURL,
+		})
+	})
+
+	// POST /api/ui/config — replace the UI configuration (admin)
+	mux.HandleFunc("/api/ui/config", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			writeError(w, 405, "POST only")
+			return
+		}
+		var cfg uiConfig
+		if err := readJSON(r, &cfg); err != nil {
+			writeError(w, 400, "invalid JSON")
+			return
+		}
+		settings.mu.Lock()
+		settings.s.UI = normalizeUIConfig(cfg)
+		_ = settings.saveLocked()
+		cfgOut := settings.s.UI
+		settings.mu.Unlock()
+		writeJSON(w, map[string]any{"ok": true, "config": cfgOut})
+	}))
+
+	// POST /api/ui/themes — upsert or delete a custom theme (admin)
+	mux.HandleFunc("/api/ui/themes", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			writeError(w, 405, "POST only")
+			return
+		}
+		var req struct {
+			Delete string     `json:"delete,omitempty"` // theme id to remove
+			Theme  uiThemeDef `json:"theme,omitempty"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, 400, "invalid JSON")
+			return
+		}
+		settings.mu.Lock()
+		defer settings.mu.Unlock()
+		if req.Delete != "" {
+			id := strings.ToLower(strings.TrimSpace(req.Delete))
+			themes, found := removeCustomTheme(settings.s.CustomThemes, id)
+			if !found {
+				writeError(w, 404, "theme not found")
+				return
+			}
+			settings.s.CustomThemes = themes
+			if settings.s.Theme == id {
+				settings.s.Theme = "dark"
+			}
+			_ = settings.saveLocked()
+			writeJSON(w, map[string]any{"ok": true, "custom_themes": settings.s.CustomThemes})
+			return
+		}
+		clean, err := sanitizeCustomTheme(req.Theme)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		exists := false
+		for _, t := range settings.s.CustomThemes {
+			if t.ID == clean.ID {
+				exists = true
+				break
+			}
+		}
+		if !exists && len(settings.s.CustomThemes) >= 24 {
+			writeError(w, 400, "too many custom themes (max 24)")
+			return
+		}
+		settings.s.CustomThemes = upsertCustomTheme(settings.s.CustomThemes, clean)
+		_ = settings.saveLocked()
+		writeJSON(w, map[string]any{"ok": true, "custom_themes": settings.s.CustomThemes})
+	}))
+
+	// GET /api/ui/templates — list built-in deployment scenario templates
+	mux.HandleFunc("/api/ui/templates", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, scenarioTemplates())
+	})
+
+	// POST /api/ui/templates/apply — apply a scenario template's theme + UI config (admin)
+	mux.HandleFunc("/api/ui/templates/apply", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			writeError(w, 405, "POST only")
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, 400, "invalid JSON")
+			return
+		}
+		tmpl, ok := findScenarioTemplate(strings.TrimSpace(req.ID))
+		if !ok {
+			writeError(w, 404, "unknown template id")
+			return
+		}
+		settings.mu.Lock()
+		themeValid := isBuiltinTheme(tmpl.Theme)
+		if !themeValid {
+			for _, t := range settings.s.CustomThemes {
+				if t.ID == tmpl.Theme {
+					themeValid = true
+					break
+				}
+			}
+		}
+		if themeValid {
+			settings.s.Theme = tmpl.Theme
+		}
+		settings.s.UI = normalizeUIConfig(tmpl.Config)
+		_ = settings.saveLocked()
+		out := map[string]any{"ok": true, "theme": settings.s.Theme, "config": settings.s.UI}
+		settings.mu.Unlock()
+		writeJSON(w, out)
+	}))
+
 	// GET /api/stats/usage?days=30 — aggregated usage statistics for the dashboard
 	mux.HandleFunc("/api/stats/usage", func(w http.ResponseWriter, r *http.Request) {
 		days := 30
@@ -3321,6 +3463,12 @@ func main() {
 	lang := flag.String("lang", "de", "Wikipedia language (first run only)")
 	chunkSize := flag.Int("chunk-size", 800, "Max characters per chunk (first run only)")
 
+	// One-shot / CLI flags
+	askFlag := flag.String("ask", "", "One-shot: answer this question and exit (overrides -web)")
+	searchFlag := flag.String("searchq", "", "One-shot: run a semantic search and exit (overrides -web)")
+	jsonOut := flag.Bool("jsonout", false, "One-shot: emit machine-readable JSON")
+	noColor := flag.Bool("nocolor", false, "CLI: disable ANSI colors (NO_COLOR env is also honored)")
+
 	flag.Parse()
 
 	// Parse storage mode
@@ -3414,6 +3562,22 @@ func main() {
 	}
 	connectorExec := newConnectorExecutor(connectors)
 
+	// One-shot mode: answer/search once and exit (scripting-friendly).
+	// Takes precedence over the web server so pipelines can call the binary
+	// directly: tinyRAG -ask "…" -jsonout
+	if *askFlag != "" || *searchFlag != "" {
+		code := 0
+		if *askFlag != "" {
+			code = runOneShotAsk(rag, *askFlag, *jsonOut)
+		} else {
+			code = runOneShotSearch(rag, *searchFlag, *jsonOut)
+		}
+		if err := rag.db.Close(); err != nil {
+			log.Printf("Warning: failed to close database: %v", err)
+		}
+		os.Exit(code)
+	}
+
 	if *web {
 		pullCtx, stopPullScheduler := context.WithCancel(context.Background())
 		defer stopPullScheduler()
@@ -3422,69 +3586,6 @@ func main() {
 		return
 	}
 
-	// CLI mode (kept minimal)
-	fmt.Println("Commands: /search <query> | /add <Article> | /count | /quit")
-	fmt.Println("Or just type a question for RAG-answered chat.")
-	fmt.Println()
-
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Print("tinyRAG> ")
-		if !scanner.Scan() {
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		switch {
-		case line == "/quit" || line == "/exit":
-			fmt.Println("Bye!")
-			return
-
-		case line == "/count":
-			fmt.Printf("%d chunks\n", rag.docCount())
-
-		case strings.HasPrefix(line, "/add "):
-			art := strings.TrimSpace(strings.TrimPrefix(line, "/add "))
-			fmt.Printf("Fetching %s...\n", art)
-			text, err := fetchWikipedia(art, s.Lang)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				continue
-			}
-			chunks, _ := chunksForIngest(text, s)
-			fmt.Printf("  %d chars -> %d chunks\n", len(text), len(chunks))
-			if err := rag.addChunks(art, chunks, settings.get().EmbedModel); err != nil {
-				fmt.Printf("Error: %v\n", err)
-			}
-			fmt.Printf("Total: %d chunks\n", rag.docCount())
-
-		case strings.HasPrefix(line, "/search "):
-			query := strings.TrimSpace(strings.TrimPrefix(line, "/search "))
-			results, err := rag.searchJSON(query, s.K)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				continue
-			}
-			for i, r := range results {
-				fmt.Printf("%d. [%.4f] %s\n\n", i+1, r.Score, r.Content)
-			}
-
-		default:
-			// Minimal single-turn ask: use top-k context and stream answer to stdout.
-			ctxText, _, err := rag.prepareContext(line, false)
-			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				continue
-			}
-			system := "Du bist ein hilfreicher Assistent. Beantworte Fragen basierend auf dem bereitgestellten Kontext. Wenn der Kontext die Antwort nicht enthält, sage das ehrlich."
-			msgs := []chatMsg{{Role: "user", Content: fmt.Sprintf("Kontext:\n%s\n\nFrage: %s", ctxText, line)}}
-			fmt.Print("\n>> ")
-			_ = rag.getLM().chatStream(context.Background(), system, msgs, os.Stdout)
-			fmt.Println()
-		}
-		fmt.Println()
-	}
+	// Interactive CLI/TUI mode
+	runCLI(rag, newCLIPalette(*noColor))
 }
