@@ -3519,6 +3519,9 @@ func main() {
 	listThemes := flag.Bool("list-themes", false, "One-shot: print available theme ids as JSON and exit")
 	listTemplates := flag.Bool("list-templates", false, "One-shot: print built-in scenario templates as JSON and exit")
 	applyTemplateFlag := flag.String("apply-template", "", "One-shot: apply a scenario template (theme+UI config) and exit — for provisioning")
+	demoLLMModel := flag.String("demo-llm-model", "", "Demo mode: run a bundled pure-Go LLM (GopherLLM) in-process instead of an external LLM server. "+
+		"Value is a path to a .gguf file, or \"auto\" to pick one from GopherLLM's default model directory. Requires building with -tags demo_llm.")
+	demoLLMAddr := flag.String("demo-llm-addr", "127.0.0.1:8091", "Demo mode: local address the embedded GopherLLM server listens on")
 
 	flag.Parse()
 
@@ -3547,6 +3550,27 @@ func main() {
 	}
 	if *applyTemplateFlag != "" {
 		os.Exit(runApplyTemplate(*applyTemplateFlag))
+	}
+
+	// Demo mode: run a bundled pure-Go LLM in-process (see demo_llm.go) so
+	// tinyRAG works standalone, with no LM Studio/Ollama/llama.cpp install.
+	// This overrides the configured chat/embed backend outright — skip the
+	// usual reachability probing/auto-preference logic below.
+	if *demoLLMModel != "" {
+		modelName, err := startEmbeddedDemoLLM(*demoLLMModel, *demoLLMAddr)
+		if err != nil {
+			log.Fatalf("Failed to start embedded demo LLM: %v", err)
+		}
+		demoBase := "http://" + *demoLLMAddr
+		settings.mu.Lock()
+		settings.s.BaseURL = demoBase
+		settings.s.ChatBase = demoBase
+		settings.s.EmbedBase = demoBase
+		settings.s.ChatModel = modelName
+		settings.s.EmbedModel = modelName
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+		log.Printf("Demo LLM: tinyRAG is using the embedded model %q at %s — no external LLM server needed", modelName, *demoLLMAddr)
 	}
 
 	s := maybePreferOfflineLLM(settings)

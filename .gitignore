@@ -17,6 +17,8 @@ usage_stats.jsonl
 
 # Settings (may contain sensitive data)
 # settings.json - uncomment if you don't want to commit settings
+preview-settings.json
+connectors.json
 
 # IDE files
 .idea/

@@ -218,8 +218,8 @@ func scenarioTemplates() []uiScenarioTemplate {
 			Description: "Vollausgestatteter IT-Helpdesk: alle Panels, Rollenwechsel, Agent-Modus verfügbar.",
 			Config: uiConfig{
 				DefaultPanel: "chat", Panels: allOn(),
-				Modes:              map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": true},
-				ShowPersonaPicker:  true, ShowRolePicker: true, ShowLLMSwitcher: false,
+				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": true},
+				ShowPersonaPicker: true, ShowRolePicker: true, ShowLLMSwitcher: false,
 				ShowWorkspaceStrip: true,
 				Suggestions: []uiSuggestion{
 					{Label: "VPN-Problem", Prompt: "Wie behebe ich VPN-Verbindungsprobleme?"},
@@ -232,8 +232,8 @@ func scenarioTemplates() []uiScenarioTemplate {
 			Description: "Terminal-Optik, Agent- und Debug-Modus aktiv, Modellwechsel sichtbar.",
 			Config: uiConfig{
 				DefaultPanel: "chat", Panels: allOn(),
-				Modes:              map[string]bool{"auto_search": true, "deep": true, "offline": true, "agent": true, "debug": true},
-				ShowPersonaPicker:  false, ShowRolePicker: false, ShowLLMSwitcher: true,
+				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": true, "agent": true, "debug": true},
+				ShowPersonaPicker: false, ShowRolePicker: false, ShowLLMSwitcher: true,
 				ShowWorkspaceStrip: true,
 			},
 		},
@@ -242,7 +242,7 @@ func scenarioTemplates() []uiScenarioTemplate {
 			Description: "Deep-Research- und Agent-Modus aktiv, für ausführliche mehrstufige Recherchen.",
 			Config: uiConfig{
 				DefaultPanel: "chat", Panels: allOn(), Modes: allModesOn(),
-				ShowPersonaPicker:  true, ShowRolePicker: false, ShowLLMSwitcher: false,
+				ShowPersonaPicker: true, ShowRolePicker: false, ShowLLMSwitcher: false,
 				ShowWorkspaceStrip: true,
 			},
 		},
@@ -321,10 +321,10 @@ func scenarioTemplates() []uiScenarioTemplate {
 			ID: "community-bot", Label: "Community-Bot", Theme: "cyberpunk", Density: "compact",
 			Description: "Verspielter Wissens-Bot für Gaming-/Community-Wikis mit Agent-Planung für Mehrschritt-Fragen.",
 			Config: uiConfig{
-				DefaultPanel:       "chat",
-				Panels:             map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false},
-				Modes:              map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": false},
-				ShowPersonaPicker:  true, ShowRolePicker: false, ShowLLMSwitcher: false,
+				DefaultPanel:      "chat",
+				Panels:            map[string]bool{"chat": true, "search": true, "ingest": true, "stats": false},
+				Modes:             map[string]bool{"auto_search": true, "deep": true, "offline": false, "agent": true, "debug": false},
+				ShowPersonaPicker: true, ShowRolePicker: false, ShowLLMSwitcher: false,
 				ShowWorkspaceStrip: true,
 				Suggestions: []uiSuggestion{
 					{Label: "Build-Guide", Prompt: "Was ist aktuell der beste Build für Einsteiger?"},
