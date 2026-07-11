@@ -24,13 +24,13 @@ package main
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	gopherllm "github.com/SimonWaldherr/GopherLLM"
@@ -52,20 +52,26 @@ func startEmbeddedDemoLLM(modelSelector, addr string) (modelName string, err err
 		return "", err
 	}
 
-	runner, info, err := gopherllm.RunnerFromPath(modelPath)
+	runner, info, err := gopherllm.RunnerFromPathWithOptions(modelPath, gopherllm.LoadOptions{
+		LogWriter: log.Writer(),
+	})
 	if err != nil {
 		return "", fmt.Errorf("demo LLM: failed to load %s: %w", modelPath, err)
 	}
 	log.Printf("Demo LLM: loaded %s (%.1f MB, load time %s)", name, float64(info.FileSizeBytes)/1e6, info.LoadTime)
 
 	go func() {
-		opts := gopherllm.ServeOptions{
-			Addr:            addr,
-			Defaults:        gopherllm.DefaultGenerationOptions(),
-			ChatHistoryLock: &sync.Mutex{},
-			ModelPath:       modelPath,
+		handler := gopherllm.NewHandler(runner, gopherllm.HandlerOptions{
+			Defaults:              gopherllm.DefaultGenerationOptions(),
+			MaxConcurrentRequests: 1,
+			ModelPath:             modelPath,
+			LogWriter:             log.Writer(),
+		})
+		server := &http.Server{
+			Addr:    addr,
+			Handler: handler,
 		}
-		if serveErr := gopherllm.Serve(runner, opts); serveErr != nil {
+		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Printf("Demo LLM: server stopped: %v", serveErr)
 		}
 	}()
@@ -93,7 +99,7 @@ func resolveDemoLLMModel(selector string) (path, name string, err error) {
 	}
 
 	dir := gopherllm.DefaultModelDir()
-	entries, discoverErr := gopherllm.DiscoverModels(dir)
+	entries, discoverErr := gopherllm.DiscoverModels(dir, log.Writer())
 	if discoverErr != nil {
 		return "", "", fmt.Errorf("demo LLM: could not scan %s: %w", dir, discoverErr)
 	}
