@@ -85,7 +85,7 @@ The application stores its configuration in `settings.json`. You can modify this
 Example configuration:
 ```json
 {
-  "version": 1,
+  "version": 2,
   "base_url": "http://localhost:1234",
   "chat_model": "mistralai/ministral-3-14b-reasoning",
   "embed_model": "text-embedding-nomic-embed-text-v1.5",
@@ -105,6 +105,32 @@ Example configuration:
   "allow_nanogo": false
 }
 ```
+
+### tinySQL v0.19.1 features
+
+tinyRAG uses tinySQL v0.19.1. The settings panel exposes the following
+optional database features:
+
+- **Native vector retrieval** uses `VEC_SEARCH` for faster candidate lookup.
+  The existing scalar retrieval mode remains available when maximum recall is
+  preferred.
+- **Vector result cache** stores only deterministic result IDs, never source
+  text or embedding vectors. New and migrated installations enable a bounded
+  cache with 128 entries and a 30-second TTL. Set
+  `tinysql_vector_cache_entries` to `0` to disable it.
+- **Vector analytics** records only query shape and timing. Administrators can
+  inspect cache and analytics state at `GET /api/debug/vector-cache`.
+- **Tamper-evident audit logging** writes a hash-chained JSONL audit trail.
+  It can be enabled with `tinysql_audit_enabled`; changing it requires a
+  restart.
+- **Encryption at rest** for disk, index, and hybrid storage modes reads a
+  32-byte hexadecimal or Base64 key from `TINYRAG_STORAGE_KEY`. The key is
+  never written to `settings.json`; enabling encryption requires a restart.
+- **Geodata import** accepts GeoJSON, KML, and OpenStreetMap XML through the
+  Open Data panel when `geo_import_enabled` is enabled.
+
+See [docs/tinysql-optional-features.md](docs/tinysql-optional-features.md) for
+operational details and constraints.
 
 ### Setting up LLM Backend
 
@@ -259,6 +285,8 @@ The project follows standard Go conventions:
 - Cosine similarity for semantic search
 - Configurable chunk size and retrieval count (k)
 - Efficient in-memory vector operations
+- Native tinySQL `VEC_SEARCH` with optional bounded result caching and
+  privacy-preserving query analytics
 - Metadata-aware R³ ranking with trust, quality, freshness, feedback, and sensitivity penalties
 
 ### R³ Governance
