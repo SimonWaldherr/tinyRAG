@@ -386,6 +386,15 @@
 
         <div id="ckanResults" class="ckan-results" role="region" aria-live="polite" aria-label="CKAN import results"></div>
       </div>
+
+      <div class="ckan-admin-panel" id="geoImportPanel">
+        <div class="ckan-admin-head"><div><h3>Geodaten importieren</h3><p class="hint">GeoJSON, KML oder OpenStreetMap XML werden als durchsuchbare Orts- und Feature-Daten geladen.</p></div></div>
+        <div class="ckan-grid">
+          <label for="geoFile"><span>Datei</span><input id="geoFile" type="file" accept=".geojson,.json,.kml,.osm,.xml"></label>
+          <label for="geoSource"><span>Quelle</span><input id="geoSource" type="text" placeholder="optional"></label>
+        </div>
+        <div class="ckan-actions"><button class="btn-primary" id="geoImportBtn" type="button">Geodaten importieren</button><div id="geoImportStatus" role="status" aria-live="polite"></div></div>
+      </div>
     </div>
 
     <!-- Maintenance Section at bottom of Ingest -->
@@ -517,6 +526,22 @@
           <span data-i18n="allow_nanogo">Erlaube Ausführung von nanoGo (interpretiertes Go)</span>
         </label>
         <div class="hint" id="nanogo-desc" data-i18n="nanogo_hint">Empfohlen: nur aktivieren, wenn du Ausführungen aus vertrauenswürdigen Quellen zulassen willst.</div>
+      </div>
+      <div class="settings-nanogo">
+        <label class="inline-check" for="setGeoImportEnabled"><input type="checkbox" id="setGeoImportEnabled"><span>Geodaten-Import erlauben</span></label>
+        <label for="setRetrievalMode">Vektorsuche</label>
+        <select id="setRetrievalMode"><option value="scalar">Kompatibel (ACL zuerst)</option><option value="vector">Native VEC_SEARCH (experimentell)</option></select>
+      </div>
+      <div class="settings-nanogo">
+        <label class="inline-check" for="setTinySQLAuditEnabled"><input type="checkbox" id="setTinySQLAuditEnabled"><span>Manipulationsnachweisbares Datenbank-Audit aktivieren</span></label>
+        <label for="setTinySQLAuditPath">Audit-Datei (optional)</label>
+        <input id="setTinySQLAuditPath" type="text" placeholder="tinyrag.audit.jsonl">
+        <label class="inline-check" for="setStorageEncryptionEnabled"><input type="checkbox" id="setStorageEncryptionEnabled"><span>Speicher verschlüsseln (Neustart, Schlüssel aus TINYRAG_STORAGE_KEY)</span></label>
+        <label for="setTinySQLVectorCacheEntries">VEC_SEARCH-Cache (Ergebnisse)</label>
+        <input id="setTinySQLVectorCacheEntries" type="number" min="0" max="4096" step="1" placeholder="128">
+        <label for="setTinySQLVectorCacheTTLSeconds">VEC_SEARCH-Cache-TTL (Sekunden)</label>
+        <input id="setTinySQLVectorCacheTTLSeconds" type="number" min="0" max="3600" step="1" placeholder="30">
+        <label class="inline-check" for="setTinySQLVectorAnalytics"><input type="checkbox" id="setTinySQLVectorAnalytics"><span>Vektorsuche-Analyse aktivieren (keine Embeddings speichern)</span></label>
       </div>
       <div class="settings-nanogo">
         <label class="inline-check" for="setRedactPII" title="Automatically mask personal data (email, phone, IBAN, card numbers) during ingest (recommended for GDPR compliance)">

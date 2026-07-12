@@ -177,25 +177,33 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			s := settings.get()
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"base_url":               s.BaseURL,
-				"chat_base":              s.ChatBase,
-				"embed_base":             s.EmbedBase,
-				"chat_model":             s.ChatModel,
-				"embed_model":            s.EmbedModel,
-				"lang":                   s.Lang,
-				"theme":                  s.Theme,
-				"density":                s.Density,
-				"active_role":            s.ActiveRole,
-				"role_permissions":       permissionsForRole(s.ActiveRole),
-				"usage_profile":          s.UsageProfile,
-				"response_language_mode": s.ResponseLanguageMode,
-				"redact_pii":             s.RedactPII,
-				"chunk_size":             s.ChunkSize,
-				"k":                      s.K,
-				"allow_nanogo":           s.AllowNanoGo,
-				"rerank_mode":            s.RerankMode,
-				"agent_planner_enabled":  s.AgentPlannerEnabled,
-				"agent_max_plan_steps":   s.AgentMaxPlanSteps,
+				"base_url":                         s.BaseURL,
+				"chat_base":                        s.ChatBase,
+				"embed_base":                       s.EmbedBase,
+				"chat_model":                       s.ChatModel,
+				"embed_model":                      s.EmbedModel,
+				"lang":                             s.Lang,
+				"theme":                            s.Theme,
+				"density":                          s.Density,
+				"active_role":                      s.ActiveRole,
+				"role_permissions":                 permissionsForRole(s.ActiveRole),
+				"usage_profile":                    s.UsageProfile,
+				"response_language_mode":           s.ResponseLanguageMode,
+				"redact_pii":                       s.RedactPII,
+				"chunk_size":                       s.ChunkSize,
+				"k":                                s.K,
+				"allow_nanogo":                     s.AllowNanoGo,
+				"rerank_mode":                      s.RerankMode,
+				"retrieval_mode":                   s.RetrievalMode,
+				"tinysql_audit_enabled":            s.TinySQLAuditEnabled,
+				"tinysql_audit_path":               s.TinySQLAuditPath,
+				"storage_encryption_enabled":       s.StorageEncryptionEnabled,
+				"geo_import_enabled":               s.GeoImportEnabled,
+				"tinysql_vector_cache_entries":     s.TinySQLVectorCacheEntries,
+				"tinysql_vector_cache_ttl_seconds": s.TinySQLVectorCacheTTLSeconds,
+				"tinysql_vector_analytics":         s.TinySQLVectorAnalytics,
+				"agent_planner_enabled":            s.AgentPlannerEnabled,
+				"agent_max_plan_steps":             s.AgentMaxPlanSteps,
 				// Do not return the API key itself; only expose whether one is configured
 				"openai_key_present": s.OpenAIKey != "",
 				// Branding (safe to expose publicly)
@@ -211,23 +219,31 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		case "POST":
 			// Accept chat_base/embed_base and optional OpenAI key for mixed backends
 			var req struct {
-				BaseURL        string `json:"base_url"`
-				ChatBase       string `json:"chat_base"`
-				EmbedBase      string `json:"embed_base"`
-				ChatModel      string `json:"chat_model"`
-				EmbedModel     string `json:"embed_model"`
-				OpenAIKey      string `json:"openai_api_key"`
-				OpenAIKeyClear bool   `json:"openai_api_key_clear"`
-				Theme          string `json:"theme"`
-				ActiveRole     string `json:"active_role"`
-				UsageProfile   string `json:"usage_profile"`
-				ResponseLang   string `json:"response_language_mode"`
-				RedactPII      *bool  `json:"redact_pii"`
-				AllowNanoGo    *bool  `json:"allow_nanogo"`
-				RerankMode     string `json:"rerank_mode"`
-				AgentPlanner   *bool  `json:"agent_planner_enabled"`
-				AgentMaxSteps  *int   `json:"agent_max_plan_steps"`
-				Force          bool   `json:"force"`
+				BaseURL                      string `json:"base_url"`
+				ChatBase                     string `json:"chat_base"`
+				EmbedBase                    string `json:"embed_base"`
+				ChatModel                    string `json:"chat_model"`
+				EmbedModel                   string `json:"embed_model"`
+				OpenAIKey                    string `json:"openai_api_key"`
+				OpenAIKeyClear               bool   `json:"openai_api_key_clear"`
+				Theme                        string `json:"theme"`
+				ActiveRole                   string `json:"active_role"`
+				UsageProfile                 string `json:"usage_profile"`
+				ResponseLang                 string `json:"response_language_mode"`
+				RedactPII                    *bool  `json:"redact_pii"`
+				AllowNanoGo                  *bool  `json:"allow_nanogo"`
+				RerankMode                   string `json:"rerank_mode"`
+				RetrievalMode                string `json:"retrieval_mode"`
+				TinySQLAuditEnabled          *bool  `json:"tinysql_audit_enabled"`
+				TinySQLAuditPath             string `json:"tinysql_audit_path"`
+				StorageEncryptionEnabled     *bool  `json:"storage_encryption_enabled"`
+				GeoImportEnabled             *bool  `json:"geo_import_enabled"`
+				TinySQLVectorCacheEntries    *int   `json:"tinysql_vector_cache_entries"`
+				TinySQLVectorCacheTTLSeconds *int   `json:"tinysql_vector_cache_ttl_seconds"`
+				TinySQLVectorAnalytics       *bool  `json:"tinysql_vector_analytics"`
+				AgentPlanner                 *bool  `json:"agent_planner_enabled"`
+				AgentMaxSteps                *int   `json:"agent_max_plan_steps"`
+				Force                        bool   `json:"force"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "invalid JSON", 400)
@@ -301,6 +317,30 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			if req.RerankMode != "" {
 				settings.s.RerankMode = normalizeRerankMode(req.RerankMode)
 			}
+			if req.RetrievalMode != "" {
+				settings.s.RetrievalMode = normalizeRetrievalMode(req.RetrievalMode)
+			}
+			if req.TinySQLAuditEnabled != nil {
+				settings.s.TinySQLAuditEnabled = *req.TinySQLAuditEnabled
+			}
+			if req.TinySQLAuditPath != "" {
+				settings.s.TinySQLAuditPath = strings.TrimSpace(req.TinySQLAuditPath)
+			}
+			if req.StorageEncryptionEnabled != nil {
+				settings.s.StorageEncryptionEnabled = *req.StorageEncryptionEnabled
+			}
+			if req.GeoImportEnabled != nil {
+				settings.s.GeoImportEnabled = *req.GeoImportEnabled
+			}
+			if req.TinySQLVectorCacheEntries != nil {
+				settings.s.TinySQLVectorCacheEntries = max(0, min(*req.TinySQLVectorCacheEntries, 4096))
+			}
+			if req.TinySQLVectorCacheTTLSeconds != nil {
+				settings.s.TinySQLVectorCacheTTLSeconds = max(0, min(*req.TinySQLVectorCacheTTLSeconds, 3600))
+			}
+			if req.TinySQLVectorAnalytics != nil {
+				settings.s.TinySQLVectorAnalytics = *req.TinySQLVectorAnalytics
+			}
 			if req.AgentPlanner != nil {
 				settings.s.AgentPlannerEnabled = *req.AgentPlanner
 			}
@@ -320,6 +360,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			// Apply runtime LM clients (may be composite)
 			// Prefer persisted OpenAI key from settings; fallback to env var if none present
 			applied := settings.get()
+			configureTinySQLVectorCache(applied)
 			key := applied.OpenAIKey
 			if key == "" {
 				key = os.Getenv("OPENAI_API_KEY")
@@ -2274,6 +2315,15 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		})
 	}))
 
+	// GET /api/debug/vector-cache — tinySQL v0.19.1 vector cache telemetry.
+	mux.HandleFunc("/api/debug/vector-cache", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, tinysql.VectorCacheAnalytics())
+	}))
+
 	// POST /api/import/csv — bulk-import a CSV/TSV file as RAG chunks (admin only).
 	// Accepts multipart/form-data with field "file" (the CSV) and optional "source"
 	// (article name used as the RAG source label; defaults to the filename).
@@ -2433,6 +2483,59 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			"chunks":        len(chunks),
 			"columns":       result.ColumnNames,
 		})
+	}))
+
+	// POST /api/import/geo — import GeoJSON, KML, or OSM XML as RAG chunks.
+	mux.HandleFunc("/api/import/geo", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		if !settings.get().GeoImportEnabled {
+			http.Error(w, "geo import is disabled by the administrator", http.StatusForbidden)
+			return
+		}
+		if err := r.ParseMultipartForm(64 << 20); err != nil {
+			http.Error(w, "form parse error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, fh, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing 'file' field: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		format := strings.ToLower(strings.TrimSpace(r.FormValue("format")))
+		if format == "" {
+			name := strings.ToLower(fh.Filename)
+			switch {
+			case strings.HasSuffix(name, ".geojson") || strings.HasSuffix(name, ".json"):
+				format = "geojson"
+			case strings.HasSuffix(name, ".kml"):
+				format = "kml"
+			case strings.HasSuffix(name, ".osm") || strings.HasSuffix(name, ".xml"):
+				format = "osm"
+			}
+		}
+		source := strings.TrimSpace(r.FormValue("source"))
+		if source == "" {
+			source = fh.Filename
+		}
+		s := settings.get()
+		result, chunks, err := importGeoAsChunks(r.Context(), file, format, source, s)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		meta := R3IngestMetadata{DocumentID: stableContentHash("geo|" + source), SourceSystem: "geo_import", SourceType: "geodata", SourceTitle: source, UpdateMode: "upsert"}
+		write, err := rag.addChunksWithMetadataResult(source, chunks, s.EmbedModel, []string{s.ActiveRole}, meta)
+		if err != nil {
+			http.Error(w, "ingest error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rag.logR3Audit(AuditEvent{EventType: "import_geo", Actor: s.ActiveRole, EntityType: "source", EntityID: write.DocumentID, Decision: "allow", PolicyClass: "ingestion", Details: format + ":" + source})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"source": source, "format": format, "rows_imported": result.RowsInserted, "chunks": write.Chunks, "status": write.Status})
 	}))
 
 	// POST /api/import/ckan — import CKAN/Open Knowledge metadata as governed
@@ -3624,6 +3727,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create RAG: %v", err)
 	}
+	closeTinySQLFeatures, err := configureTinySQLOptionalFeatures(rag, s, *dbPath)
+	if err != nil {
+		log.Fatalf("Failed to configure tinySQL features: %v", err)
+	}
+	defer closeTinySQLFeatures()
 	if err := rag.init(); err != nil {
 		log.Fatalf("Failed to init table: %v", err)
 	}

@@ -447,15 +447,31 @@ func tinySQLRowToMap(row map[string]any, keys []string) map[string]any {
 }
 
 func (s *tinySQLChunkStore) searchTopK(vec []float64, embedModel, roleFilter string, limit int) ([]retrievalHit, error) {
+	selectColumns := "id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type," +
+		" source_title, source_url, source_object_id, source_version, role_scope, acl_groups," +
+		" business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score," +
+		" feedback_score, imported_at, updated_at, content_hash, open_link_allowed"
 	q := fmt.Sprintf(
-		"SELECT id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type,"+
-			" source_title, source_url, source_object_id, source_version, role_scope, acl_groups,"+
-			" business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score,"+
-			" feedback_score, imported_at, updated_at, content_hash, open_link_allowed,"+
+		"SELECT %s,"+
 			" VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score"+
 			" FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-		escapeSQ(vecJSON(vec)), escapeSQ(embedModel), roleFilter, limit,
+		selectColumns, escapeSQ(vecJSON(vec)), escapeSQ(embedModel), roleFilter, limit,
 	)
+	// VEC_SEARCH is optional because its table function ranks before this
+	// application's role/ACL filter. Fetching extra candidates then applying the
+	// established filter keeps authorization intact while preserving recall for
+	// typical multi-role corpora. Scalar ranking remains the conservative default.
+	if settings != nil && settings.get().RetrievalMode == "vector" {
+		candidateLimit := limit * 12
+		if candidateLimit < 64 {
+			candidateLimit = 64
+		}
+		q = fmt.Sprintf(
+			"SELECT %s, 1.0 - _vec_distance AS score FROM VEC_SEARCH('chunks', 'embedding', VEC_FROM_JSON('%s'), %d, 'cosine', 'flat')"+
+				" WHERE embed_model = '%s' AND %s ORDER BY _vec_distance ASC LIMIT %d",
+			selectColumns, escapeSQ(vecJSON(vec)), candidateLimit, escapeSQ(embedModel), roleFilter, limit,
+		)
+	}
 	st, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return nil, err

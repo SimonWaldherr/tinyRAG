@@ -131,6 +131,50 @@ func importDelimitedAsChunks(ctx context.Context, src io.Reader, source string, 
 	return result, chunks, nil
 }
 
+// importGeoAsChunks imports supported geodata into a temporary tinySQL table
+// and turns each feature into an embeddable text record. It intentionally keeps
+// the original geometry fields so location-aware questions retain context.
+func importGeoAsChunks(ctx context.Context, src io.Reader, format, source string, s appSettings) (*tinysql.ImportResult, []string, error) {
+	tmpDB := tinysql.NewDB()
+	tableName := "geo_import"
+	var (
+		result *tinysql.ImportResult
+		err    error
+	)
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "geojson", "json":
+		result, err = tinysql.ImportGeoJSON(ctx, tmpDB, "default", tableName, src, &tinysql.ImportOptions{CreateTable: true, TypeInference: false})
+	case "kml":
+		result, err = tinysql.ImportKML(ctx, tmpDB, "default", tableName, src, &tinysql.ImportOptions{CreateTable: true, TypeInference: false})
+	case "osm", "xml":
+		result, err = tinysql.ImportOSM(ctx, tmpDB, "default", tableName, src, &tinysql.ImportOptions{CreateTable: true, TypeInference: false})
+	default:
+		return nil, nil, fmt.Errorf("unsupported geo format %q (supported: geojson, kml, osm)", format)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s parse: %w", format, err)
+	}
+	stmt, err := tinysql.ParseSQL("SELECT * FROM " + tableName)
+	if err != nil {
+		return result, nil, fmt.Errorf("geo query build: %w", err)
+	}
+	rs, err := tinysql.Execute(ctx, tmpDB, "default", stmt)
+	if err != nil || rs == nil {
+		return result, nil, fmt.Errorf("geo query: %w", err)
+	}
+	chunks := make([]string, 0, len(rs.Rows))
+	for _, row := range rs.Rows {
+		parts := []string{"source: " + source}
+		for _, col := range result.ColumnNames {
+			v, _ := tinysql.GetVal(row, col)
+			parts = append(parts, col+": "+fmt.Sprint(v))
+		}
+		text, _ := chunksForIngest(strings.Join(parts, ", "), s)
+		chunks = append(chunks, text...)
+	}
+	return result, chunks, nil
+}
+
 // importJSONAsChunks uses tinySQL's ImportJSON to parse a JSON array from src,
 // then converts each object to a "key: value, …" text string for RAG ingestion.
 func importJSONAsChunks(ctx context.Context, src io.Reader, source string, s appSettings) (*tinysql.ImportResult, []string, error) {

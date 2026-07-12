@@ -57,6 +57,20 @@ type appSettings struct {
 	// RerankMode selects the second-stage re-ranking strategy applied after
 	// vector retrieval: "off", "lexical" (default) or "llm".
 	RerankMode string `json:"rerank_mode"`
+	// RetrievalMode chooses the tinySQL vector query path. "scalar" preserves
+	// the established ACL-first ranking; "vector" enables the faster native
+	// VEC_SEARCH path with an enlarged candidate set before ACL filtering.
+	RetrievalMode string `json:"retrieval_mode"`
+	// Optional tinySQL features. Encryption keys deliberately never live in
+	// settings.json; the process reads TINYRAG_STORAGE_KEY at startup.
+	TinySQLAuditEnabled      bool   `json:"tinysql_audit_enabled"`
+	TinySQLAuditPath         string `json:"tinysql_audit_path"`
+	StorageEncryptionEnabled bool   `json:"storage_encryption_enabled"`
+	GeoImportEnabled         bool   `json:"geo_import_enabled"`
+	// Vector-cache controls for tinySQL v0.19.1. Zero cache entries disables it.
+	TinySQLVectorCacheEntries    int  `json:"tinysql_vector_cache_entries"`
+	TinySQLVectorCacheTTLSeconds int  `json:"tinysql_vector_cache_ttl_seconds"`
+	TinySQLVectorAnalytics       bool `json:"tinysql_vector_analytics"`
 	// AgentPlannerEnabled turns on the multi-step tool planner: before
 	// streaming the answer, the LLM plans up to AgentMaxPlanSteps tool calls
 	// which are executed upfront and injected into the conversation.
@@ -181,6 +195,15 @@ func normalizeResponseLanguageMode(raw string) string {
 		return "settings"
 	default:
 		return "auto"
+	}
+}
+
+func normalizeRetrievalMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "vector", "vec_search", "native":
+		return "vector"
+	default:
+		return "scalar"
 	}
 }
 
@@ -377,38 +400,43 @@ func defaultPersonas() []persona {
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
 	return appSettings{
-		Version:              1,
-		BaseURL:              normalizeBaseURL(urlFlag),
-		ChatBase:             normalizeBaseURL(urlFlag),
-		EmbedBase:            normalizeBaseURL(urlFlag),
-		ChatModel:            chatModelFlag,
-		EmbedModel:           embedModelFlag,
-		OpenAIKey:            "",
-		Lang:                 lang,
-		ActiveRole:           "it",
-		UsageProfile:         "personal",
-		ResponseLanguageMode: "auto",
-		RedactPII:            false,
-		ChunkSize:            chunkSize,
-		K:                    k,
-		CustomAPIs:           []customAPI{},
-		Modules:              defaultModules(),
-		PullSources:          []ragPullSource{},
-		Personas:             defaultPersonas(),
-		APIUsers:             []adminAPIUser{},
-		APIRoutes:            defaultAPIRouteRules(),
-		AllowCodeExec:        false,
-		AllowNanoGo:          false,
-		AllowShellExec:       false,
-		AllowTinyGo:          false,
-		AppName:              "",
-		AppLogoURL:           "",
-		CustomCSS:            "",
-		WebUIAuth:            false,
-		WebUIUsers:           []webUIUser{},
-		SessionTTLSeconds:    86400,
-		LDAPEnabled:          false,
-		LDAPUserAttr:         "uid",
+		Version:                      2,
+		BaseURL:                      normalizeBaseURL(urlFlag),
+		ChatBase:                     normalizeBaseURL(urlFlag),
+		EmbedBase:                    normalizeBaseURL(urlFlag),
+		ChatModel:                    chatModelFlag,
+		EmbedModel:                   embedModelFlag,
+		OpenAIKey:                    "",
+		Lang:                         lang,
+		ActiveRole:                   "it",
+		UsageProfile:                 "personal",
+		ResponseLanguageMode:         "auto",
+		RedactPII:                    false,
+		ChunkSize:                    chunkSize,
+		K:                            k,
+		CustomAPIs:                   []customAPI{},
+		Modules:                      defaultModules(),
+		PullSources:                  []ragPullSource{},
+		Personas:                     defaultPersonas(),
+		APIUsers:                     []adminAPIUser{},
+		APIRoutes:                    defaultAPIRouteRules(),
+		AllowCodeExec:                false,
+		AllowNanoGo:                  false,
+		AllowShellExec:               false,
+		AllowTinyGo:                  false,
+		AppName:                      "",
+		AppLogoURL:                   "",
+		CustomCSS:                    "",
+		WebUIAuth:                    false,
+		WebUIUsers:                   []webUIUser{},
+		SessionTTLSeconds:            86400,
+		LDAPEnabled:                  false,
+		LDAPUserAttr:                 "uid",
+		RetrievalMode:                "scalar",
+		GeoImportEnabled:             false,
+		TinySQLVectorCacheEntries:    128,
+		TinySQLVectorCacheTTLSeconds: 30,
+		TinySQLVectorAnalytics:       true,
 	}
 }
 
@@ -433,6 +461,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 			// settings files, so a freshly created settings.json never
 			// persists empty/un-normalized values for these fields.
 			ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
+			ss.s.RetrievalMode = normalizeRetrievalMode(ss.s.RetrievalMode)
 			ss.s.Density = normalizeDensity(ss.s.Density)
 			ss.s.UI = normalizeUIConfig(ss.s.UI)
 			if err := ss.saveLocked(); err != nil {
@@ -449,6 +478,14 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	if ss.s.Version == 0 {
 		ss.s.Version = 1
 	}
+	// v2 adds tinySQL v0.19.1 vector-cache controls. Existing settings cannot
+	// have opted out before this version, so migrate them to the bounded default.
+	if ss.s.Version < 2 {
+		ss.s.TinySQLVectorCacheEntries = defaults.TinySQLVectorCacheEntries
+		ss.s.TinySQLVectorCacheTTLSeconds = defaults.TinySQLVectorCacheTTLSeconds
+		ss.s.TinySQLVectorAnalytics = defaults.TinySQLVectorAnalytics
+		ss.s.Version = 2
+	}
 	if ss.s.Lang == "" {
 		ss.s.Lang = defaults.Lang
 	}
@@ -456,6 +493,13 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	ss.s.UsageProfile = normalizeUsageProfile(ss.s.UsageProfile)
 	ss.s.ResponseLanguageMode = normalizeResponseLanguageMode(ss.s.ResponseLanguageMode)
 	ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
+	ss.s.RetrievalMode = normalizeRetrievalMode(ss.s.RetrievalMode)
+	if ss.s.TinySQLVectorCacheEntries < 0 {
+		ss.s.TinySQLVectorCacheEntries = 0
+	}
+	if ss.s.TinySQLVectorCacheTTLSeconds < 0 {
+		ss.s.TinySQLVectorCacheTTLSeconds = 0
+	}
 	ss.s.Density = normalizeDensity(ss.s.Density)
 	ss.s.UI = normalizeUIConfig(ss.s.UI)
 	validThemes := ss.s.CustomThemes[:0]

@@ -49,13 +49,27 @@ type ragSystem struct {
 func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode, maxMemMB int64) (*ragSystem, error) {
 	var db *tinysql.DB
 	var err error
+	var encryptionKey []byte
+	if settings != nil {
+		s := settings.get()
+		if s.StorageEncryptionEnabled {
+			if storageMode == tinysql.ModeMemory || storageMode == tinysql.ModeWAL {
+				return nil, fmt.Errorf("storage encryption requires disk, index, or hybrid mode (WAL is not supported)")
+			}
+			encryptionKey, err = storageEncryptionKey(true)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	switch storageMode {
 	case tinysql.ModeMemory:
 		// In-memory with optional save-on-close.
 		db, err = tinysql.OpenDB(tinysql.StorageConfig{
-			Mode: tinysql.ModeMemory,
-			Path: dbPath, // saves GOB on Close if non-empty
+			Mode:          tinysql.ModeMemory,
+			Path:          dbPath, // saves GOB on Close if non-empty
+			EncryptionKey: encryptionKey,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("open memory db: %w", err)
@@ -71,8 +85,9 @@ func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode
 			dbPath = "tinyrag.gob"
 		}
 		db, err = tinysql.OpenDB(tinysql.StorageConfig{
-			Mode: tinysql.ModeWAL,
-			Path: dbPath,
+			Mode:          tinysql.ModeWAL,
+			Path:          dbPath,
+			EncryptionKey: encryptionKey,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("open wal db: %w", err)
@@ -84,8 +99,9 @@ func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode
 			dbPath = "tinyrag.db"
 		}
 		db, err = tinysql.OpenDB(tinysql.StorageConfig{
-			Mode: tinysql.ModeDisk,
-			Path: dbPath,
+			Mode:          tinysql.ModeDisk,
+			Path:          dbPath,
+			EncryptionKey: encryptionKey,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("open disk db: %w", err)
@@ -104,6 +120,7 @@ func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode
 			Mode:           tinysql.ModeIndex,
 			Path:           dbPath,
 			MaxMemoryBytes: mem,
+			EncryptionKey:  encryptionKey,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("open index db: %w", err)
@@ -122,6 +139,7 @@ func newRAG(lm lmProvider, k int, dbPath string, storageMode tinysql.StorageMode
 			Mode:           tinysql.ModeHybrid,
 			Path:           dbPath,
 			MaxMemoryBytes: mem,
+			EncryptionKey:  encryptionKey,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("open hybrid db: %w", err)

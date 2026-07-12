@@ -1749,6 +1749,15 @@ async function initSettingsUI(){
   if($('#setUsageProfile')) $('#setUsageProfile').value = s.usage_profile || 'personal';
   if($('#setResponseLanguageMode')) $('#setResponseLanguageMode').value = s.response_language_mode || 'auto';
   if($('#setRedactPII')) $('#setRedactPII').checked = !!s.redact_pii;
+  if($('#setGeoImportEnabled')) $('#setGeoImportEnabled').checked = !!s.geo_import_enabled;
+  if($('#setRetrievalMode')) $('#setRetrievalMode').value = s.retrieval_mode || 'scalar';
+  if($('#setTinySQLAuditEnabled')) $('#setTinySQLAuditEnabled').checked = !!s.tinysql_audit_enabled;
+  if($('#setTinySQLAuditPath')) $('#setTinySQLAuditPath').value = s.tinysql_audit_path || '';
+  if($('#setStorageEncryptionEnabled')) $('#setStorageEncryptionEnabled').checked = !!s.storage_encryption_enabled;
+  if($('#setTinySQLVectorCacheEntries')) $('#setTinySQLVectorCacheEntries').value = s.tinysql_vector_cache_entries ?? 0;
+  if($('#setTinySQLVectorCacheTTLSeconds')) $('#setTinySQLVectorCacheTTLSeconds').value = s.tinysql_vector_cache_ttl_seconds ?? 30;
+  if($('#setTinySQLVectorAnalytics')) $('#setTinySQLVectorAnalytics').checked = !!s.tinysql_vector_analytics;
+  if($('#geoImportPanel')) $('#geoImportPanel').style.display = s.geo_import_enabled ? '' : 'none';
   const roleSel = $('#roleSelect');
   if(roleSel){
     roleSel.value = currentRole;
@@ -2365,6 +2374,7 @@ async function saveSettings(force=false){
   const usageProfile = $('#setUsageProfile') ? $('#setUsageProfile').value : 'personal';
   const responseLanguageMode = $('#setResponseLanguageMode') ? $('#setResponseLanguageMode').value : 'auto';
   const redactPII = $('#setRedactPII') ? !!$('#setRedactPII').checked : false;
+  const geoImportEnabled = $('#setGeoImportEnabled') ? !!$('#setGeoImportEnabled').checked : false;
   if(!chat || !emb){
     setStatus($('#saveStatus'), 'Bitte Chat- und Embedding-Modell wählen.', 'err');
     return;
@@ -2383,10 +2393,20 @@ async function saveSettings(force=false){
       usage_profile: usageProfile,
       response_language_mode: responseLanguageMode,
       redact_pii: redactPII
+	  ,geo_import_enabled: geoImportEnabled
+	  ,retrieval_mode: $('#setRetrievalMode') ? $('#setRetrievalMode').value : 'scalar'
+	  ,tinysql_audit_enabled: $('#setTinySQLAuditEnabled') ? !!$('#setTinySQLAuditEnabled').checked : false
+	  ,tinysql_audit_path: $('#setTinySQLAuditPath') ? $('#setTinySQLAuditPath').value.trim() : ''
+	  ,storage_encryption_enabled: $('#setStorageEncryptionEnabled') ? !!$('#setStorageEncryptionEnabled').checked : false
+      ,tinysql_vector_cache_entries: $('#setTinySQLVectorCacheEntries') ? Number($('#setTinySQLVectorCacheEntries').value) : 0
+      ,tinysql_vector_cache_ttl_seconds: $('#setTinySQLVectorCacheTTLSeconds') ? Number($('#setTinySQLVectorCacheTTLSeconds').value) : 30
+      ,tinysql_vector_analytics: $('#setTinySQLVectorAnalytics') ? !!$('#setTinySQLVectorAnalytics').checked : false
     };
     if(useSep){ payload.chat_base = chatBase; payload.embed_base = embedBase; }
     await apiPost('/api/settings', payload);
-    setStatus($('#saveStatus'), 'Gespeichert. Einstellungen aktiv.', 'ok');
+    const restartRequired = ($('#setTinySQLAuditEnabled') && !!$('#setTinySQLAuditEnabled').checked) ||
+      ($('#setStorageEncryptionEnabled') && !!$('#setStorageEncryptionEnabled').checked);
+    setStatus($('#saveStatus'), restartRequired ? 'Gespeichert. Audit/Verschlüsselung werden nach dem Neustart aktiv.' : 'Gespeichert. Einstellungen aktiv.', 'ok');
     // If an OpenAI key was provided and base points to OpenAI, make it explicit to the user
     if(openaiKey){
       const baseHost = (base || '').toLowerCase();
@@ -4064,6 +4084,25 @@ async function importCKAN(){
   }
 }
 
+async function importGeo(){
+  const input = $('#geoFile');
+  const file = input?.files?.[0];
+  if(!file){ setStatus($('#geoImportStatus'), 'Bitte eine Geo-Datei auswählen.', 'err'); return; }
+  const data = new FormData();
+  data.append('file', file);
+  data.append('source', $('#geoSource')?.value.trim() || file.name);
+  setLoading('#geoImportBtn', true);
+  setStatus($('#geoImportStatus'), t('importing'), '');
+  try{
+    const resp = await fetch('/api/import/geo', {method:'POST', body:data});
+    const body = await resp.json().catch(()=>({}));
+    if(!resp.ok) throw new Error(body.error || body.message || resp.statusText);
+    setStatus($('#geoImportStatus'), `OK: ${body.rows_imported || 0} Features, ${body.chunks || 0} Chunks`, 'ok');
+    await refreshStats();
+  }catch(e){ setStatus($('#geoImportStatus'), t('error_prefix') + (e.message||String(e)), 'err'); }
+  finally{ setLoading('#geoImportBtn', false); }
+}
+
 // Main init
 window.addEventListener('DOMContentLoaded', async ()=>{
   // load UI configuration (themes, panel/mode visibility, suggestions)
@@ -4268,6 +4307,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   if($('#folderPullSaveBtn')) $('#folderPullSaveBtn').addEventListener('click', savePullSource);
   if($('#folderPullRefreshBtn')) $('#folderPullRefreshBtn').addEventListener('click', loadPullSources);
   if($('#ckanBtn')) $('#ckanBtn').addEventListener('click', importCKAN);
+  if($('#geoImportBtn')) $('#geoImportBtn').addEventListener('click', importGeo);
   if($('#clearChunksBtn')){
     $('#clearChunksBtn').addEventListener('click', clearChunks);
   }
