@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,9 +39,11 @@ type vectorChunkStore interface {
 	// insertChunks persists a batch of pre-embedded chunks.
 	insertChunks(chunks []storedChunk) error
 	// searchTopK executes a cosine-similarity search and returns up to limit hits.
-	// Returned hits have Score = raw cosine similarity; R3Score is zero and must be
-	// filled in by the caller.
-	searchTopK(vec []float64, embedModel, roleFilter string, limit int) ([]retrievalHit, error)
+	// queryText is the original natural-language query string; it is only used
+	// in "hybrid" RetrievalMode to drive tinySQL's BM25/HYBRID_SEARCH pass and
+	// may be ignored by other modes. Returned hits have Score = raw cosine
+	// similarity; R3Score is zero and must be filled in by the caller.
+	searchTopK(vec []float64, queryText, embedModel, roleFilter string, limit int) ([]retrievalHit, error)
 	// fetchNeighborContent retrieves the text of a specific chunk by article+index.
 	fetchNeighborContent(article string, chunkIdx int, roleFilter string) (string, bool)
 	// loadArticleChunks returns all chunks for an article as a generic row map.
@@ -196,6 +199,43 @@ func (s *tinySQLChunkStore) init() error {
 	// Pre-compile frequently used static queries.
 	s.cntAll, _ = tinysql.Compile(s.qc, "SELECT COUNT(*) AS cnt FROM chunks")
 	s.maxID, _ = tinysql.Compile(s.qc, "SELECT MAX(id) AS mid FROM chunks")
+
+	// Warm the vector column cache (and cosine norms / ANN index, if
+	// configured) once at startup so the first real "vector"/"hybrid" query
+	// never pays the one-time index-build cost tinySQL otherwise defers to
+	// first use. Skipped for "scalar" mode (the default): its plain
+	// VEC_COSINE_SIMILARITY scan never touches VEC_SEARCH's column cache, so
+	// warming it would only cost startup time for no benefit. Best-effort: a
+	// warm-up failure only costs a slower first query, it must never block
+	// startup.
+	mode, indexMode := "scalar", "flat"
+	if settings != nil {
+		mode = normalizeRetrievalMode(settings.get().RetrievalMode)
+		indexMode = normalizeVectorIndexMode(settings.get().VectorIndexMode)
+	}
+	if mode == "vector" || mode == "hybrid" {
+		warmSQL := fmt.Sprintf("SELECT * FROM VEC_WARM('chunks', 'embedding', 'cosine', '%s')", escapeSQ(indexMode))
+		if st, werr := tinysql.ParseSQL(warmSQL); werr == nil {
+			if rs, execErr := tinysql.Execute(context.Background(), s.db, "default", st); execErr != nil {
+				log.Printf("WARN: VEC_WARM failed (non-fatal, first query will build the index instead): %v", execErr)
+			} else if len(rs.Rows) > 0 {
+				if v, ok := tinysql.GetVal(rs.Rows[0], "distinct_dims"); ok {
+					var n int
+					switch tv := v.(type) {
+					case int:
+						n = tv
+					case int64:
+						n = int(tv)
+					case float64:
+						n = int(tv)
+					}
+					if n > 1 {
+						log.Printf("WARN: chunks.embedding has %d distinct vector dimensionalities (partial embedding-model migration?)", n)
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -446,7 +486,7 @@ func tinySQLRowToMap(row map[string]any, keys []string) map[string]any {
 	return out
 }
 
-func (s *tinySQLChunkStore) searchTopK(vec []float64, embedModel, roleFilter string, limit int) ([]retrievalHit, error) {
+func (s *tinySQLChunkStore) searchTopK(vec []float64, queryText, embedModel, roleFilter string, limit int) ([]retrievalHit, error) {
 	selectColumns := "id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type," +
 		" source_title, source_url, source_object_id, source_version, role_scope, acl_groups," +
 		" business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score," +
@@ -457,19 +497,53 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, embedModel, roleFilter str
 			" FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
 		selectColumns, escapeSQ(vecJSON(vec)), escapeSQ(embedModel), roleFilter, limit,
 	)
-	// VEC_SEARCH is optional because its table function ranks before this
-	// application's role/ACL filter. Fetching extra candidates then applying the
-	// established filter keeps authorization intact while preserving recall for
-	// typical multi-role corpora. Scalar ranking remains the conservative default.
-	if settings != nil && settings.get().RetrievalMode == "vector" {
+	// VEC_SEARCH/HYBRID_SEARCH are optional because both table functions rank
+	// before this application's role/ACL filter (neither has pre-filter
+	// pushdown). Fetching extra candidates then applying the established
+	// filter keeps authorization intact while preserving recall for typical
+	// multi-role corpora. Scalar ranking remains the conservative default.
+	mode := "scalar"
+	indexMode := "flat"
+	if settings != nil {
+		mode = settings.get().RetrievalMode
+		indexMode = normalizeVectorIndexMode(settings.get().VectorIndexMode)
+	}
+	if mode == "hybrid" && strings.TrimSpace(queryText) == "" {
+		// No lexical signal to fuse in; fall back to the pure vector path.
+		mode = "vector"
+	}
+	switch mode {
+	case "vector":
 		candidateLimit := limit * 12
 		if candidateLimit < 64 {
 			candidateLimit = 64
 		}
 		q = fmt.Sprintf(
-			"SELECT %s, 1.0 - _vec_distance AS score FROM VEC_SEARCH('chunks', 'embedding', VEC_FROM_JSON('%s'), %d, 'cosine', 'flat')"+
+			"SELECT %s, 1.0 - _vec_distance AS score FROM VEC_SEARCH('chunks', 'embedding', VEC_FROM_JSON('%s'), %d, 'cosine', '%s')"+
 				" WHERE embed_model = '%s' AND %s ORDER BY _vec_distance ASC LIMIT %d",
-			selectColumns, escapeSQ(vecJSON(vec)), candidateLimit, escapeSQ(embedModel), roleFilter, limit,
+			selectColumns, escapeSQ(vecJSON(vec)), candidateLimit, indexMode, escapeSQ(embedModel), roleFilter, limit,
+		)
+	case "hybrid":
+		candidateLimit := limit * 12
+		if candidateLimit < 64 {
+			candidateLimit = 64
+		}
+		// key_columns is passed explicitly because the `chunks` table has no
+		// declared PRIMARY KEY; `id` is unique per chunk row and satisfies
+		// HYBRID_SEARCH's requirement for result fusion without a schema change.
+		optsJSON := fmt.Sprintf(`{"key_columns":["id"],"candidate_k":%d,"index":"%s"}`, candidateLimit, indexMode)
+		// The RRF-fused candidate order (_rrf_rank) decides which rows survive
+		// the over-fetch — recovering BM25-only matches a pure vector pass
+		// would miss — but the `score` fed downstream is still plain cosine
+		// similarity, computed independently, never the raw RRF score: R³
+		// ranking (r3.go RankingPolicy.Score) and the retrieval threshold both
+		// expect a similarity in roughly [0,1], not an RRF value.
+		q = fmt.Sprintf(
+			"SELECT %s, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score"+
+				" FROM HYBRID_SEARCH('chunks', 'embedding', 'content', '%s', VEC_FROM_JSON('%s'), %d, '%s')"+
+				" WHERE embed_model = '%s' AND %s ORDER BY _rrf_rank ASC LIMIT %d",
+			selectColumns, escapeSQ(vecJSON(vec)), escapeSQ(queryText), escapeSQ(vecJSON(vec)),
+			candidateLimit, escapeSQ(optsJSON), escapeSQ(embedModel), roleFilter, limit,
 		)
 	}
 	st, err := tinysql.ParseSQL(q)
@@ -684,7 +758,7 @@ func (s *sqliteVecChunkStore) checkArticleExists(_, _ string) (bool, error) {
 func (s *sqliteVecChunkStore) insertChunks(_ []storedChunk) error {
 	return errSQLiteVecUnavailable
 }
-func (s *sqliteVecChunkStore) searchTopK(_ []float64, _, _ string, _ int) ([]retrievalHit, error) {
+func (s *sqliteVecChunkStore) searchTopK(_ []float64, _, _, _ string, _ int) ([]retrievalHit, error) {
 	return nil, errSQLiteVecUnavailable
 }
 func (s *sqliteVecChunkStore) fetchNeighborContent(_ string, _ int, _ string) (string, bool) {

@@ -6,45 +6,191 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	tinysql "github.com/SimonWaldherr/tinySQL"
 )
 
-func chunkText(text string, maxLen int) []string {
-	paragraphs := strings.Split(text, "\n")
+const (
+	chunkUnitOther = iota
+	chunkUnitList
+	chunkUnitTable
+)
+
+var (
+	chunkListLineRe  = regexp.MustCompile(`^(?:[-*+]|\d{1,3}[.)])\s+\S`)
+	chunkTableLineRe = regexp.MustCompile(`^\|.*\|$`)
+	chunkCodeFenceRe = regexp.MustCompile("^(```|~~~)")
+)
+
+// classifyChunkLine reports whether a trimmed, non-empty line looks like a
+// list item or a table row, so consecutive lines of the same kind can be
+// packed as one atomic unit instead of by raw line.
+func classifyChunkLine(line string) int {
+	switch {
+	case chunkTableLineRe.MatchString(line):
+		return chunkUnitTable
+	case chunkListLineRe.MatchString(line):
+		return chunkUnitList
+	default:
+		return chunkUnitOther
+	}
+}
+
+// buildChunkUnits splits text into the atomic units chunkText packs into
+// chunks. Ordinary lines remain one unit each — matching chunkText's
+// historical, purely line-based behavior — but a run of consecutive list
+// items or table rows is merged into a single multi-line unit, and a fenced
+// code block is captured whole (with original indentation, not trimmed),
+// so a character-budget cut can never land inside a list run, a table, or
+// a code block — only between them.
+func buildChunkUnits(text string) []string {
+	lines := strings.Split(text, "\n")
+	var units []string
+	var run []string
+	runKind := chunkUnitOther
+	inCode := false
+
+	flushRun := func() {
+		if len(run) > 0 {
+			units = append(units, strings.Join(run, "\n"))
+			run = nil
+		}
+	}
+
+	for _, raw := range lines {
+		content := strings.TrimRight(raw, "\r")
+		trimmed := strings.TrimSpace(content)
+
+		if inCode {
+			run = append(run, content)
+			if chunkCodeFenceRe.MatchString(trimmed) {
+				inCode = false
+				flushRun()
+			}
+			continue
+		}
+		if trimmed == "" {
+			flushRun()
+			continue
+		}
+		if chunkCodeFenceRe.MatchString(trimmed) {
+			flushRun()
+			run = []string{trimmed}
+			inCode = true
+			continue
+		}
+
+		kind := classifyChunkLine(trimmed)
+		if kind == chunkUnitList || kind == chunkUnitTable {
+			if runKind == kind && len(run) > 0 {
+				run = append(run, trimmed)
+			} else {
+				flushRun()
+				run = []string{trimmed}
+				runKind = kind
+			}
+			continue
+		}
+
+		flushRun()
+		units = append(units, trimmed)
+	}
+	flushRun()
+	return units
+}
+
+// splitLongLine breaks a single unbreakable unit (no internal line to fall
+// back to) into maxLen-sized pieces, preferring the last whitespace boundary
+// before the cut and always cutting on a UTF-8 rune boundary so multi-byte
+// characters are never corrupted.
+func splitLongLine(s string, maxLen int) []string {
+	if maxLen <= 0 {
+		return []string{s}
+	}
+	var out []string
+	for len(s) > maxLen {
+		cut := maxLen
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		if idx := strings.LastIndexByte(s[:cut], ' '); idx > maxLen/2 {
+			cut = idx
+		}
+		if cut == 0 {
+			cut = maxLen // pathological: no valid earlier cut point, force progress
+		}
+		out = append(out, strings.TrimSpace(s[:cut]))
+		s = strings.TrimSpace(s[cut:])
+	}
+	if s != "" {
+		out = append(out, s)
+	}
+	return out
+}
+
+// splitOversizedUnit handles a single packable unit that alone exceeds
+// maxLen — previously such a unit passed through unsplit. A multi-line unit
+// (a list run, table, or code block too big to fit whole) is re-packed by
+// its own lines so whole rows/items stay together wherever possible; a
+// genuinely unbreakable single line falls back to splitLongLine.
+func splitOversizedUnit(u string, maxLen int) []string {
+	lines := strings.Split(u, "\n")
+	if len(lines) > 1 {
+		return packChunkUnits(lines, maxLen)
+	}
+	return splitLongLine(u, maxLen)
+}
+
+// packChunkUnits greedily packs units into chunks bounded by maxLen,
+// carrying a small overlap (the last unit of a closed chunk) into the next
+// one when it's short enough to be worth the redundancy. This is chunkText's
+// original algorithm, generalized from "paragraph" to "unit" so multi-line
+// list/table/code units are packed atomically like any other unit.
+func packChunkUnits(units []string, maxLen int) []string {
 	var chunks []string
 	var current []string
 	currentLen := 0
 
-	for _, p := range paragraphs {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		pLen := len(p)
+	for _, u := range units {
+		uLen := len(u)
 
-		if currentLen+pLen > maxLen && len(current) > 0 {
+		if currentLen+uLen > maxLen && len(current) > 0 {
 			chunks = append(chunks, strings.Join(current, "\n"))
 
-			// Overlap: retain the last paragraph if it's not the only one,
-			// and if its length isn't excessively large (e.g. < maxLen/2).
-			lastP := current[len(current)-1]
-			if len(current) > 1 && len(lastP) < maxLen/2 {
-				current = []string{lastP}
-				currentLen = len(lastP) + 1 // +1 for the newline when joining
+			// Overlap: retain the last unit if it's not the only one, and if
+			// its length isn't excessively large (e.g. < maxLen/2).
+			lastU := current[len(current)-1]
+			if len(current) > 1 && len(lastU) < maxLen/2 {
+				current = []string{lastU}
+				currentLen = len(lastU) + 1 // +1 for the newline when joining
 			} else {
 				current = nil
 				currentLen = 0
 			}
 		}
 
-		current = append(current, p)
-		currentLen += pLen + 1
+		if uLen > maxLen {
+			if len(current) > 0 {
+				chunks = append(chunks, strings.Join(current, "\n"))
+				current = nil
+				currentLen = 0
+			}
+			chunks = append(chunks, splitOversizedUnit(u, maxLen)...)
+			continue
+		}
+
+		current = append(current, u)
+		currentLen += uLen + 1
 	}
 	if len(current) > 0 {
 		chunks = append(chunks, strings.Join(current, "\n"))
 	}
 	return chunks
+}
+
+func chunkText(text string, maxLen int) []string {
+	return packChunkUnits(buildChunkUnits(text), maxLen)
 }
 
 var (

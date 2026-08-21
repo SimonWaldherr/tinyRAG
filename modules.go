@@ -251,18 +251,89 @@ func allowedBinaryExtensions() map[string]bool {
 	}
 }
 
+// xmlLineBreakClosingTags are element-close events that mark the end of a
+// paragraph, table row, or table cell across the office document formats
+// stripXMLTags is used for (OOXML word-processing/presentation/spreadsheet
+// parts, and ODF text/presentation/spreadsheet parts). Restoring these as
+// newlines — instead of collapsing every tag boundary into one space —
+// keeps the paragraph/row/cell structure that chunkText's structural
+// chunking relies on to recognize table rows and keep list/procedure steps
+// intact, rather than flattening a whole table or document into one line.
+var xmlLineBreakClosingTags = map[string]bool{
+	"w:p":  true, // DOCX paragraph
+	"w:tr": true, // DOCX table row
+	"w:tc": true, // DOCX table cell
+
+	"a:p":  true, // PPTX / drawing text paragraph
+	"a:tr": true, // PPTX table row
+	"a:tc": true, // PPTX table cell
+
+	"row": true, // XLSX row
+
+	"text:p":           true, // ODF paragraph
+	"text:h":           true, // ODF heading paragraph
+	"table:table-row":  true, // ODF table row
+	"table:table-cell": true, // ODF table cell
+}
+
+// xmlLineBreakSelfClosingTags are self-closing elements that represent an
+// explicit line/paragraph break within a run of text.
+var xmlLineBreakSelfClosingTags = map[string]bool{
+	"w:br": true,
+	"w:cr": true,
+}
+
+// xmlTagEndsBlock reports whether raw — the content between '<' and '>',
+// exclusive — is a closing or self-closing tag whose boundary should become
+// a newline rather than a plain space.
+func xmlTagEndsBlock(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	closing := strings.HasPrefix(raw, "/")
+	if closing {
+		raw = raw[1:]
+	}
+	selfClosing := !closing && strings.HasSuffix(raw, "/")
+	if selfClosing {
+		raw = strings.TrimSpace(raw[:len(raw)-1])
+	}
+	name := raw
+	if i := strings.IndexAny(raw, " \t\r\n"); i >= 0 {
+		name = raw[:i]
+	}
+	if closing {
+		return xmlLineBreakClosingTags[name]
+	}
+	if selfClosing {
+		return xmlLineBreakSelfClosingTags[name]
+	}
+	return false
+}
+
 // stripXMLTags removes all XML/HTML tags from s and collapses whitespace,
-// returning only the human-readable text content.
+// returning only the human-readable text content. Paragraph/row/cell
+// element boundaries become newlines (see xmlTagEndsBlock) so downstream
+// chunking still sees the source document's structure.
 func stripXMLTags(s string) string {
 	var b strings.Builder
+	var tagBuf strings.Builder
 	inTag := false
 	for _, r := range s {
 		switch {
 		case r == '<':
 			inTag = true
+			tagBuf.Reset()
 		case r == '>':
 			inTag = false
-			b.WriteByte(' ')
+			if xmlTagEndsBlock(tagBuf.String()) {
+				b.WriteByte('\n')
+			} else {
+				b.WriteByte(' ')
+			}
+		case inTag:
+			tagBuf.WriteRune(r)
 		case !inTag:
 			b.WriteRune(r)
 		}

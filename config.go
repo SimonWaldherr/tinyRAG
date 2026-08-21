@@ -13,6 +13,43 @@ import (
 // Settings (persisted as JSON)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// terminologyEntry maps an operator-configured term to one or more
+// equivalent expansions (an abbreviation and its full form, or a domain
+// synonym pair). See appSettings.Terminology.
+type terminologyEntry struct {
+	Term       string   `json:"term"`
+	Expansions []string `json:"expansions"`
+}
+
+// normalizeTerminology trims whitespace, drops incomplete entries (a term
+// needs at least one non-empty expansion to be useful), and deduplicates
+// expansions within an entry. Input order is preserved.
+func normalizeTerminology(raw []terminologyEntry) []terminologyEntry {
+	out := make([]terminologyEntry, 0, len(raw))
+	for _, e := range raw {
+		term := strings.TrimSpace(e.Term)
+		if term == "" {
+			continue
+		}
+		seen := map[string]bool{strings.ToLower(term): true}
+		var expansions []string
+		for _, exp := range e.Expansions {
+			exp = strings.TrimSpace(exp)
+			key := strings.ToLower(exp)
+			if exp == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			expansions = append(expansions, exp)
+		}
+		if len(expansions) == 0 {
+			continue
+		}
+		out = append(out, terminologyEntry{Term: term, Expansions: expansions})
+	}
+	return out
+}
+
 // appSettings holds persisted configuration for the application,
 // including model settings, chunking options, custom APIs and personas.
 type appSettings struct {
@@ -59,15 +96,36 @@ type appSettings struct {
 	RerankMode string `json:"rerank_mode"`
 	// RetrievalMode chooses the tinySQL vector query path. "scalar" preserves
 	// the established ACL-first ranking; "vector" enables the faster native
-	// VEC_SEARCH path with an enlarged candidate set before ACL filtering.
+	// VEC_SEARCH path with an enlarged candidate set before ACL filtering;
+	// "hybrid" additionally fuses in a BM25 lexical pass via tinySQL's
+	// HYBRID_SEARCH (reciprocal rank fusion), recovering exact identifiers/
+	// rare terms that pure cosine similarity misses. All three still apply
+	// the same post-retrieval ACL filter and R³ ranking/rerank pipeline.
 	RetrievalMode string `json:"retrieval_mode"`
+	// VectorIndexMode selects the ANN index tinySQL builds for VEC_SEARCH/
+	// HYBRID_SEARCH when RetrievalMode is "vector" or "hybrid": "flat"
+	// (default, exact linear scan — the recommended baseline), "ivf", or
+	// "hnsw". Benchmark ivf/hnsw against the real corpus before switching;
+	// tinySQL's own benchmarks show flat/ivf can beat hnsw on small corpora.
+	VectorIndexMode string `json:"vector_index_mode"`
+	// Terminology is an operator-configurable table bridging equivalent
+	// terms (e.g. an abbreviation and its full form, or a domain synonym
+	// pair) so retrieval can find content written with a different-but-
+	// equivalent term than the one the user typed, without relying on the
+	// embedding model alone to know the mapping. Empty by default — zero
+	// behavior change until an operator populates it.
+	Terminology []terminologyEntry `json:"terminology"`
 	// Optional tinySQL features. Encryption keys deliberately never live in
 	// settings.json; the process reads TINYRAG_STORAGE_KEY at startup.
 	TinySQLAuditEnabled      bool   `json:"tinysql_audit_enabled"`
 	TinySQLAuditPath         string `json:"tinysql_audit_path"`
 	StorageEncryptionEnabled bool   `json:"storage_encryption_enabled"`
 	GeoImportEnabled         bool   `json:"geo_import_enabled"`
-	// Vector-cache controls for tinySQL v0.19.1. Zero cache entries disables it.
+	// Vector-cache controls for tinySQL's optional VEC_SEARCH result cache.
+	// Zero cache entries disables it. tinySQL's own docs note this cache
+	// mostly helps templated/FAQ-style query workloads where the same query
+	// vector recurs — freeform natural-language questions rarely repeat
+	// exactly, so weigh that against the small bounded memory/TTL cost.
 	TinySQLVectorCacheEntries    int  `json:"tinysql_vector_cache_entries"`
 	TinySQLVectorCacheTTLSeconds int  `json:"tinysql_vector_cache_ttl_seconds"`
 	TinySQLVectorAnalytics       bool `json:"tinysql_vector_analytics"`
@@ -202,8 +260,25 @@ func normalizeRetrievalMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "vector", "vec_search", "native":
 		return "vector"
+	case "hybrid", "hybrid_search", "bm25", "rrf":
+		return "hybrid"
 	default:
 		return "scalar"
+	}
+}
+
+// normalizeVectorIndexMode maps arbitrary input to a tinySQL VEC_SEARCH/
+// HYBRID_SEARCH index mode. Empty/unknown input defaults to "flat" (exact
+// linear scan), the recommended baseline until ivf/hnsw are benchmarked
+// against the real corpus.
+func normalizeVectorIndexMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "ivf":
+		return "ivf"
+	case "hnsw":
+		return "hnsw"
+	default:
+		return "flat"
 	}
 }
 
@@ -433,6 +508,8 @@ func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang strin
 		LDAPEnabled:                  false,
 		LDAPUserAttr:                 "uid",
 		RetrievalMode:                "scalar",
+		VectorIndexMode:              "flat",
+		Terminology:                  []terminologyEntry{},
 		GeoImportEnabled:             false,
 		TinySQLVectorCacheEntries:    128,
 		TinySQLVectorCacheTTLSeconds: 30,
@@ -462,6 +539,8 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 			// persists empty/un-normalized values for these fields.
 			ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
 			ss.s.RetrievalMode = normalizeRetrievalMode(ss.s.RetrievalMode)
+			ss.s.VectorIndexMode = normalizeVectorIndexMode(ss.s.VectorIndexMode)
+			ss.s.Terminology = normalizeTerminology(ss.s.Terminology)
 			ss.s.Density = normalizeDensity(ss.s.Density)
 			ss.s.UI = normalizeUIConfig(ss.s.UI)
 			if err := ss.saveLocked(); err != nil {
@@ -494,6 +573,8 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	ss.s.ResponseLanguageMode = normalizeResponseLanguageMode(ss.s.ResponseLanguageMode)
 	ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
 	ss.s.RetrievalMode = normalizeRetrievalMode(ss.s.RetrievalMode)
+	ss.s.VectorIndexMode = normalizeVectorIndexMode(ss.s.VectorIndexMode)
+	ss.s.Terminology = normalizeTerminology(ss.s.Terminology)
 	if ss.s.TinySQLVectorCacheEntries < 0 {
 		ss.s.TinySQLVectorCacheEntries = 0
 	}

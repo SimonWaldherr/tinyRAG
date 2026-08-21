@@ -768,7 +768,7 @@ func (r *ragSystem) searchCandidatesSingle(query string, k int) ([]retrievalHit,
 	embedMs := time.Since(t0).Milliseconds()
 
 	t1 := time.Now()
-	rawHits, err := r.chunkStore.searchTopK(qvec, r.getActiveEmbedModel(), roleAndACLFilterSQL(activeRole), candidateLimitForK(k))
+	rawHits, err := r.chunkStore.searchTopK(qvec, query, r.getActiveEmbedModel(), roleAndACLFilterSQL(activeRole), candidateLimitForK(k))
 	if err != nil {
 		return nil, embedMs, 0, err
 	}
@@ -835,7 +835,7 @@ func (r *ragSystem) searchCandidates(query string, k int) ([]retrievalHit, int64
 			break
 		}
 		t1 := time.Now()
-		rawHits, err := r.chunkStore.searchTopK(vec, r.getActiveEmbedModel(), roleAndACLFilterSQL(activeRole), candidateLimitForK(k))
+		rawHits, err := r.chunkStore.searchTopK(vec, variants[i].Query, r.getActiveEmbedModel(), roleAndACLFilterSQL(activeRole), candidateLimitForK(k))
 		if err != nil {
 			return nil, embedMs, totalSearchMs, err
 		}

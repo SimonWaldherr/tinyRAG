@@ -530,7 +530,9 @@
       <div class="settings-nanogo">
         <label class="inline-check" for="setGeoImportEnabled"><input type="checkbox" id="setGeoImportEnabled"><span>Geodaten-Import erlauben</span></label>
         <label for="setRetrievalMode">Vektorsuche</label>
-        <select id="setRetrievalMode"><option value="scalar">Kompatibel (ACL zuerst)</option><option value="vector">Native VEC_SEARCH (experimentell)</option></select>
+        <select id="setRetrievalMode"><option value="scalar">Kompatibel (ACL zuerst)</option><option value="vector">Native VEC_SEARCH (experimentell)</option><option value="hybrid">Hybrid: Vektor + BM25 (experimentell)</option></select>
+        <label for="setVectorIndexMode">Vektor-Index (bei Native/Hybrid)</label>
+        <select id="setVectorIndexMode"><option value="flat">Flat (exakt, empfohlen)</option><option value="ivf">IVF</option><option value="hnsw">HNSW</option></select>
       </div>
       <div class="settings-nanogo">
         <label class="inline-check" for="setTinySQLAuditEnabled"><input type="checkbox" id="setTinySQLAuditEnabled"><span>Manipulationsnachweisbares Datenbank-Audit aktivieren</span></label>

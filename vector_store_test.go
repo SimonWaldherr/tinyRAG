@@ -83,7 +83,7 @@ func TestTinySQLChunkStoreSearchTopKRanksBySimilarity(t *testing.T) {
 		t.Fatalf("insertChunks failed: %v", err)
 	}
 
-	hits, err := store.searchTopK([]float64{1, 0, 0}, "test-embed", "1=1", 10)
+	hits, err := store.searchTopK([]float64{1, 0, 0}, "", "test-embed", "1=1", 10)
 	if err != nil {
 		t.Fatalf("searchTopK failed: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestTinySQLChunkStoreSearchTopKFiltersByEmbedModel(t *testing.T) {
 	if err := store.insertChunks(chunks); err != nil {
 		t.Fatalf("insertChunks failed: %v", err)
 	}
-	hits, err := store.searchTopK([]float64{1, 0, 0}, "different-embed-model", "1=1", 10)
+	hits, err := store.searchTopK([]float64{1, 0, 0}, "", "different-embed-model", "1=1", 10)
 	if err != nil {
 		t.Fatalf("searchTopK failed: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestTinySQLChunkStoreRoleFiltering(t *testing.T) {
 		t.Fatalf("insertChunks failed: %v", err)
 	}
 
-	hits, err := store.searchTopK([]float64{1, 0, 0}, "test-embed", roleAndACLFilterSQL("it"), 10)
+	hits, err := store.searchTopK([]float64{1, 0, 0}, "", "test-embed", roleAndACLFilterSQL("it"), 10)
 	if err != nil {
 		t.Fatalf("searchTopK failed: %v", err)
 	}

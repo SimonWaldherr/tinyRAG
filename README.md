@@ -106,14 +106,28 @@ Example configuration:
 }
 ```
 
-### tinySQL v0.19.1 features
+### tinySQL v0.39.0 features
 
-tinyRAG uses tinySQL v0.19.1. The settings panel exposes the following
-optional database features:
+tinyRAG uses tinySQL v0.39.0 (upgraded from v0.19.1; every API tinyRAG relies
+on stayed additive/backward-compatible, so the upgrade required no breaking
+code changes). The settings panel exposes the following optional database
+features:
 
 - **Native vector retrieval** uses `VEC_SEARCH` for faster candidate lookup.
   The existing scalar retrieval mode remains available when maximum recall is
   preferred.
+- **Hybrid retrieval (new)** uses tinySQL's `HYBRID_SEARCH` to fuse the vector
+  candidate list with a real BM25 full-text pass over chunk content via
+  reciprocal rank fusion, recovering exact identifiers and rare terms that
+  cosine similarity alone can miss. The R³ ranking pipeline still scores every
+  candidate on plain cosine similarity, not the raw fusion score, so
+  downstream thresholds/reranking behave exactly as before.
+- **Configurable vector index (new)** picks the ANN strategy `VEC_SEARCH`/
+  `HYBRID_SEARCH` use: `flat` (exact, default), `ivf`, or `hnsw`. Benchmark
+  before switching away from `flat` — corpus size/shape determines the winner.
+- **Startup index warm-up (new)** runs tinySQL's `VEC_WARM` once at startup
+  when `vector`/`hybrid` retrieval is enabled, so the first real query never
+  pays the one-time index-build cost. A no-op under the default `scalar` mode.
 - **Vector result cache** stores only deterministic result IDs, never source
   text or embedding vectors. New and migrated installations enable a bounded
   cache with 128 entries and a 30-second TTL. Set
@@ -287,7 +301,42 @@ The project follows standard Go conventions:
 - Efficient in-memory vector operations
 - Native tinySQL `VEC_SEARCH` with optional bounded result caching and
   privacy-preserving query analytics
+- Optional hybrid retrieval (`HYBRID_SEARCH`: vector + BM25 via reciprocal
+  rank fusion) and configurable ANN index (`flat`/`ivf`/`hnsw`) with startup
+  warm-up (`VEC_WARM`)
 - Metadata-aware R³ ranking with trust, quality, freshness, feedback, and sensitivity penalties
+
+### Chunking & Ingestion
+
+- **Structure-aware chunking**: text is split into atomic blocks first — a
+  run of numbered/bulleted list items, a table's rows, or a fenced code
+  block — so a character-budget cut lands between blocks, not in the middle
+  of a step-by-step procedure or a table row. Plain prose chunking behavior
+  is unchanged. An oversized block/line that still exceeds the budget is now
+  split by its own rows/lines (falling back to word-boundary slicing only
+  for a genuinely unbreakable line), instead of passing through unbounded.
+- **Office document structure preservation**: DOCX/PPTX/XLSX/ODT/ODP/ODS
+  text extraction now emits a line break at paragraph, table row, and table
+  cell boundaries (instead of collapsing an entire document/sheet into one
+  line), so the structure-aware chunker above can recognize spreadsheet rows
+  and table structure in these formats too.
+- **Source-type quality tiers** (`r3.go`) include a generic `structured_item`
+  tier for small, well-formed structured records — a glossary entry, a
+  reference-table row, a course module or Q/A pair — imported one record at
+  a time (CSV/JSON row import uses this tier automatically); the dedicated
+  `wiki` tier is now actually applied by the Wikipedia import endpoint
+  instead of silently falling back to the generic default.
+- **Operator-configurable terminology** (`terminology` setting, managed via
+  `GET`/`POST /api/settings/terminology`): a table of term ↔ expansion
+  pairs (e.g. an abbreviation and its full form, or a domain synonym pair).
+  When a query matches one side, query expansion adds the other side(s) as
+  additional retrieval/search variants — bridging vocabulary the embedding
+  model alone might not know is equivalent. Empty by default.
+- **Revision-aware re-ingestion**: `/api/add-wiki`, `/api/add-url`, and
+  `/api/add-text` now accept an optional `metadata` object (same shape as
+  the folder-import path), including `update_mode` (`skip` (default) /
+  `upsert` / `replace`), so a previously imported page/URL/text can be
+  refreshed by content hash instead of being silently skipped forever.
 
 ### R³ Governance
 

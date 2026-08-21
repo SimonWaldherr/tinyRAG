@@ -238,6 +238,14 @@ func sourceTypeQualityDefault(sourceType string) float64 {
 		return 0.95
 	case "open_dataset":
 		return 0.85
+	// structured_item covers small, well-formed structured records — a
+	// glossary entry, a spec/reference table row, a course module or
+	// question/answer pair imported one-record-at-a-time — as distinct from
+	// free-running prose ("document"), since a complete, self-contained
+	// record is generally more reliable to quote verbatim than an arbitrary
+	// prose fragment.
+	case "structured_item":
+		return 0.80
 	case "wiki":
 		return 0.75
 	case "ticket":

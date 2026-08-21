@@ -11,6 +11,26 @@ import (
 	tinysql "github.com/SimonWaldherr/tinySQL"
 )
 
+func TestMergeR3MetadataOverridesUpdateModeButKeepsBaseDefaults(t *testing.T) {
+	base := R3IngestMetadata{SourceType: "wiki", SourceSystem: "wikipedia", SourceTitle: "Foo"}
+	override := R3IngestMetadata{UpdateMode: "upsert"}
+	got := mergeR3Metadata(base, override)
+	if got.UpdateMode != "upsert" {
+		t.Errorf("expected override UpdateMode to win, got %q", got.UpdateMode)
+	}
+	if got.SourceType != "wiki" || got.SourceSystem != "wikipedia" || got.SourceTitle != "Foo" {
+		t.Errorf("expected unset override fields to keep base defaults, got %+v", got)
+	}
+}
+
+func TestMergeR3MetadataEmptyOverrideIsNoOp(t *testing.T) {
+	base := R3IngestMetadata{SourceType: "wiki", SourceTitle: "Foo"}
+	got := mergeR3Metadata(base, R3IngestMetadata{})
+	if got != base {
+		t.Errorf("empty override should not change base metadata, got %+v want %+v", got, base)
+	}
+}
+
 func newTestRAGForIngest(t *testing.T) *ragSystem {
 	t.Helper()
 	r, err := newRAG(r3MockLM{}, 3, "", tinysql.ModeMemory, 32)

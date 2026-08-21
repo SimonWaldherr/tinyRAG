@@ -1751,6 +1751,7 @@ async function initSettingsUI(){
   if($('#setRedactPII')) $('#setRedactPII').checked = !!s.redact_pii;
   if($('#setGeoImportEnabled')) $('#setGeoImportEnabled').checked = !!s.geo_import_enabled;
   if($('#setRetrievalMode')) $('#setRetrievalMode').value = s.retrieval_mode || 'scalar';
+  if($('#setVectorIndexMode')) $('#setVectorIndexMode').value = s.vector_index_mode || 'flat';
   if($('#setTinySQLAuditEnabled')) $('#setTinySQLAuditEnabled').checked = !!s.tinysql_audit_enabled;
   if($('#setTinySQLAuditPath')) $('#setTinySQLAuditPath').value = s.tinysql_audit_path || '';
   if($('#setStorageEncryptionEnabled')) $('#setStorageEncryptionEnabled').checked = !!s.storage_encryption_enabled;
@@ -2395,6 +2396,7 @@ async function saveSettings(force=false){
       redact_pii: redactPII
 	  ,geo_import_enabled: geoImportEnabled
 	  ,retrieval_mode: $('#setRetrievalMode') ? $('#setRetrievalMode').value : 'scalar'
+	  ,vector_index_mode: $('#setVectorIndexMode') ? $('#setVectorIndexMode').value : 'flat'
 	  ,tinysql_audit_enabled: $('#setTinySQLAuditEnabled') ? !!$('#setTinySQLAuditEnabled').checked : false
 	  ,tinysql_audit_path: $('#setTinySQLAuditPath') ? $('#setTinySQLAuditPath').value.trim() : ''
 	  ,storage_encryption_enabled: $('#setStorageEncryptionEnabled') ? !!$('#setStorageEncryptionEnabled').checked : false

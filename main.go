@@ -195,6 +195,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				"allow_nanogo":                     s.AllowNanoGo,
 				"rerank_mode":                      s.RerankMode,
 				"retrieval_mode":                   s.RetrievalMode,
+				"vector_index_mode":                s.VectorIndexMode,
 				"tinysql_audit_enabled":            s.TinySQLAuditEnabled,
 				"tinysql_audit_path":               s.TinySQLAuditPath,
 				"storage_encryption_enabled":       s.StorageEncryptionEnabled,
@@ -234,6 +235,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				AllowNanoGo                  *bool  `json:"allow_nanogo"`
 				RerankMode                   string `json:"rerank_mode"`
 				RetrievalMode                string `json:"retrieval_mode"`
+				VectorIndexMode              string `json:"vector_index_mode"`
 				TinySQLAuditEnabled          *bool  `json:"tinysql_audit_enabled"`
 				TinySQLAuditPath             string `json:"tinysql_audit_path"`
 				StorageEncryptionEnabled     *bool  `json:"storage_encryption_enabled"`
@@ -319,6 +321,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			}
 			if req.RetrievalMode != "" {
 				settings.s.RetrievalMode = normalizeRetrievalMode(req.RetrievalMode)
+			}
+			if req.VectorIndexMode != "" {
+				settings.s.VectorIndexMode = normalizeVectorIndexMode(req.VectorIndexMode)
 			}
 			if req.TinySQLAuditEnabled != nil {
 				settings.s.TinySQLAuditEnabled = *req.TinySQLAuditEnabled
@@ -465,6 +470,32 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		settings.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "lang": lang})
+	})
+
+	// GET/POST /api/settings/terminology — operator-configurable term
+	// equivalence table used by query expansion to bridge an abbreviation to
+	// its full form (or a domain synonym pair). POST replaces the whole list.
+	mux.HandleFunc("/api/settings/terminology", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			writeJSON(w, settings.get().Terminology)
+		case "POST":
+			var req struct {
+				Terminology []terminologyEntry `json:"terminology"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid JSON", 400)
+				return
+			}
+			normalized := normalizeTerminology(req.Terminology)
+			settings.mu.Lock()
+			settings.s.Terminology = normalized
+			_ = settings.saveLocked()
+			settings.mu.Unlock()
+			writeJSON(w, normalized)
+		default:
+			http.Error(w, "GET or POST only", 405)
+		}
 	})
 
 	// POST /api/settings/role — switch demo role context (light RBAC)
@@ -1284,10 +1315,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Article    string   `json:"article"`
-			Lang       string   `json:"lang"`
-			EmbedModel string   `json:"embed_model"`
-			Roles      []string `json:"roles"`
+			Article    string           `json:"article"`
+			Lang       string           `json:"lang"`
+			EmbedModel string           `json:"embed_model"`
+			Roles      []string         `json:"roles"`
+			Metadata   R3IngestMetadata `json:"metadata"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Article == "" {
 			http.Error(w, "missing article", 400)
@@ -1318,7 +1350,19 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			em = req.EmbedModel
 		}
 		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
-		if err := rag.addChunksWithRoles(req.Article, chunks, em, roleScopes); err != nil {
+		// Explicit SourceType (rather than falling back to
+		// normalizeR3SourceType's title-substring heuristic, which almost
+		// never matches "wiki" against a plain article title) makes the
+		// dedicated "wiki" quality/trust tier in r3.go actually reachable.
+		// req.Metadata can override any of these defaults, e.g. update_mode
+		// to refresh a page that was already imported and has since changed
+		// (the default "skip" leaves an existing document untouched).
+		meta := mergeR3Metadata(R3IngestMetadata{
+			SourceType:   "wiki",
+			SourceSystem: "wikipedia",
+			SourceTitle:  req.Article,
+		}, req.Metadata)
+		if err := rag.addChunksWithMetadata(req.Article, chunks, em, roleScopes, meta); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -1340,9 +1384,10 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			URL        string   `json:"url"`
-			EmbedModel string   `json:"embed_model"`
-			Roles      []string `json:"roles"`
+			URL        string           `json:"url"`
+			EmbedModel string           `json:"embed_model"`
+			Roles      []string         `json:"roles"`
+			Metadata   R3IngestMetadata `json:"metadata"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
 			http.Error(w, "missing url", 400)
@@ -1368,7 +1413,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			em = req.EmbedModel
 		}
 		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
-		if err := rag.addChunksWithRoles(req.URL, chunks, em, roleScopes); err != nil {
+		// req.Metadata defaults to the zero value (update_mode "skip"), same
+		// as before; callers can pass metadata.update_mode="upsert" to
+		// refresh a page that was already imported and has since changed.
+		meta := mergeR3Metadata(R3IngestMetadata{SourceTitle: req.URL, SourceURL: req.URL}, req.Metadata)
+		if err := rag.addChunksWithMetadata(req.URL, chunks, em, roleScopes, meta); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -1687,10 +1736,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Title      string   `json:"title"`
-			Text       string   `json:"text"`
-			EmbedModel string   `json:"embed_model"`
-			Roles      []string `json:"roles"`
+			Title      string           `json:"title"`
+			Text       string           `json:"text"`
+			EmbedModel string           `json:"embed_model"`
+			Roles      []string         `json:"roles"`
+			Metadata   R3IngestMetadata `json:"metadata"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
 			http.Error(w, "missing text", 400)
@@ -1706,7 +1756,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			em = req.EmbedModel
 		}
 		roleScopes := normalizeRoleScopes(req.Roles, s.ActiveRole)
-		if err := rag.addChunksWithRoles(req.Title, chunks, em, roleScopes); err != nil {
+		// req.Metadata defaults to the zero value (update_mode "skip"), same
+		// as before; callers can pass metadata.update_mode="upsert"/"replace"
+		// to refresh a manually entered document that has since been revised.
+		meta := mergeR3Metadata(R3IngestMetadata{SourceTitle: req.Title}, req.Metadata)
+		if err := rag.addChunksWithMetadata(req.Title, chunks, em, roleScopes, meta); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -2370,7 +2424,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, impErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := rag.addChunks(source, chunks, s.EmbedModel); err != nil {
+		// SourceType "structured_item" (rather than the "document" default a
+		// bare addChunks would fall back to) reflects that each chunk here is
+		// one small, well-formed row/record rather than free-running prose —
+		// the same shape as a glossary entry, spec table row, or course
+		// module outline imported this way.
+		meta := R3IngestMetadata{SourceType: "structured_item", SourceSystem: "csv_import", SourceTitle: source}
+		if err := rag.addChunksWithMetadata(source, chunks, s.EmbedModel, nil, meta); err != nil {
 			job.Status = ImportJobFailed
 			job.LastError = err.Error()
 			job.UpdatedAt = time.Now().UTC()
@@ -2450,7 +2510,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			http.Error(w, impErr.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := rag.addChunks(source, chunks, s.EmbedModel); err != nil {
+		meta := R3IngestMetadata{SourceType: "structured_item", SourceSystem: "json_import", SourceTitle: source}
+		if err := rag.addChunksWithMetadata(source, chunks, s.EmbedModel, nil, meta); err != nil {
 			job.Status = ImportJobFailed
 			job.LastError = err.Error()
 			job.UpdatedAt = time.Now().UTC()
