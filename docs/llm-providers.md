@@ -4,7 +4,7 @@ tinyRAG is provider-agnostic: anything that speaks the OpenAI `/v1/chat/completi
 and `/v1/embeddings` API works, local or cloud. Servers exposing the native
 Ollama `/api` endpoints are supported as well. This page collects setup
 notes for every provider preset in the web UI's provider switcher
-(`#llmSwitcher` in [index.html](../index.html)), plus how to wire up
+(`#llmSwitcher` in [index.html](../internal/app/web/index.html)), plus how to wire up
 something that isn't in the list.
 
 Two independent endpoints can be configured — `chat_base` and `embed_base`
@@ -106,22 +106,22 @@ Not part of the default build — it pulls in GopherLLM's full GGUF/tokenizer/
 SIMD stack, which most deployments don't need. Build with:
 
 ```bash
-go build -tags demo_llm ./...
+go build -tags demo_llm -o bin/tinyrag ./cmd/tinyrag
 ```
 
 Then either point at a specific `.gguf` file, or let it auto-discover one:
 
 ```bash
 # Explicit model file
-./tinyRAG -demo-llm-model /path/to/model.Q4_K_M.gguf
+./bin/tinyrag -demo-llm-model /path/to/model.Q4_K_M.gguf
 
 # Auto-discover: scans GopherLLM's default model directory
 # ($RUSTY_LLM_MODEL_DIR, or LM Studio's community model cache under $HOME)
 # for the first supported, non-projector GGUF file it finds.
-./tinyRAG -demo-llm-model auto
+./bin/tinyrag -demo-llm-model auto
 
 # Change the local port the embedded server listens on (default 127.0.0.1:8091)
-./tinyRAG -demo-llm-model auto -demo-llm-addr 127.0.0.1:9000
+./bin/tinyrag -demo-llm-model auto -demo-llm-addr 127.0.0.1:9000
 ```
 
 On startup tinyRAG loads the model, starts GopherLLM's OpenAI-compatible
@@ -163,7 +163,7 @@ import — run `go mod tidy -tags=demo_llm` instead when tidying this module.
 All cloud providers need an API key — set it in Settings → LLM Backend
 ("OpenAI API Key" field applies to whichever base URL is active) or via the
 `OPENAI_API_KEY` environment variable, which is used as a fallback whenever
-no key is stored in `settings.json`.
+no key is stored in `config/settings.json`.
 
 ## Using a provider that isn't listed
 
@@ -177,7 +177,7 @@ then save.
 
 ## How auto-detection works
 
-- `providerHintFromURL` ([llm_discovery.go](../llm_discovery.go)) maps a
+- `providerHintFromURL` ([llm_discovery.go](../internal/app/llm_discovery.go)) maps a
   base URL to a human-readable provider name, first by hostname (cloud
   providers) and then by port (local runners) — used to pre-select the
   provider switcher and label the workspace pill.

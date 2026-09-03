@@ -1,10 +1,12 @@
 # Binaries
-tinyRAG
-tinyRAG.exe
+/tinyRAG
+/tinyRAG.exe
+/bin/
 
 # Database files
 *.gob
 *.db
+/data/
 
 # Runtime usage statistics
 usage_stats.jsonl
@@ -16,9 +18,13 @@ usage_stats.jsonl
 *~
 
 # Settings (may contain sensitive data)
-# settings.json - uncomment if you don't want to commit settings
+settings.json
+config/settings.json
 preview-settings.json
 connectors.json
+
+# Legacy runtime directory
+/module-files/
 
 # IDE files
 .idea/

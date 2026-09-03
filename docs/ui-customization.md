@@ -5,7 +5,7 @@ web UI is data-driven and can be reshaped per deployment without touching
 HTML/CSS/JS, and the binary doubles as a headless CLI RAG engine for scripts,
 pipelines and TUI wrappers.
 
-## 1. UI configuration (`ui` in settings.json)
+## 1. UI configuration (`ui` in config/settings.json)
 
 Everything defaults to *enabled*; you only list what you want to change.
 
@@ -45,13 +45,13 @@ Notes:
 
 ## 2. Themes
 
-Six built-in themes ship in `style.css` (`dark`, `light`, `nord`, `solarized`,
+Six built-in themes ship in `internal/app/web/style.css` (`dark`, `light`, `nord`, `solarized`,
 `monokai`, `dracula`), plus 14 ready-made custom themes and 14 scenario
 templates (see §5). **Browse all of them visually at `/gallery`** — a static,
-self-contained reference page (`examples/gallery.html`, embedded into the
+self-contained reference page (`internal/app/examples/gallery.html`, embedded into the
 binary via `go:embed`, no server calls) that renders a live-looking preview
 of every theme and scenario, plus a copy button for the matching
-`tinyRAG -apply-template <id>` command.
+`./bin/tinyrag -apply-template <id>` command.
 
 **Custom themes** are CSS-variable maps layered on top of a built-in base
 theme:
@@ -83,10 +83,10 @@ they contain `{ } ; < > \`, `url(`, `expression`, `@import` or
 `javascript:`. On the client the values are applied via
 `style.setProperty(…)`, which cannot escape the declaration — the server-side
 filter is defense in depth. Available variables: see the `:root` block at the
-top of `style.css` (`--bg`, `--panel`, `--text`, `--accent`, `--border`, …).
+top of `internal/app/web/style.css` (`--bg`, `--panel`, `--text`, `--accent`, `--border`, …).
 
 Also seeded automatically on first run (and into any pre-existing
-`settings.json` missing the field): `corporate`, `healthcare`, `legal`,
+`config/settings.json` missing the field): `corporate`, `healthcare`, `legal`,
 `education`, `high-contrast`, `terminal`, `sunset`, `print`, `cyberpunk`,
 `ocean`, `forest`, `midnight` (AMOLED), `finance`, `government` — see
 `defaultCustomThemes()` in `ui_templates.go`.
@@ -121,7 +121,7 @@ type uiScenarioTemplate struct {
 | `/api/ui/templates/apply` | POST | admin | Apply a template's theme + density + UI config: `{"id": "support-widget"}` |
 
 Also applicable headlessly for provisioning (see §4):
-`tinyRAG -apply-template support-widget`.
+`./bin/tinyrag -apply-template support-widget`.
 
 ## 4. Headless / CLI / TUI usage
 
@@ -130,23 +130,23 @@ tools, cron jobs, or your own TUI:
 
 ```bash
 # One-shot question (streams the answer to stdout)
-./tinyRAG -ask "Wie funktioniert der Rollback-Prozess?"
+./bin/tinyrag -ask "Wie funktioniert der Rollback-Prozess?"
 
 # Machine-readable envelope for pipelines
-./tinyRAG -ask "…" -jsonout
+./bin/tinyrag -ask "…" -jsonout
 # → {"question": "…", "answer": "…", "context_chars": 4813, "chunks_used": 5}
 
 # Semantic search only (no LLM call needed beyond embeddings)
-./tinyRAG -searchq "kubernetes deployment" -jsonout
+./bin/tinyrag -searchq "kubernetes deployment" -jsonout
 
 # Interactive REPL (colored; NO_COLOR or -nocolor disables ANSI)
-./tinyRAG -web=false
+./bin/tinyrag -web=false
 
 # Provisioning one-shots — no LLM endpoint needed, useful in a Docker
 # entrypoint or setup script to configure a fresh deployment headlessly:
-./tinyRAG -list-themes                       # → JSON array of available theme ids
-./tinyRAG -list-templates                    # → JSON array of scenario templates
-./tinyRAG -apply-template support-widget     # sets theme + UI config, exits
+./bin/tinyrag -list-themes                       # → JSON array of available theme ids
+./bin/tinyrag -list-templates                    # → JSON array of scenario templates
+./bin/tinyrag -apply-template support-widget     # sets theme + UI config, exits
 ```
 
 The REPL is **multi-turn**: it keeps the last 10 exchanged messages as

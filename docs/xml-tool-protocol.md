@@ -94,7 +94,7 @@ tool type:
 ## Frontend Rendering
 
 The raw XML is passed through in the streamed text so the frontend can
-render it as a status card.  The `app.js` `replaceXMLToolBlocksWithCards`
+render it as a status card. The `internal/app/web/app.js` function `replaceXMLToolBlocksWithCards`
 function replaces `<tool>` blocks with:
 
 ```html

@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "base_url": "http://localhost:1234",
+  "inference_api": "auto",
+  "chat_base": "http://localhost:1234",
+  "embed_base": "http://localhost:1234",
+  "chat_model": "mistralai/ministral-3-14b-reasoning",
+  "embed_model": "text-embedding-nomic-embed-text-v1.5",
+  "openai_api_key": "",
+  "lang": "de",
+  "theme": "monokai",
+  "chunk_size": 800,
+  "k": 5,
+  "retrieval_mode": "scalar",
+  "vector_index_mode": "flat",
+  "agent_memory_enabled": false
+}

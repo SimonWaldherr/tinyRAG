@@ -41,10 +41,10 @@ git clone https://github.com/SimonWaldherr/tinyRAG.git
 cd tinyRAG
 
 # Build the application
-go build
+make build
 
 # Run
-./tinyRAG -web -addr :8080 -db tinyrag.gob
+./bin/tinyrag -web -addr :8080
 ```
 
 ### Using Make
@@ -65,24 +65,29 @@ make check
 ### Starting the Server
 
 ```bash
-./tinyRAG -web -addr :8080 -db tinyrag.gob
+./bin/tinyrag -web -addr :8080
 ```
 
 Options:
 - `-web`: Enable web interface (default: true)
 - `-addr`: Server address (default: :8080)
-- `-db`: Database file path (default: tinyrag.gob)
+- `-db`: Database file path (default: data/tinyrag.gob)
+- `-settings`: Settings JSON path (default: config/settings.json)
 - `-url`: LLM API base URL (default: http://localhost:1234)
 - `-inference-api`: inference wire protocol (`auto`, `openai`, or `ollama`)
-- `-chat`: Chat model name
-- `-embed`: Embedding model name
+- `-chat-model`: Chat model name (first run only)
+- `-embed-model`: Embedding model name (first run only)
 - `-lang`: Language code (default: de)
-- `-chunk`: Chunk size for text splitting (default: 800)
+- `-chunk-size`: Chunk size for text splitting (default: 800)
 - `-k`: Number of chunks to retrieve for RAG (default: 5)
 
 ### Configuration
 
-The application stores its configuration in `settings.json`. You can modify this file or use the web interface settings panel.
+The application stores local configuration in `config/settings.json`, created on
+first run and ignored by Git. Start from the tracked
+[`config/settings.example.json`](config/settings.example.json) if you want to
+provision it manually; do not commit API keys or other credentials. You can
+also modify the local file through the web interface settings panel.
 
 Example configuration:
 ```json
@@ -156,7 +161,7 @@ optional database features:
   restart.
 - **Encryption at rest** for disk, index, and hybrid storage modes reads a
   32-byte hexadecimal or Base64 key from `TINYRAG_STORAGE_KEY`. The key is
-  never written to `settings.json`; enabling encryption requires a restart.
+  never written to `config/settings.json`; enabling encryption requires a restart.
 - **Geodata import** accepts GeoJSON, KML, and OpenStreetMap XML through the
   Open Data panel when `geo_import_enabled` is enabled.
 
@@ -206,8 +211,9 @@ the list — any OpenAI-compatible server works even if it isn't listed.
 Full setup instructions (install commands, default models, quirks per
 provider) are in **[docs/llm-providers.md](docs/llm-providers.md)**.
 
-**Zero-install demo option**: build with `-tags demo_llm` and run
-`./tinyRAG -demo-llm-model auto` to run a tiny pure-Go model
+**Zero-install demo option**: build with
+`go build -tags demo_llm -o bin/tinyrag ./cmd/tinyrag` and run
+`./bin/tinyrag -demo-llm-model auto` to run a tiny pure-Go model
 ([GopherLLM](https://github.com/SimonWaldherr/GopherLLM)) in-process — no
 LM Studio/Ollama/llama.cpp needed. Demo quality only; see
 [docs/llm-providers.md](docs/llm-providers.md#demo-mode-embedded-gopherllm-no-external-tool-at-all).
@@ -242,7 +248,7 @@ Quick start with the two most common local runners:
 On startup, if the configured endpoint is unreachable, tinyRAG automatically
 probes the common local ports above (LM Studio, Ollama, llama.cpp, vLLM,
 text-generation-webui, KoboldCpp, Jan) and switches to the first one it finds
-— see `maybePreferOfflineLLM` in [llm_discovery.go](llm_discovery.go).
+— see `maybePreferOfflineLLM` in [llm_discovery.go](internal/app/llm_discovery.go).
 
 ## Web Interface
 
@@ -278,14 +284,18 @@ Access the web interface at `http://localhost:8080` (or your configured address)
 
 ```
 .
-├── main.go        # Main application code (4067 lines)
-├── index.html     # Frontend HTML
-├── app.js         # Frontend JavaScript (1270 lines)
-├── style.css      # Frontend CSS (991 lines)
-├── settings.json  # Application configuration
-├── go.mod         # Go module definition
-├── go.sum         # Go module checksums
-└── Makefile       # Build automation
+├── cmd/tinyrag/                 # Minimal executable entry point
+├── internal/app/                # Application package and tests
+│   ├── web/                     # Embedded HTML, CSS, and JavaScript
+│   └── examples/                # Embedded static gallery pages
+├── config/
+│   └── settings.example.json    # Safe configuration template
+├── data/                        # Ignored local DB, chats, uploads, and logs
+├── bin/                         # Ignored local build outputs
+├── docs/                        # Operational and architecture documentation
+├── go.mod                       # Go module definition
+├── go.sum                       # Go module checksums
+└── Makefile                     # Build automation
 ```
 
 ### Make Targets
@@ -295,7 +305,7 @@ make fmt          # Format Go code
 make vet          # Run go vet
 make lint         # Run golangci-lint
 make tidy         # Tidy Go modules
-make build        # Build the application
+make build        # Build bin/tinyrag
 make test         # Run tests
 make check        # Run all checks (fmt, vet, lint, test)
 make run          # Run the application
@@ -459,11 +469,10 @@ Example response:
 
 If you want retrieval from the local knowledge base before processing, set `mode` to `"rag"` or `rag.enabled` to `true`.
 
-Included examples:
+Included example:
 
-- `examples/mssql_to_jsonl.py`
-- `examples/mssql_to_jsonl.php`
-- `examples/jsonl_viewer.php`
+- [`internal/app/examples/gallery.html`](internal/app/examples/gallery.html)
+  is the embedded theme and scenario gallery served at `/gallery`.
 
 ## Security Considerations
 

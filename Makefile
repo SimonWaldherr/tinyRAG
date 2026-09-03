@@ -1,12 +1,14 @@
 SHELL := /bin/sh
 
 APP_ADDR := :8080
-APP_DB := tinyrag.gob
+APP_DB := data/tinyrag.gob
+APP_BIN := bin/tinyrag
+APP_PKG := ./cmd/tinyrag
 
 .PHONY: fmt vet lint tidy build test check run dev help
 
 fmt:
-	gofmt -w ./*.go
+	gofmt -w $$(find ./cmd ./internal -type f -name '*.go')
 
 vet:
 	go vet ./...
@@ -19,7 +21,8 @@ tidy:
 	go mod tidy
 
 build:
-	go build ./...
+	mkdir -p bin
+	go build -o $(APP_BIN) $(APP_PKG)
 
 test:
 	go test ./...
@@ -27,7 +30,7 @@ test:
 check: fmt vet lint test
 
 run:
-	go run . -web -addr $(APP_ADDR) -db $(APP_DB)
+	go run $(APP_PKG) -web -addr $(APP_ADDR) -db $(APP_DB)
 
 dev: fmt vet run
 
