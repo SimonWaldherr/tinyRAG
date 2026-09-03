@@ -23,6 +23,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log"
@@ -36,6 +37,15 @@ const xmlToolOpen = "<tool "
 // xmlToolClose is the suffix that terminates a tool block.
 const xmlToolClose = "</tool>"
 
+// Tool-call payloads originate from a model and are therefore bounded before
+// they reach an executor. The XML parser also limits an unfinished block so a
+// malformed stream cannot make its buffer grow without bound.
+const (
+	maxXMLToolBlockBytes  = 16 * 1024
+	maxXMLToolQueryRunes  = 4096
+	maxXMLToolArgumentLen = 8 * 1024
+)
+
 // XMLToolCall represents a fully parsed, validated inline tool invocation.
 type XMLToolCall struct {
 	// Name is the tool identifier (e.g. "rag_knowledge", "url_fetch").
@@ -44,6 +54,13 @@ type XMLToolCall struct {
 	// For url_fetch the <url> element is mapped here.
 	// For nanogo the <source> element is mapped here.
 	Query string
+	// Arguments carries structured JSON inputs for tools that need more than a
+	// single free-text query. It is optional so existing <query>-based calls
+	// remain fully compatible.
+	Arguments map[string]any
+	// Reason is planner-only metadata. It is never accepted from streamed XML
+	// and is included solely to make planned tool runs explainable.
+	Reason string
 	// Raw holds the original XML text as emitted by the model.
 	Raw string
 	// ID is a unique call identifier used for deduplication.
@@ -52,18 +69,24 @@ type XMLToolCall struct {
 
 // xmlToolRaw is the internal struct used for XML decoding.
 type xmlToolRaw struct {
-	XMLName xml.Name `xml:"tool"`
-	Name    string   `xml:"name,attr"`
-	Query   string   `xml:"query"`
-	URL     string   `xml:"url"`
-	Source  string   `xml:"source"`
-	Input   string   `xml:"input"`
+	XMLName   xml.Name `xml:"tool"`
+	Name      string   `xml:"name,attr"`
+	Query     string   `xml:"query"`
+	URL       string   `xml:"url"`
+	Source    string   `xml:"source"`
+	Input     string   `xml:"input"`
+	Args      string   `xml:"args"`
+	Arguments string   `xml:"arguments"`
 }
 
 // parseXMLBlock attempts to parse a complete `<tool …>…</tool>` block.
 // It returns the parsed call and true on success, or zero value and false
 // on any parse/validation failure.
 func parseXMLBlock(block string) (XMLToolCall, bool) {
+	if len(block) > maxXMLToolBlockBytes {
+		log.Printf("xmltool: oversized tool block rejected (%d bytes)", len(block))
+		return XMLToolCall{}, false
+	}
 	if strings.Contains(strings.TrimPrefix(block, xmlToolOpen), xmlToolOpen) {
 		log.Printf("xmltool: nested tool block rejected: %q", truncate(block, 120))
 		return XMLToolCall{}, false
@@ -79,6 +102,25 @@ func parseXMLBlock(block string) (XMLToolCall, bool) {
 		log.Printf("xmltool: block has empty name: %q", truncate(block, 120))
 		return XMLToolCall{}, false
 	}
+	// Parse optional structured arguments before selecting the legacy input
+	// element. This lets connector tools keep their native input schemas while
+	// the established single-query protocol stays valid.
+	argsText := strings.TrimSpace(raw.Arguments)
+	if argsText == "" {
+		argsText = strings.TrimSpace(raw.Args)
+	}
+	var args map[string]any
+	if argsText != "" {
+		if len(argsText) > maxXMLToolArgumentLen {
+			log.Printf("xmltool: oversized arguments rejected for %q", name)
+			return XMLToolCall{}, false
+		}
+		if err := json.Unmarshal([]byte(argsText), &args); err != nil || len(args) == 0 {
+			log.Printf("xmltool: invalid structured arguments for %q", name)
+			return XMLToolCall{}, false
+		}
+	}
+
 	// Choose the appropriate content element.
 	query := strings.TrimSpace(raw.Query)
 	if query == "" {
@@ -91,15 +133,46 @@ func parseXMLBlock(block string) (XMLToolCall, bool) {
 		query = strings.TrimSpace(raw.Input)
 	}
 	if query == "" {
+		query = toolQueryFromArguments(args)
+	}
+	if len([]rune(query)) > maxXMLToolQueryRunes {
+		log.Printf("xmltool: oversized query rejected for %q", name)
+		return XMLToolCall{}, false
+	}
+	if query == "" && len(args) == 0 {
 		log.Printf("xmltool: block has empty content: %q", truncate(block, 120))
 		return XMLToolCall{}, false
 	}
 	return XMLToolCall{
-		Name:  name,
-		Query: query,
-		Raw:   block,
-		ID:    newXMLCallID(),
+		Name:      name,
+		Query:     query,
+		Arguments: args,
+		Raw:       block,
+		ID:        newXMLCallID(),
 	}, true
+}
+
+// toolQueryFromArguments provides a backwards-compatible scalar view for
+// built-in tools when an XML caller chose the structured form. Connector
+// tools receive the full Arguments object directly.
+func toolQueryFromArguments(args map[string]any) string {
+	for _, key := range []string{"query", "url", "source", "input"} {
+		if value, ok := args[key]; ok {
+			if text, ok := value.(string); ok {
+				return strings.TrimSpace(text)
+			}
+		}
+	}
+	return ""
+}
+
+func rejectedToolBlockPreview(block string) string {
+	if len(block) > maxXMLToolBlockBytes {
+		block = block[:maxXMLToolBlockBytes]
+	}
+	// Avoid leaving an unmatched literal <tool marker in the transcript: the
+	// final answer cleaner intentionally removes incomplete tool blocks.
+	return strings.Replace(block, xmlToolOpen, "&lt;tool ", 1) + "\n[Tool-Aufruf abgelehnt: zu groß]\n"
 }
 
 // newXMLCallID generates a short random identifier for a tool call.
@@ -149,8 +222,9 @@ type FeedResult struct {
 // It returns visible text to be forwarded to the client, plus any
 // completed tool call blocks that were found in the chunk.
 //
-// Invariant: all characters fed will eventually appear either in Visible
-// output or in a completed XMLToolCall.Raw.  Nothing is silently dropped.
+// Invariant: normal input eventually appears either in Visible output or in a
+// completed XMLToolCall.Raw. Oversized rejected tool blocks are intentionally
+// shortened to their hard safety limit.
 func (s *XMLParseState) Feed(chunk string) FeedResult {
 	var res FeedResult
 	s.buf += chunk
@@ -179,6 +253,15 @@ func (s *XMLParseState) Feed(chunk string) FeedResult {
 		// ── Look for the end tag ─────────────────────────────────────────────
 		end := strings.Index(s.buf, xmlToolClose)
 		if end == -1 {
+			if len(s.buf) > maxXMLToolBlockBytes {
+				// Do not retain an unbounded incomplete block. Emit the rejected
+				// prefix as plain text, then continue processing the remaining
+				// stream normally; it cannot be executed later.
+				res.Visible += rejectedToolBlockPreview(s.buf)
+				s.buf = s.buf[maxXMLToolBlockBytes:]
+				res.ParseErrors++
+				continue
+			}
 			// Block not yet complete – keep in buffer.
 			return res
 		}
@@ -187,6 +270,11 @@ func (s *XMLParseState) Feed(chunk string) FeedResult {
 		// We have a complete `<tool …>…</tool>` block.
 		block := s.buf[:end]
 		s.buf = s.buf[end:]
+		if len(block) > maxXMLToolBlockBytes {
+			res.Visible += rejectedToolBlockPreview(block)
+			res.ParseErrors++
+			continue
+		}
 
 		if call, ok := parseXMLBlock(block); ok {
 			res.Calls = append(res.Calls, call)

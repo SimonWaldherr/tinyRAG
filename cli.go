@@ -343,8 +343,8 @@ func runCLI(rag *ragSystem, personas *personaStore, p cliPalette) {
 			if key == "" {
 				key = os.Getenv("OPENAI_API_KEY")
 			}
-			chatLM := newLMClient(applied.ChatBase, applied.EmbedModel, applied.ChatModel, key)
-			embedLM := newLMClient(applied.EmbedBase, applied.EmbedModel, applied.ChatModel, key)
+			chatLM := newLMClientWithAPI(applied.ChatBase, applied.EmbedModel, applied.ChatModel, key, applied.InferenceAPI)
+			embedLM := newLMClientWithAPI(applied.EmbedBase, applied.EmbedModel, applied.ChatModel, key, applied.InferenceAPI)
 			var provider lmProvider = chatLM
 			if applied.ChatBase != applied.EmbedBase {
 				provider = &compositeLM{embedClient: embedLM, chatClient: chatLM}
@@ -434,10 +434,12 @@ func runCLI(rag *ragSystem, personas *personaStore, p cliPalette) {
 
 		default:
 			// Multi-turn ask: prior turns + fresh RAG context for this question.
+			priorHistory := append([]chatMessage(nil), session.history...)
 			now := time.Now().Format(time.RFC3339)
 			session.history = append(session.history, chatMessage{Role: "user", Content: line, Time: now})
 
-			ctxText, _, err := rag.prepareContext(line, false)
+			retrievalQuestion, _ := rewriteRetrievalQuery(context.Background(), rag.getLM(), line, priorHistory)
+			ctxText, _, err := rag.prepareContext(retrievalQuestion, false)
 			if err != nil {
 				fmt.Println(p.fail(fmt.Sprintf("Fehler: %v", err)))
 				continue

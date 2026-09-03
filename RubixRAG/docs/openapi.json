@@ -1,0 +1,363 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "R3 — Rubix Ranked RAG: external API",
+    "version": "1.0.0",
+    "description": "The subset of R3's HTTP API meant for external, non-admin clients — asking questions against the knowledge base and running raw ranked search, plus managing the API keys that authenticate those calls. See docs/API.md for prose documentation and README.md for the full endpoint list (admin/import/settings endpoints are intentionally out of scope for this spec — see docs/API.md's \"Scope\" section)."
+  },
+  "servers": [
+    { "url": "http://localhost:8090", "description": "Default local address (-addr flag) — serves /api/ask, /api/search, /api/apikeys*." },
+    { "url": "http://localhost:8091", "description": "OpenAI-compatible API (settings.openai_api.port, admin-configured, off by default) — serves /v1/chat/completions and /v1/models below. If settings.openai_api.endpoints defines a named endpoint, its paths are prefixed with /<name> instead (e.g. /support/v1/chat/completions); the unprefixed paths shown here are only mounted for the endpoint with an empty Name, and only one endpoint may use that empty name." }
+  ],
+  "security": [{ "ApiKeyHeader": [] }, { "ApiKeyBearer": [] }, {}],
+  "paths": {
+    "/v1/chat/completions": {
+      "post": {
+        "summary": "OpenAI-compatible chat completion",
+        "description": "Point any OpenAI-client-shaped tool (Open WebUI, an IDE assistant, another agent) at this path. Runs the request through R3's normal ranked retrieval first when the endpoint has RAG enabled (see docs/API.md's \"OpenAI-compatible API\" section) — the caller gets a grounded answer with a trailing \"Quellen:\" footer, not a raw LLM passthrough, unless the endpoint is configured as a bare passthrough. Unlike /api/ask, an API key is always required, with no opt-out toggle.",
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/OpenAIChatCompletionRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "With stream=false (default): one buffered chat completion object. With stream=true: text/event-stream, one \"data: <OpenAIChatCompletionChunk json>\" line per token plus a final \"data: [DONE]\" line, per the standard OpenAI SSE convention — this spec only formally describes the non-streaming shape.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/OpenAIChatCompletionResponse" } },
+              "text/event-stream": { "schema": { "type": "string", "description": "One \"data: <OpenAIChatCompletionChunk json>\" line per token, terminated by \"data: [DONE]\"." } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/OpenAIBadRequest" },
+          "401": { "$ref": "#/components/responses/OpenAIUnauthorized" },
+          "405": { "$ref": "#/components/responses/OpenAIBadRequest" },
+          "500": { "$ref": "#/components/responses/OpenAIServerError" }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List the chat profiles this endpoint accepts as \"model\"",
+        "description": "Lists the configured chat profiles (local, azure, openai, openrouter, claude, gemini) available as the \"model\" field of a chat completion request — or, if this endpoint is pinned to one profile (openAIEndpointConfig.Profile), only that single entry, reflecting what it will actually use regardless of what \"model\" a caller sends.",
+        "security": [{ "ApiKeyHeader": [] }, { "ApiKeyBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Available models.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OpenAIModelList" } } }
+          },
+          "401": { "$ref": "#/components/responses/OpenAIUnauthorized" }
+        }
+      }
+    },
+    "/api/ask": {
+      "post": {
+        "summary": "Ask a question against the knowledge base",
+        "description": "Retrieves ranked context chunks, then asks the configured chat model to answer, grounded in that context, with citations. Gated by an API key only if settings.api.require_api_key is enabled (see docs/API.md).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/AskRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "With format=\"json\": one buffered answer object. Without it (default): application/x-ndjson, one JSON object per line — see docs/API.md's \"Default (NDJSON) mode\" section; this spec only formally describes the format=\"json\" shape, since OpenAPI has no first-class representation for a newline-delimited stream of heterogeneous objects.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/AskJSONResponse" } },
+              "application/x-ndjson": { "schema": { "type": "string", "description": "One JSON-encoded AskStreamMsg per line." } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/search": {
+      "post": {
+        "summary": "Run ranked retrieval only — no chat model call",
+        "description": "Returns the ranked chunks R3 would use to answer a question, without generating an answer. Useful for a client doing its own synthesis, or for inspecting what R3 would retrieve.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/SearchRequest" } }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ranked hits, highest-scoring first.",
+            "content": {
+              "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/RankedHit" } } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/apikeys": {
+      "get": {
+        "summary": "List API keys (admin)",
+        "description": "Never returns plaintext keys or their hashes — see docs/API.md's \"Authentication\" section on the show-once pattern.",
+        "security": [{ "AdminSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Every issued key, active or revoked.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/APIKeyPublic" } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "post": {
+        "summary": "Create a new API key (admin)",
+        "description": "The plaintext key is returned exactly once, in this response — it is never shown or retrievable again.",
+        "security": [{ "AdminSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateAPIKeyRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The new key, including its plaintext value.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateAPIKeyResponse" } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/apikeys/revoke": {
+      "post": {
+        "summary": "Revoke an API key (admin)",
+        "description": "Disables the key (rather than deleting its record), so it stops authenticating immediately while its history remains visible in the list.",
+        "security": [{ "AdminSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RevokeAPIKeyRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Revoked successfully.",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyHeader": { "type": "apiKey", "in": "header", "name": "X-API-Key" },
+      "ApiKeyBearer": { "type": "http", "scheme": "bearer", "description": "Authorization: Bearer <key> — equivalent to X-API-Key." },
+      "AdminSession": { "type": "apiKey", "in": "cookie", "name": "r3_session", "description": "Issued by POST /api/auth/login when LDAP login is enabled. Not part of the external API's intended usage — see docs/API.md's \"Scope\" section." }
+    },
+    "responses": {
+      "BadRequest": { "description": "Malformed request.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Unauthorized": { "description": "Missing/invalid API key or session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "NotFound": { "description": "The referenced resource doesn't exist.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "MethodNotAllowed": { "description": "Wrong HTTP method.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "ServerError": { "description": "R3 itself failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "OpenAIBadRequest": { "description": "Malformed request.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OpenAIErrorResponse" } } } },
+      "OpenAIUnauthorized": { "description": "Missing/invalid API key — always required on this API, unlike /api/ask.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OpenAIErrorResponse" } } } },
+      "OpenAIServerError": { "description": "R3 itself failed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OpenAIErrorResponse" } } } }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } },
+        "required": ["error"]
+      },
+      "AskRequest": {
+        "type": "object",
+        "required": ["question"],
+        "properties": {
+          "question": { "type": "string" },
+          "k": { "type": "integer", "description": "Number of chunks to retrieve; defaults to settings.k." },
+          "profile": { "type": "string", "enum": ["local", "azure"], "description": "Overrides settings.chat_profile for this request." },
+          "format": { "type": "string", "enum": ["json"], "description": "Omit for the default NDJSON stream; \"json\" for a single buffered response." },
+          "history": {
+            "type": "array",
+            "description": "Prior turns of the same conversation, oldest first, so a follow-up question has context to resolve against. Capped server-side at 12 entries regardless of how many are sent. Omit entirely for a stand-alone question.",
+            "items": { "$ref": "#/components/schemas/AskHistoryTurn" }
+          }
+        }
+      },
+      "AskHistoryTurn": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": { "type": "string", "enum": ["user", "assistant"] },
+          "content": { "type": "string" }
+        }
+      },
+      "AskJSONResponse": {
+        "type": "object",
+        "properties": {
+          "answer": { "type": "string" },
+          "citations": { "type": "array", "items": { "$ref": "#/components/schemas/SourceInfo" } }
+        }
+      },
+      "AskStreamMsg": {
+        "type": "object",
+        "description": "One line of the default NDJSON stream.",
+        "properties": {
+          "type": { "type": "string", "enum": ["token", "done", "error"] },
+          "text": { "type": "string" },
+          "citations": { "type": "array", "items": { "$ref": "#/components/schemas/SourceInfo" } },
+          "error": { "type": "string" }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "k": { "type": "integer" }
+        }
+      },
+      "RankedHit": {
+        "type": "object",
+        "properties": {
+          "source_id": { "type": "string" },
+          "source_kind": { "type": "string" },
+          "source_name": { "type": "string" },
+          "load_id": { "type": "string" },
+          "loaded_at": { "type": "integer", "format": "int64", "description": "Unix seconds." },
+          "doc_date": { "type": "integer", "format": "int64", "description": "Unix seconds; 0 if unknown." },
+          "chunk_idx": { "type": "integer" },
+          "content": { "type": "string" },
+          "vector_score": { "type": "number" },
+          "keyword_score": { "type": "number" },
+          "recency_score": { "type": "number" },
+          "final_score": { "type": "number", "description": "The weighted blend used for ranking (see rank.go)." }
+        }
+      },
+      "SourceInfo": {
+        "type": "object",
+        "properties": {
+          "source_id": { "type": "string" },
+          "source_kind": { "type": "string" },
+          "source_name": { "type": "string" },
+          "load_id": { "type": "string" },
+          "loaded_at": { "type": "integer", "format": "int64" },
+          "doc_date": { "type": "integer", "format": "int64" },
+          "chunks": { "type": "integer" },
+          "source_url": { "type": "string" },
+          "marker": { "type": "integer", "description": "1-based citation number matching this source's inline [Qn] marker in the answer text. Only present on citations returned from /api/ask; omitted elsewhere." }
+        }
+      },
+      "APIKeyPublic": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "prefix": { "type": "string", "description": "First 8 hex characters of the key, for display only." },
+          "created_at": { "type": "integer", "format": "int64" },
+          "last_used_at": { "type": "integer", "format": "int64" },
+          "enabled": { "type": "boolean" }
+        }
+      },
+      "CreateAPIKeyRequest": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } }
+      },
+      "CreateAPIKeyResponse": {
+        "allOf": [
+          { "$ref": "#/components/schemas/APIKeyPublic" },
+          { "type": "object", "properties": { "key": { "type": "string", "description": "Plaintext key — shown only in this one response." } } }
+        ]
+      },
+      "RevokeAPIKeyRequest": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string" } }
+      },
+      "OpenAIChatMessage": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": { "type": "string", "enum": ["system", "developer", "user", "assistant"] },
+          "content": { "type": "string", "description": "Also accepts the OpenAI array-of-content-parts form (text parts only — image/audio/file parts are rejected); always returned as a plain string." }
+        }
+      },
+      "OpenAIChatCompletionRequest": {
+        "type": "object",
+        "required": ["messages"],
+        "properties": {
+          "model": { "type": "string", "description": "One of the ids from GET /v1/models. Ignored (fixed) if this endpoint pins openAIEndpointConfig.Profile." },
+          "messages": { "type": "array", "items": { "$ref": "#/components/schemas/OpenAIChatMessage" } },
+          "stream": { "type": "boolean", "description": "false (default): one buffered response. true: text/event-stream chunks." },
+          "n": { "type": "integer", "description": "Present for OpenAI wire-format compatibility; R3 always returns exactly one choice." }
+        }
+      },
+      "OpenAIChatChoice": {
+        "type": "object",
+        "properties": {
+          "index": { "type": "integer" },
+          "message": { "$ref": "#/components/schemas/OpenAIChatMessage" },
+          "finish_reason": { "type": "string" }
+        }
+      },
+      "OpenAIUsage": {
+        "type": "object",
+        "properties": {
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" }
+        },
+        "description": "A rune-based approximation (~4 characters/token), not an exact count from the actual backend tokenizer."
+      },
+      "OpenAIChatCompletionResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string" },
+          "created": { "type": "integer", "format": "int64" },
+          "model": { "type": "string" },
+          "choices": { "type": "array", "items": { "$ref": "#/components/schemas/OpenAIChatChoice" } },
+          "usage": { "$ref": "#/components/schemas/OpenAIUsage" }
+        }
+      },
+      "OpenAIModel": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string" },
+          "created": { "type": "integer", "format": "int64" },
+          "owned_by": { "type": "string" }
+        }
+      },
+      "OpenAIModelList": {
+        "type": "object",
+        "properties": {
+          "object": { "type": "string" },
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/OpenAIModel" } }
+        }
+      },
+      "OpenAIErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" },
+              "type": { "type": "string" },
+              "param": { "type": "string", "nullable": true },
+              "code": { "type": "string", "nullable": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}

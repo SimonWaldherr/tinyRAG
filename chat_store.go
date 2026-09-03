@@ -75,6 +75,26 @@ func (cs *chatStore) get(id string) *conversation {
 	return cs.chats[id]
 }
 
+// historyBeforeLast returns a stable copy of a conversation's preceding
+// messages. It is useful for retrieval preparation after the current user
+// message has already been persisted.
+func (cs *chatStore) historyBeforeLast(id string, limit int) []chatMessage {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	c, ok := cs.chats[id]
+	if !ok || len(c.Messages) < 2 {
+		return nil
+	}
+	end := len(c.Messages) - 1
+	start := 0
+	if limit > 0 && end-start > limit {
+		start = end - limit
+	}
+	history := make([]chatMessage, end-start)
+	copy(history, c.Messages[start:end])
+	return history
+}
+
 // addMessage appends a message to the conversation and persists the store.
 func (cs *chatStore) addMessage(id, role, content string) {
 	cs.mu.Lock()

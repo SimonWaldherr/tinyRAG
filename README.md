@@ -21,13 +21,14 @@ A lightweight Retrieval-Augmented Generation (RAG) system with a modern web inte
 - **OpenAI-Compatible API**: Works with any OpenAI-compatible LLM backend (LM Studio, Ollama, etc.)
 - **Custom APIs**: Add external API integrations
 - **Personas**: Configure different conversation styles with pre-prompts
+- **Persistent Agent Memory**: Save explicit preferences and stable context for future chats; entries are opt-in and never inferred from transcripts
 - **Themes**: Multiple built-in themes (Dark, Light, Nord, Solarized, Monokai, Dracula)
 - **Code Execution**: Optional support for nanoGo (interpreted Go) execution
 - **Embedded Frontend**: No separate build required - all assets embedded in the binary
 
 ## Requirements
 
-- Go 1.25.5 or later
+- Go 1.26.5 or later
 - An OpenAI-compatible LLM backend (e.g., [LM Studio](https://lmstudio.ai/), [Ollama](https://ollama.ai/))
 
 ## Installation
@@ -72,6 +73,7 @@ Options:
 - `-addr`: Server address (default: :8080)
 - `-db`: Database file path (default: tinyrag.gob)
 - `-url`: LLM API base URL (default: http://localhost:1234)
+- `-inference-api`: inference wire protocol (`auto`, `openai`, or `ollama`)
 - `-chat`: Chat model name
 - `-embed`: Embedding model name
 - `-lang`: Language code (default: de)
@@ -85,7 +87,7 @@ The application stores its configuration in `settings.json`. You can modify this
 Example configuration:
 ```json
 {
-  "version": 2,
+  "version": 3,
   "base_url": "http://localhost:1234",
   "chat_model": "mistralai/ministral-3-14b-reasoning",
   "embed_model": "text-embedding-nomic-embed-text-v1.5",
@@ -101,14 +103,28 @@ Example configuration:
       "prompt": ""
     }
   ],
+  "agent_memory_enabled": false,
+  "agent_memory": [],
   "allow_code_exec": false,
   "allow_nanogo": false
 }
 ```
 
-### tinySQL v0.19.1 features
+### Persistent agent memory
 
-tinyRAG uses tinySQL v0.19.1. The settings panel exposes the following
+Under **Settings → Memory**, users can save up to 32 explicit, short pieces
+of durable context, such as language preferences, project conventions, or a
+default timezone. Memory is disabled by default and is only included in future
+answers after it has been enabled.
+
+tinyRAG never creates memory entries from conversations, model output, or tool
+results. Entries can be added, removed, or disabled in the UI; the protected
+API offers the same operations through `GET`/`POST /api/memory` and
+`POST /api/memory/delete`.
+
+### tinySQL v0.49.0 features
+
+tinyRAG uses tinySQL v0.49.0. The settings panel exposes the following
 optional database features:
 
 - **Native vector retrieval** uses `VEC_SEARCH` for faster candidate lookup.
@@ -120,6 +136,9 @@ optional database features:
   `tinysql_vector_cache_entries` to `0` to disable it.
 - **Vector analytics** records only query shape and timing. Administrators can
   inspect cache and analytics state at `GET /api/debug/vector-cache`.
+- **Portable snapshots** are available to administrators at
+  `GET /api/debug/database-snapshot`. They are consistent tinySQL GOB exports
+  and work independently of the selected storage backend.
 - **Tamper-evident audit logging** writes a hash-chained JSONL audit trail.
   It can be enabled with `tinysql_audit_enabled`; changing it requires a
   restart.
@@ -132,10 +151,17 @@ optional database features:
 See [docs/tinysql-optional-features.md](docs/tinysql-optional-features.md) for
 operational details and constraints.
 
+The universal retrieval design and its staged relation-aware roadmap are in
+[docs/retrieval-architecture.md](docs/retrieval-architecture.md).
+
+Configured REST, JSON-RPC 2.0, and SQL capabilities are documented in
+[docs/connectors.md](docs/connectors.md). Agent execution admits only the
+explicitly read-only subset of those capabilities.
+
 ### Setting up LLM Backend
 
 tinyRAG talks to any OpenAI-compatible chat/embeddings endpoint, local or
-cloud. The **provider switcher** in the top toolbar lists common presets
+cloud, and can also use the native Ollama `/api` protocol. The **provider switcher** in the top toolbar lists common presets
 (grouped Local / Cloud) and pre-fills the default base URL for each; picking
 one probes the endpoint, lists available models, and lets you apply a chat
 model in a couple of clicks. "Custom..." opens Settings for anything not in
@@ -151,6 +177,8 @@ the list — any OpenAI-compatible server works even if it isn't listed.
 | KoboldCpp | Local | `http://localhost:5001` |
 | Jan | Local | `http://localhost:1337` |
 | LocalAI | Local | `http://localhost:8080` |
+| GopherLLM | Local | `http://localhost:8091` (embedded demo default) |
+| RustyLLM | Local | `http://localhost:8091` (change if your server differs) |
 | OpenAI | Cloud | `https://api.openai.com` |
 | Anthropic | Cloud | `https://api.anthropic.com` |
 | Google Gemini | Cloud | `https://generativelanguage.googleapis.com` |
@@ -230,6 +258,7 @@ Access the web interface at `http://localhost:8080` (or your configured address)
 - **LLM Backend**: Configure API endpoint and models
 - **Custom APIs**: Add external API integrations
 - **Personas**: Create conversation personas with custom prompts
+- **Memory**: Explicitly save, review, enable, and delete durable assistant context
 
 ## Development
 
@@ -287,6 +316,7 @@ The project follows standard Go conventions:
 - Efficient in-memory vector operations
 - Native tinySQL `VEC_SEARCH` with optional bounded result caching and
   privacy-preserving query analytics
+- Portable database snapshots for backend-independent administrative backups
 - Metadata-aware R³ ranking with trust, quality, freshness, feedback, and sensitivity penalties
 
 ### R³ Governance
@@ -306,10 +336,13 @@ See:
 - [`docs/import-adapters.md`](docs/import-adapters.md)
 - [`docs/request-lifecycle.md`](docs/request-lifecycle.md)
 - [`docs/xml-tool-protocol.md`](docs/xml-tool-protocol.md)
+- [`docs/agentic-tool-use.md`](docs/agentic-tool-use.md)
 
 ### LLM Integration
 
-- OpenAI-compatible API client
+- Protocol-aware inference client (`auto`, OpenAI-compatible `/v1`, or native Ollama `/api`)
+- OpenAI-compatible inference servers, including GopherLLM, RustyLLM, llama.cpp, LM Studio, vLLM and gateways
+- Native Ollama model discovery, chat streaming, batched embeddings and legacy embedding fallback
 - Streaming responses
 - Support for custom system prompts (personas)
 - Context injection from retrieved chunks

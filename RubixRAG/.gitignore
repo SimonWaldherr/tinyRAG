@@ -1,0 +1,46 @@
+/R3
+/R3.exe
+/bin/
+/upload/
+*.gob
+settings.json
+# Runtime settings of the r3-verify/r3-verify2 preview servers
+# (.claude/launch.json) — auto-generated on first start, same category of
+# local, never-committed state as settings.json above.
+verify*-settings.json
+# Same category: a tinysql-backed verify launch config's storage directory
+# (e.g. verify-tinysql-data/, see .claude/launch.json's r3-verify-tinysql) —
+# auto-generated on first start, never committed.
+verify*-data/
+# Feedback log (feedback.go) — runtime data next to settings.json, same
+# category as settings.json/r3-data above, never committed.
+r3-feedback.jsonl
+*.pst
+/r3-data/
+/r3-originals/
+*.db
+/docs/*
+!/docs/openapi.json
+/external/zndz
+/external/ldaps
+/external/sendmail_test
+/external/tickets
+*.db-shm
+*.db-wal
+*.gz
+/r3-data-preview/default
+r3-data-preview/manifest.json
+certs/ldap_ca_chain.pem
+/external/promptcron
+r3-settings-history.jsonl
+r3-scheduler-history.jsonl
+r3-scheduler-alerts.json
+r3-source-acl.json
+r3-audit.jsonl
+*.tbl
+# session.go's persisted HMAC signing secret — a standing credential
+# (anyone holding it can forge sessions), same "never committed" category
+# as settings.json's credential fields. Session store itself is *.gob above.
+r3-session-secret.bin
+uicheck-uploadbox-settings.json
+uicheck-placeholder-settings.json

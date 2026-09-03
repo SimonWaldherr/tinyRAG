@@ -16,12 +16,16 @@ import (
 // appSettings holds persisted configuration for the application,
 // including model settings, chunking options, custom APIs and personas.
 type appSettings struct {
-	Version    int    `json:"version"`
-	BaseURL    string `json:"base_url"`    // without trailing /v1
-	ChatBase   string `json:"chat_base"`   // optional per-model base URL (overrides BaseURL for chat)
-	EmbedBase  string `json:"embed_base"`  // optional per-model base URL (overrides BaseURL for embeddings)
-	ChatModel  string `json:"chat_model"`  // OpenAI compatible model ID
-	EmbedModel string `json:"embed_model"` // OpenAI compatible model ID
+	Version int    `json:"version"`
+	BaseURL string `json:"base_url"` // without trailing /v1
+	// InferenceAPI selects the wire protocol: auto, openai (OpenAI-compatible)
+	// or ollama (native Ollama API).  Auto keeps existing configurations
+	// portable and probes the endpoint when needed.
+	InferenceAPI string `json:"inference_api"`
+	ChatBase     string `json:"chat_base"`   // optional per-model base URL (overrides BaseURL for chat)
+	EmbedBase    string `json:"embed_base"`  // optional per-model base URL (overrides BaseURL for embeddings)
+	ChatModel    string `json:"chat_model"`  // OpenAI compatible model ID
+	EmbedModel   string `json:"embed_model"` // OpenAI compatible model ID
 	// OpenAIKey stores an OpenAI API key if the user set one in the UI.
 	// This is persisted to settings.json. It will not be returned verbatim
 	// over the HTTP API; only presence is exposed to the frontend.
@@ -67,7 +71,7 @@ type appSettings struct {
 	TinySQLAuditPath         string `json:"tinysql_audit_path"`
 	StorageEncryptionEnabled bool   `json:"storage_encryption_enabled"`
 	GeoImportEnabled         bool   `json:"geo_import_enabled"`
-	// Vector-cache controls for tinySQL v0.19.1. Zero cache entries disables it.
+	// Vector-cache controls for tinySQL v0.49.0. Zero cache entries disables it.
 	TinySQLVectorCacheEntries    int  `json:"tinysql_vector_cache_entries"`
 	TinySQLVectorCacheTTLSeconds int  `json:"tinysql_vector_cache_ttl_seconds"`
 	TinySQLVectorAnalytics       bool `json:"tinysql_vector_analytics"`
@@ -77,6 +81,10 @@ type appSettings struct {
 	AgentPlannerEnabled bool `json:"agent_planner_enabled"`
 	// AgentMaxPlanSteps caps the number of planned tool steps (default 3, max 5).
 	AgentMaxPlanSteps int `json:"agent_max_plan_steps"`
+	// AgentMemory is explicit, user-curated durable context. It is disabled by
+	// default and never populated from model output or chat transcripts.
+	AgentMemoryEnabled bool               `json:"agent_memory_enabled"`
+	AgentMemory        []agentMemoryEntry `json:"agent_memory"`
 
 	// ── Vector store backend ──────────────────────────────────────────────────
 	// VectorBackend selects the vector persistence backend.
@@ -285,7 +293,7 @@ func canRoleUseTool(role, tool string) bool {
 		return p.CanRunCode
 	case "wikipedia", "duckduckgo", "wiktionary", "stackoverflow", "websearch", "news", "wikidata", "github":
 		return p.CanWebFetch
-	case "local_search", "datetime", "calculate", "llm", "vector_query", "sql_query":
+	case "rag_knowledge", "local_search", "datetime", "calculate", "json_query", "text_diff", "regex_extract", "vector_query", "sql_query":
 		return true
 	default:
 		// Unknown tool IDs (e.g. custom APIs) are treated as external fetches.
@@ -400,8 +408,9 @@ func defaultPersonas() []persona {
 // used on first-run when no settings file exists.
 func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang string, chunkSize, k int) appSettings {
 	return appSettings{
-		Version:                      2,
+		Version:                      3,
 		BaseURL:                      normalizeBaseURL(urlFlag),
+		InferenceAPI:                 inferenceAPIAuto,
 		ChatBase:                     normalizeBaseURL(urlFlag),
 		EmbedBase:                    normalizeBaseURL(urlFlag),
 		ChatModel:                    chatModelFlag,
@@ -437,6 +446,8 @@ func defaultSettingsFromFlags(urlFlag, chatModelFlag, embedModelFlag, lang strin
 		TinySQLVectorCacheEntries:    128,
 		TinySQLVectorCacheTTLSeconds: 30,
 		TinySQLVectorAnalytics:       true,
+		AgentMemoryEnabled:           false,
+		AgentMemory:                  []agentMemoryEntry{},
 	}
 }
 
@@ -462,6 +473,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 			// persists empty/un-normalized values for these fields.
 			ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
 			ss.s.RetrievalMode = normalizeRetrievalMode(ss.s.RetrievalMode)
+			ss.s.InferenceAPI = normalizeInferenceAPI(ss.s.InferenceAPI)
 			ss.s.Density = normalizeDensity(ss.s.Density)
 			ss.s.UI = normalizeUIConfig(ss.s.UI)
 			if err := ss.saveLocked(); err != nil {
@@ -478,7 +490,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	if ss.s.Version == 0 {
 		ss.s.Version = 1
 	}
-	// v2 adds tinySQL v0.19.1 vector-cache controls. Existing settings cannot
+	// v2 adds tinySQL vector-cache controls. Existing settings cannot
 	// have opted out before this version, so migrate them to the bounded default.
 	if ss.s.Version < 2 {
 		ss.s.TinySQLVectorCacheEntries = defaults.TinySQLVectorCacheEntries
@@ -486,12 +498,20 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 		ss.s.TinySQLVectorAnalytics = defaults.TinySQLVectorAnalytics
 		ss.s.Version = 2
 	}
+	// v3 adds explicit persistent agent memory. Existing installations start
+	// disabled and with an empty list; no historical conversations are mined.
+	if ss.s.Version < 3 {
+		ss.s.AgentMemoryEnabled = false
+		ss.s.AgentMemory = []agentMemoryEntry{}
+		ss.s.Version = 3
+	}
 	if ss.s.Lang == "" {
 		ss.s.Lang = defaults.Lang
 	}
 	ss.s.ActiveRole = normalizeDemoRole(ss.s.ActiveRole)
 	ss.s.UsageProfile = normalizeUsageProfile(ss.s.UsageProfile)
 	ss.s.ResponseLanguageMode = normalizeResponseLanguageMode(ss.s.ResponseLanguageMode)
+	ss.s.InferenceAPI = normalizeInferenceAPI(ss.s.InferenceAPI)
 	ss.s.RerankMode = normalizeRerankMode(ss.s.RerankMode)
 	ss.s.RetrievalMode = normalizeRetrievalMode(ss.s.RetrievalMode)
 	if ss.s.TinySQLVectorCacheEntries < 0 {
@@ -515,6 +535,7 @@ func loadOrCreateSettings(path string, defaults appSettings) (*settingsStore, er
 	if ss.s.AgentMaxPlanSteps > 5 {
 		ss.s.AgentMaxPlanSteps = 5
 	}
+	ss.s.AgentMemory = normalizeAgentMemory(ss.s.AgentMemory)
 	if ss.s.ChunkSize <= 0 {
 		ss.s.ChunkSize = defaults.ChunkSize
 	}

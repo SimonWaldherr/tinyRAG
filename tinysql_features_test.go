@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"strings"
@@ -34,15 +35,40 @@ func TestTinySQLAuditFeature(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeAudit()
-	stmt, err := tinysql.ParseSQL("SELECT 1")
+	if _, err := tinysql.ExecSQL(tinysql.WithAuditText(context.Background(), "SELECT 1"), rag.db, "default", "SELECT 1"); err != nil {
+		t.Fatal(err)
+	}
+	entries := rag.db.AuditLog().Entries()
+	if got := len(entries); got != 1 {
+		t.Fatalf("audit entries = %d, want 1", got)
+	}
+	if entries[0].Statement != "SELECT 1" {
+		t.Fatalf("audit statement = %q, want original SQL", entries[0].Statement)
+	}
+}
+
+func TestTinySQLPortableSnapshot(t *testing.T) {
+	db := tinysql.NewDB()
+	if _, err := tinysql.ExecSQL(context.Background(), db, "default", "CREATE TABLE snapshots (id INT, title TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tinysql.ExecSQL(context.Background(), db, "default", "INSERT INTO snapshots VALUES (1, 'portable')"); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot bytes.Buffer
+	if err := tinysql.SaveToWriter(db, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := tinysql.LoadFromReader(bytes.NewReader(snapshot.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tinysql.Execute(context.Background(), rag.db, "default", stmt); err != nil {
-		t.Fatal(err)
+	rs, err := tinysql.ExecSQL(context.Background(), restored, "default", "SELECT title FROM snapshots")
+	if err != nil || len(rs.Rows) != 1 {
+		t.Fatalf("restored snapshot query = %#v, %v", rs, err)
 	}
-	if got := len(rag.db.AuditLog().Entries()); got != 1 {
-		t.Fatalf("audit entries = %d, want 1", got)
+	if title, _ := tinysql.GetVal(rs.Rows[0], "title"); title != "portable" {
+		t.Fatalf("restored title = %#v", title)
 	}
 }
 
@@ -55,7 +81,7 @@ func TestTinySQLVectorCacheConfiguration(t *testing.T) {
 	t.Cleanup(func() { tinysql.ConfigureVectorCache(tinysql.DefaultVectorCacheConfig()) })
 	stats := tinysql.VectorCacheAnalytics()
 	if !stats.Enabled {
-		t.Fatal("expected v0.19.1 VEC_SEARCH result cache to be enabled")
+		t.Fatal("expected v0.49.0 VEC_SEARCH result cache to be enabled")
 	}
 }
 

@@ -64,15 +64,19 @@ type RequestTelemetry struct {
 
 // ToolInvocationRecord captures one tool call's lifecycle.
 type ToolInvocationRecord struct {
-	ID           string    `json:"id"`
-	Tool         string    `json:"tool"`
-	Query        string    `json:"query"`
-	StartTime    time.Time `json:"start_time"`
-	EndTime      time.Time `json:"end_time"`
-	DurationMS   int64     `json:"duration_ms"`
-	ResultBytes  int       `json:"result_bytes"`
-	Error        string    `json:"error,omitempty"`
-	Deduplicated bool      `json:"deduplicated,omitempty"`
+	ID                string    `json:"id"`
+	Tool              string    `json:"tool"`
+	Query             string    `json:"query"`
+	Phase             string    `json:"phase,omitempty"`
+	StartTime         time.Time `json:"start_time"`
+	EndTime           time.Time `json:"end_time"`
+	DurationMS        int64     `json:"duration_ms"`
+	ResultBytes       int       `json:"result_bytes"`
+	ContentHash       string    `json:"content_hash,omitempty"`
+	EvidenceTruncated bool      `json:"evidence_truncated,omitempty"`
+	PolicyDecision    string    `json:"policy_decision,omitempty"`
+	Error             string    `json:"error,omitempty"`
+	Deduplicated      bool      `json:"deduplicated,omitempty"`
 }
 
 // newRequestTelemetry initializes a RequestTelemetry for a new request.

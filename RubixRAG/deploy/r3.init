@@ -1,0 +1,143 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          r3
+# Required-Start:    $network $local_fs $remote_fs
+# Required-Stop:     $network $local_fs $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: R3 (Rubix Ranked RAG)
+# Description:       Starts/stops the R3 RAG server as a background daemon.
+### END INIT INFO
+
+# Install as /etc/init.d/r3 (chmod +x), then:
+#   update-rc.d r3 defaults   # enable on boot
+#   service r3 {start|stop|restart|status}
+#
+# Reads its configuration from /etc/default/r3 (see deploy/r3.default in the
+# repo for the template + what each setting does) - nothing here should need
+# editing per-deployment; change /etc/default/r3 instead.
+
+NAME=r3
+DESC="R3 (Rubix Ranked RAG)"
+DEFAULTS=/etc/default/r3
+
+# Sensible fallbacks if /etc/default/r3 is missing (fresh install before
+# it's been copied into place) - matches R3's own CLI defaults.
+R3_DIR=/mnt/application/R3
+R3_BIN="$R3_DIR/R3"
+R3_SETTINGS="$R3_DIR/settings.json"
+R3_LOGFILE="$R3_DIR/r3.log"
+R3_PIDFILE=/var/run/r3.pid
+R3_ADDR=:8090
+R3_STORAGE_BACKEND=tinysql
+R3_STORAGE_PATH=r3-data
+R3_EXTRA_ARGS=""
+R3_VERBOSE=0
+R3_USER=root
+
+[ -r "$DEFAULTS" ] && . "$DEFAULTS"
+
+base_args="-addr $R3_ADDR -storage-backend $R3_STORAGE_BACKEND -storage-path $R3_STORAGE_PATH -settings $R3_SETTINGS $R3_EXTRA_ARGS"
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# do_start's optional $1 forces -verbose for this one start regardless of
+# R3_VERBOSE in /etc/default/r3 (used by `debug`) - it's not persisted, a
+# plain `start`/`restart` afterwards goes back to whatever R3_VERBOSE says.
+do_start() {
+    force_verbose="$1"
+    effective_verbose=0
+    [ "$R3_VERBOSE" = "1" ] && effective_verbose=1
+    [ "$force_verbose" = "1" ] && effective_verbose=1
+    command_args="$base_args"
+    if [ "$effective_verbose" = "1" ]; then
+        command_args="$command_args -verbose"
+    fi
+    if [ ! -x "$R3_BIN" ]; then
+        echo "$DESC: binary not found or not executable: $R3_BIN" >&2
+        return 1
+    fi
+    if start-stop-daemon --status --pidfile "$R3_PIDFILE" 2>/dev/null; then
+        echo "$DESC is already running."
+        return 0
+    fi
+    echo "Starting $DESC (verbose=$effective_verbose)..."
+    touch "$R3_LOGFILE" 2>/dev/null
+    chown "$R3_USER" "$R3_LOGFILE" 2>/dev/null
+    # start-stop-daemon itself doesn't redirect stdout/stderr - wrap in a
+    # shell so the log file actually captures R3's log output (it logs via
+    # the standard `log` package to stderr, no file logging of its own).
+    start-stop-daemon --start --background --make-pidfile --pidfile "$R3_PIDFILE" \
+        --chdir "$R3_DIR" --chuid "$R3_USER" \
+        --exec /bin/sh -- -c "exec \"$R3_BIN\" $command_args >>\"$R3_LOGFILE\" 2>&1"
+}
+
+do_stop() {
+    echo "Stopping $DESC..."
+    start-stop-daemon --stop --pidfile "$R3_PIDFILE" --retry TERM/30/KILL/5
+    rm -f "$R3_PIDFILE"
+}
+
+do_status() {
+    if start-stop-daemon --status --pidfile "$R3_PIDFILE" 2>/dev/null; then
+        echo "$DESC is running (pid $(cat "$R3_PIDFILE" 2>/dev/null))."
+        return 0
+    else
+        echo "$DESC is not running."
+        return 3
+    fi
+}
+
+# do_logs tails the current log file as-is - works whether R3_VERBOSE is on
+# or off, and regardless of whether the service is currently running (e.g.
+# to review what happened before a crash). -F (not -f) so it keeps
+# following across a stop/start (new process, same file, size may shrink).
+do_logs() {
+    if [ ! -e "$R3_LOGFILE" ]; then
+        echo "$DESC: no log file yet at $R3_LOGFILE (has it been started?)" >&2
+        return 1
+    fi
+    tail -n 200 -F "$R3_LOGFILE"
+}
+
+# do_debug is a one-off, non-persistent way to see verbose output right
+# now: stop if running, start with -verbose forced (R3_VERBOSE in
+# /etc/default/r3 is untouched, so a later plain `start`/`restart` reverts
+# to whatever it says), then attach to the log. Ctrl-C only stops the
+# tail, not the service - `stop` still stops R3 itself.
+do_debug() {
+    if start-stop-daemon --status --pidfile "$R3_PIDFILE" 2>/dev/null; then
+        do_stop
+        sleep 1
+    fi
+    do_start 1 || return 1
+    echo "Following $R3_LOGFILE - Ctrl-C stops watching, not the service ($NAME stays running verbosely; 'service $NAME restart' to go back to normal)."
+    do_logs
+}
+
+case "$1" in
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart|force-reload)
+        do_stop
+        sleep 1
+        do_start
+        ;;
+    status)
+        do_status
+        ;;
+    logs)
+        do_logs
+        ;;
+    debug)
+        do_debug
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|logs|debug}" >&2
+        exit 1
+        ;;
+esac

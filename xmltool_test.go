@@ -67,6 +67,27 @@ func TestParseXMLBlock_InputElement(t *testing.T) {
 	}
 }
 
+func TestParseXMLBlock_StructuredArguments(t *testing.T) {
+	block := `<tool name="customer_lookup"><arguments>{"customer_id":"42","include_history":true}</arguments></tool>`
+	call, ok := parseXMLBlock(block)
+	if !ok {
+		t.Fatal("expected successful structured-argument parse")
+	}
+	if got := call.Arguments["customer_id"]; got != "42" {
+		t.Fatalf("customer_id = %#v, want 42", got)
+	}
+	if got, ok := call.Arguments["include_history"].(bool); !ok || !got {
+		t.Fatalf("include_history = %#v, want true", call.Arguments["include_history"])
+	}
+}
+
+func TestParseXMLBlock_RejectsInvalidStructuredArguments(t *testing.T) {
+	block := `<tool name="customer_lookup"><arguments>{not-json}</arguments></tool>`
+	if _, ok := parseXMLBlock(block); ok {
+		t.Fatal("invalid structured arguments must be rejected")
+	}
+}
+
 func TestParseXMLBlock_EmptyName(t *testing.T) {
 	block := `<tool name=""><query>test</query></tool>`
 	_, ok := parseXMLBlock(block)
@@ -154,6 +175,36 @@ func TestFeed_PartialBlockNotTriggered(t *testing.T) {
 	}
 	if res2.Calls[0].Query != "hello" {
 		t.Errorf("expected query=hello, got %q", res2.Calls[0].Query)
+	}
+}
+
+func TestFeed_OversizedPartialBlockIsRejectedAndBounded(t *testing.T) {
+	p := &XMLParseState{}
+	input := `<tool name="websearch"><query>` + strings.Repeat("x", maxXMLToolBlockBytes)
+	res := p.Feed(input)
+	if len(res.Calls) != 0 || res.ParseErrors == 0 {
+		t.Fatalf("oversized incomplete block must be rejected, got %+v", res)
+	}
+	if len(p.buf) >= maxXMLToolBlockBytes {
+		t.Fatalf("parser retained an oversized block: %d bytes", len(p.buf))
+	}
+	if !strings.Contains(res.Visible, "Tool-Aufruf abgelehnt") {
+		t.Fatalf("expected visible rejection marker, got %q", truncate(res.Visible, 120))
+	}
+}
+
+func TestFeed_OversizedCompleteBlockIsRejectedAndBounded(t *testing.T) {
+	p := &XMLParseState{}
+	input := `<tool name="websearch"><query>` + strings.Repeat("x", maxXMLToolBlockBytes) + `</query></tool> after`
+	res := p.Feed(input)
+	if len(res.Calls) != 0 || res.ParseErrors == 0 {
+		t.Fatalf("oversized complete block must be rejected, got %+v", res)
+	}
+	if len(res.Visible) > maxXMLToolBlockBytes+128 {
+		t.Fatalf("oversized complete block leaked %d bytes into visible output", len(res.Visible))
+	}
+	if !strings.Contains(stripXMLToolCalls(res.Visible), "after") {
+		t.Fatalf("rejected block must not hide following answer text: %q", truncate(res.Visible, 120))
 	}
 }
 

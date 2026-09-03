@@ -25,6 +25,7 @@ tool type:
 | RAG / search    | `<query>`     | Free-text search term         |
 | URL fetch       | `<url>`       | Full HTTP/HTTPS URL           |
 | Code execution  | `<source>`    | Go source snippet             |
+| Typed connector | `<arguments>` | JSON object matching its schema |
 
 ### Examples
 
@@ -46,6 +47,9 @@ tool type:
 
 <!-- Wikipedia article -->
 <tool name="wikipedia"><query>Retrieval-augmented generation</query></tool>
+
+<!-- Connector with multiple typed fields -->
+<tool name="lookup_record"><arguments>{"record_id":"42","region":"eu"}</arguments></tool>
 ```
 
 ---
@@ -57,8 +61,8 @@ tool type:
 2. **Completion threshold** — execution starts only after `</tool>` is seen.
    Partial blocks are **never** executed.
 3. **Strict validation** — the block must have a non-empty `name` attribute
-   and a non-empty content element.  Invalid blocks are emitted as visible
-   text and logged; execution is skipped.
+   and either a non-empty scalar input or a non-empty JSON `arguments` object.
+   Invalid blocks are emitted as visible text and logged; execution is skipped.
 4. **No nested tool tags** — nested `<tool>` elements are not supported and
    result in a parse error.
 5. **No markdown wrapping** — the XML must not be wrapped in code fences or
@@ -77,10 +81,13 @@ tool type:
 | Max calls per round | `EngineConfig.MaxToolsPerRound` (default 3) |
 | Max continuation rounds | `EngineConfig.MaxContinuations` (default 3) |
 | Per-tool timeout | `EngineConfig.ToolTimeout` (default 30 s) |
-| SQL exposed to model | ❌ Never — only SELECT on `chunks` table |
+| XML block size | 16 KiB hard limit |
+| Scalar query size | 4,096 runes |
+| Structured arguments | 8 KiB |
+| SQL exposed to model | ❌ Never — raw database access is manual-only |
 | Generic HTTP tool | ❌ Not exposed — `url_fetch` returns plain text only |
-| Shell commands | Disabled unless `allow_shell_exec: true` |
-| nanoGo execution | Disabled unless `allow_nanogo: true` |
+| Code and shell | ❌ Not autonomous; explicit user action required |
+| Ingestion and mutating connectors | ❌ Not autonomous; explicit user action required |
 
 ---
 
@@ -99,7 +106,8 @@ function replaces `<tool>` blocks with:
 </div>
 ```
 
-The badge updates to `✓` (done) or `✗` (error) via the `tool_result` SSE event.
+The badge updates to `✓` (done), `✗` (error), or `⊘` (not auto-approved) via
+tool SSE events.
 
 ---
 
@@ -107,6 +115,7 @@ The badge updates to `✓` (done) or `✗` (error) via the `tool_result` SSE eve
 
 | Event        | Direction | Payload                                            |
 |--------------|-----------|-----------------------------------------------------|
-| `tool_start` | server→client | `{id, tool, query}` — tool execution started    |
-| `tool_result`| server→client | `{id, tool, query, source, error, result_bytes}` |
+| `tool_start` | server→client | `{id, tool, query, arguments?, phase}` — tool execution started |
+| `tool_result`| server→client | `{id, tool, query, arguments?, source, error, result_bytes, content_hash, evidence_truncated, phase}` |
+| `tool_skipped` | server→client | `{id, tool, query, arguments?, phase, reason, policy}` — call was denied or budgeted out |
 | `route`      | server→client | `{mode, reason, hints}` — routing decision (debug) |

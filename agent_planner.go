@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -26,13 +27,36 @@ import (
 
 // plannedStep is one tool call proposed by the planner.
 type plannedStep struct {
-	Tool   string `json:"tool"`
-	Query  string `json:"query"`
-	Reason string `json:"reason,omitempty"`
+	Tool      string         `json:"tool"`
+	Query     string         `json:"query,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+	Reason    string         `json:"reason,omitempty"`
 }
 
 // plannerTimeout bounds the planning LLM call.
-const plannerTimeout = 15 * time.Second
+const (
+	plannerTimeout          = 15 * time.Second
+	maxAgentPlannerSteps    = 5
+	maxPlannerReasonRunes   = 600
+	maxPlannerQuestionRunes = 4000
+	maxPlannerOutputBytes   = 16 * 1024
+)
+
+var errPlannerOutputTooLarge = errors.New("planner output exceeds configured limit")
+
+type boundedPlannerBuffer struct {
+	b   strings.Builder
+	max int
+}
+
+func (w *boundedPlannerBuffer) Write(p []byte) (int, error) {
+	if w.b.Len()+len(p) > w.max {
+		return 0, errPlannerOutputTooLarge
+	}
+	return w.b.Write(p)
+}
+
+func (w *boundedPlannerBuffer) String() string { return w.b.String() }
 
 // buildPlannerPrompt renders the planning instruction for the LLM.
 func buildPlannerPrompt(question string, tools []toolDef, maxSteps int) string {
@@ -41,13 +65,17 @@ func buildPlannerPrompt(question string, tools []toolDef, maxSteps int) string {
 	sb.WriteString("Verfügbare Tools:\n")
 	for _, t := range tools {
 		fmt.Fprintf(&sb, "- %s: %s (Parameter: %s)\n", t.Name, t.Description, t.ParamHint)
+		if t.InputSchema != nil && len(t.InputSchema.Required) > 1 {
+			fmt.Fprintf(&sb, "  Strukturierte Pflichtfelder: %s\n", strings.Join(t.InputSchema.Required, ", "))
+		}
 	}
 	fmt.Fprintf(&sb, "\nRegeln:\n")
 	fmt.Fprintf(&sb, "- Maximal %d Schritte.\n", maxSteps)
 	sb.WriteString("- Nur Tools einplanen, die wirklich nötig sind. Für einfache Fragen: leeres Array.\n")
-	sb.WriteString("- Jeder Schritt braucht ein konkretes, eigenständiges Query.\n")
-	sb.WriteString("- Antworte NUR mit einem JSON-Array der Form [{\"tool\":\"name\",\"query\":\"...\",\"reason\":\"...\"}] ohne weiteren Text.\n\n")
-	sb.WriteString("Frage: " + strings.TrimSpace(question) + "\n")
+	sb.WriteString("- Jeder Schritt braucht ein konkretes, eigenständiges Query oder ein strukturiertes `arguments`-Objekt.\n")
+	sb.WriteString("- Nutze `arguments` für Tools mit mehreren Pflichtfeldern; erfinde keine Felder.\n")
+	sb.WriteString("- Antworte NUR mit einem JSON-Array der Form [{\"tool\":\"name\",\"query\":\"...\",\"arguments\":{...},\"reason\":\"...\"}] ohne weiteren Text.\n\n")
+	sb.WriteString("Frage: " + truncate(strings.TrimSpace(question), maxPlannerQuestionRunes) + "\n")
 	return sb.String()
 }
 
@@ -57,11 +85,12 @@ func planToolSteps(ctx context.Context, lm lmProvider, question string, tools []
 	if lm == nil || len(tools) == 0 || maxSteps <= 0 {
 		return nil, nil
 	}
+	maxSteps = boundedAgentPlannerSteps(maxSteps)
 	tctx, cancel := context.WithTimeout(ctx, plannerTimeout)
 	defer cancel()
-	var out strings.Builder
+	out := &boundedPlannerBuffer{max: maxPlannerOutputBytes}
 	err := lm.chatStream(tctx, "Du bist ein präzises Planungsmodul. Antworte ausschließlich mit JSON.",
-		[]chatMsg{{Role: "user", Content: buildPlannerPrompt(question, tools, maxSteps)}}, &out)
+		[]chatMsg{{Role: "user", Content: buildPlannerPrompt(question, tools, maxSteps)}}, out)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +100,10 @@ func planToolSteps(ctx context.Context, lm lmProvider, question string, tools []
 // parsePlannedSteps extracts and validates the JSON plan from raw LLM output.
 // Unknown tools and empty queries are dropped; the result is capped at maxSteps.
 func parsePlannedSteps(raw string, tools []toolDef, maxSteps int) ([]plannedStep, error) {
+	maxSteps = boundedAgentPlannerSteps(maxSteps)
+	if maxSteps <= 0 {
+		return nil, nil
+	}
 	jsonStr, err := extractFirstJSONValue(raw)
 	if err != nil {
 		return nil, fmt.Errorf("planner parse: %w", err)
@@ -79,17 +112,34 @@ func parsePlannedSteps(raw string, tools []toolDef, maxSteps int) ([]plannedStep
 	if err := json.Unmarshal([]byte(jsonStr), &steps); err != nil {
 		return nil, fmt.Errorf("planner unmarshal: %w", err)
 	}
-	known := make(map[string]bool, len(tools))
+	known := make(map[string]string, len(tools))
 	for _, t := range tools {
-		known[strings.ToLower(t.Name)] = true
+		known[strings.ToLower(strings.TrimSpace(t.Name))] = t.Name
 	}
 	valid := make([]plannedStep, 0, len(steps))
+	seen := make(map[string]bool, len(steps))
 	for _, s := range steps {
-		s.Tool = strings.ToLower(strings.TrimSpace(s.Tool))
+		canonicalName, knownTool := known[strings.ToLower(strings.TrimSpace(s.Tool))]
+		s.Tool = canonicalName
 		s.Query = strings.TrimSpace(s.Query)
-		if s.Tool == "" || s.Query == "" || !known[s.Tool] {
+		s.Reason = truncate(strings.TrimSpace(s.Reason), maxPlannerReasonRunes)
+		if len([]rune(s.Query)) > maxXMLToolQueryRunes {
 			continue
 		}
+		if len(s.Arguments) > 0 {
+			encoded, err := json.Marshal(s.Arguments)
+			if err != nil || len(encoded) > maxXMLToolArgumentLen {
+				continue
+			}
+		}
+		if !knownTool || s.Tool == "" || (s.Query == "" && len(s.Arguments) == 0) {
+			continue
+		}
+		key := canonicalToolCallKey(XMLToolCall{Name: s.Tool, Query: s.Query, Arguments: s.Arguments})
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		valid = append(valid, s)
 		if len(valid) >= maxSteps {
 			break
@@ -98,20 +148,20 @@ func parsePlannedSteps(raw string, tools []toolDef, maxSteps int) ([]plannedStep
 	return valid, nil
 }
 
+func boundedAgentPlannerSteps(steps int) int {
+	if steps <= 0 {
+		return 0
+	}
+	if steps > maxAgentPlannerSteps {
+		return maxAgentPlannerSteps
+	}
+	return steps
+}
+
 // availableToolsForPlanning collects the tool definitions visible to the
 // current role, mirroring what /api/ask exposes to the answering LLM.
-func (e *StreamingEngine) availableToolsForPlanning(s appSettings) []toolDef {
-	all := builtinTools
-	if e.customAPIs != nil {
-		all = e.customAPIs.allTools()
-	}
-	if e.modules != nil {
-		all = append(all, e.modules.enabledTools()...)
-	}
-	if e.connectors != nil {
-		all = append(all, e.connectors.enabledToolDefs()...)
-	}
-	return filterToolsForRole(all, s.ActiveRole)
+func (e *StreamingEngine) availableToolsForPlanning(s appSettings, autoSearch bool) []toolDef {
+	return e.autonomousToolDefs(s, autoSearch)
 }
 
 // runPlannerPhase plans and executes upfront tools. It returns an optional
@@ -131,7 +181,17 @@ func (e *StreamingEngine) runPlannerPhase(
 	if maxSteps <= 0 {
 		maxSteps = 3
 	}
-	tools := e.availableToolsForPlanning(s)
+	maxSteps = boundedAgentPlannerSteps(maxSteps)
+	if e.cfg.MaxToolsPerRound > 0 && maxSteps > e.cfg.MaxToolsPerRound {
+		maxSteps = e.cfg.MaxToolsPerRound
+	}
+	if remaining := e.cfg.MaxToolsTotal - *totalTools; remaining < maxSteps {
+		maxSteps = remaining
+	}
+	if maxSteps <= 0 {
+		return chatMsg{}, false
+	}
+	tools := e.availableToolsForPlanning(s, req.AutoSearch)
 	steps, err := planToolSteps(ctx, e.lm, req.Question, tools, maxSteps)
 	if err != nil {
 		log.Printf("ENGINE[%s] planner failed, continuing without plan: %v", req.RequestID, err)
@@ -156,25 +216,30 @@ func (e *StreamingEngine) runPlannerPhase(
 			log.Printf("ENGINE[%s] planner: tool cap reached, dropping remaining steps", req.RequestID)
 			break
 		}
-		if !e.toolAllowed(s, step.Tool, true) {
-			log.Printf("ENGINE[%s] planner: tool not allowed: %s", req.RequestID, step.Tool)
+		call := XMLToolCall{ID: fmt.Sprintf("plan-%d", i), Name: step.Tool, Query: step.Query, Arguments: step.Arguments, Reason: step.Reason}
+		var decision toolPolicyDecision
+		call, decision = e.admitToolCall(s, call, req.AutoSearch)
+		if !decision.Allowed {
+			log.Printf("ENGINE[%s] planner: tool not allowed: %s (%s)", req.RequestID, step.Tool, decision.Reason)
+			e.recordToolSkip(sw, tel, call, "plan", decision)
 			continue
 		}
-		key := toolDedupKey(step.Tool, step.Query)
+		key := canonicalToolCallKey(call)
 		if seen[key] {
+			e.recordToolSkip(sw, tel, call, "plan", denyTool("deny", "duplicate_call", decision.Risk))
 			continue
 		}
 		seen[key] = true
-		*totalTools++
+		(*totalTools)++
 
-		call := XMLToolCall{ID: fmt.Sprintf("plan-%d", i), Name: step.Tool, Query: step.Query}
-		startPayload, _ := json.Marshal(map[string]string{
-			"id": call.ID, "tool": call.Name, "query": call.Query, "phase": "plan",
+		startPayload, _ := json.Marshal(map[string]any{
+			"id": call.ID, "tool": call.Name, "query": call.Query,
+			"arguments": call.Arguments, "phase": "plan",
 		})
 		sw.event("tool_start", string(startPayload))
 
 		ch := make(chan ToolResult, 1)
-		go e.execTool(ctx, call, s, ch)
+		go e.execTool(ctx, call, s, "plan", ch)
 		pendings = append(pendings, pending{call: call, res: ch})
 	}
 	if len(pendings) == 0 {
@@ -183,43 +248,20 @@ func (e *StreamingEngine) runPlannerPhase(
 
 	results := make([]ToolResult, 0, len(pendings))
 	for _, p := range pendings {
-		res := <-p.res
-		results = append(results, res)
+		results = append(results, <-p.res)
+	}
 
-		rec := ToolInvocationRecord{
-			ID:         p.call.ID,
-			Tool:       p.call.Name,
-			Query:      p.call.Query,
-			StartTime:  res.StartedAt,
-			EndTime:    res.StartedAt.Add(res.Duration),
-			DurationMS: res.Duration.Milliseconds(),
-		}
-		if res.Error != nil {
-			rec.Error = res.Error.Error()
-		} else {
-			rec.ResultBytes = len(res.Text)
-		}
-		tel.recordTool(rec)
-
+	evidence := buildToolEvidenceMessage(results, "plan")
+	for i, res := range results {
+		results[i].EvidenceTruncated = evidence.TruncatedCallIDs[res.Call.ID]
+		tel.recordTool(toolInvocationRecordFromResult(results[i]))
 		payload, _ := json.Marshal(map[string]any{
-			"id": p.call.ID, "tool": p.call.Name, "query": p.call.Query,
-			"source": res.Source, "error": errStr(res.Error),
-			"result_bytes": len(res.Text), "phase": "plan",
+			"id": res.Call.ID, "tool": res.Call.Name, "query": res.Call.Query,
+			"arguments": res.Call.Arguments, "source": res.Source, "error": errStr(res.Error),
+			"result_bytes": len(res.Text), "content_hash": res.ContentHash,
+			"evidence_truncated": results[i].EvidenceTruncated, "phase": res.Phase,
 		})
 		sw.event("tool_result", string(payload))
 	}
-
-	var sb strings.Builder
-	sb.WriteString("Vorab geplante Tools wurden bereits ausgeführt. Nutze die Ergebnisse für deine Antwort.\n\n")
-	for _, r := range results {
-		fmt.Fprintf(&sb, "### Tool: %s\nQuery: %s\n", r.Call.Name, r.Call.Query)
-		if r.Error != nil {
-			fmt.Fprintf(&sb, "Fehler: %s\nHinweis: Sage offen, dass dieses Tool fehlgeschlagen ist. Erfinde keine Daten.\n", r.Error.Error())
-		} else {
-			fmt.Fprintf(&sb, "Ergebnis (%d Zeichen):\n%s\n", len(r.Text), r.Text)
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("Beantworte jetzt die ursprüngliche Frage vollständig. Emittiere nur dann neue <tool>-Blöcke, wenn wichtige Informationen fehlen.\n")
-	return chatMsg{Role: "user", Content: sb.String()}, true
+	return chatMsg{Role: "user", Content: evidence.Content}, true
 }

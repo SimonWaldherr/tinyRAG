@@ -25,6 +25,17 @@ func TestParsePlannedStepsValid(t *testing.T) {
 	}
 }
 
+func TestParsePlannedStepsStructuredArguments(t *testing.T) {
+	tools := []toolDef{{Name: "lookup", InputSchema: &JSONSchema{Type: "object", Required: []string{"id", "region"}}}}
+	steps, err := parsePlannedSteps(`[{"tool":"lookup","arguments":{"id":"42","region":"eu"},"reason":"record"}]`, tools, 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(steps) != 1 || steps[0].Arguments["id"] != "42" || steps[0].Query != "" {
+		t.Fatalf("unexpected structured plan: %+v", steps)
+	}
+}
+
 func TestParsePlannedStepsFiltersUnknownAndCaps(t *testing.T) {
 	raw := `[{"tool":"hackertool","query":"x"},{"tool":"wikipedia","query":"A"},{"tool":"wikipedia","query":"B"},{"tool":"calculate","query":"C"}]`
 	steps, err := parsePlannedSteps(raw, plannerTools(), 2)
@@ -65,6 +76,20 @@ func TestPlanToolStepsViaMockLM(t *testing.T) {
 	}
 	if len(steps) != 1 || steps[0].Tool != "calculate" {
 		t.Fatalf("unexpected steps: %+v", steps)
+	}
+}
+
+func TestPlanToolStepsRejectsOversizedOutput(t *testing.T) {
+	lm := &mockLMProvider{response: strings.Repeat("x", maxPlannerOutputBytes+1)}
+	if _, err := planToolSteps(context.Background(), lm, "question", plannerTools(), 3); err == nil {
+		t.Fatal("planner output over the configured limit must fail closed")
+	}
+}
+
+func TestBuildPlannerPromptBoundsQuestion(t *testing.T) {
+	prompt := buildPlannerPrompt(strings.Repeat("q", maxPlannerQuestionRunes+100), plannerTools(), 3)
+	if len([]rune(prompt)) > maxPlannerQuestionRunes+1600 {
+		t.Fatalf("planner prompt retained an oversized question: %d runes", len([]rune(prompt)))
 	}
 }
 

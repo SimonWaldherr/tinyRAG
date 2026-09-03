@@ -1,0 +1,66 @@
+{{define "tab-users"}}
+    <section id="tab-users" class="panel" role="tabpanel" aria-labelledby="navtab-users">
+      <header class="page-head">
+        <h1 data-i18n="page.users.title">Benutzer</h1>
+        <p class="hint" data-i18n="page.users.hint">Lokale Benutzerkonten — eine Alternative und Ergänzung zur AD/LDAP-Anbindung (Einstellungen → LDAP), z.B. für externe Partner oder Testkonten ohne AD-Konto. Muss unter Einstellungen → „Lokale Anmeldung" aktiviert sein, damit sich diese Konten tatsächlich anmelden können.</p>
+        <button id="usersReload" class="ghost-btn">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M16 10a6 6 0 11-1.76-4.24M16 3v3.5h-3.5"/>
+          </svg>
+          <span data-i18n="users.reload">Aktualisieren</span>
+        </button>
+      </header>
+
+      <div class="card">
+        <h2 id="userFormHeading" data-i18n="users.form.createTitle">Neuen Benutzer anlegen</h2>
+        <form id="userForm" class="settings-grid">
+          <input type="hidden" id="u_id" value="">
+          <label>
+            <span data-i18n="users.form.username">Benutzername</span>
+            <input type="text" id="u_username" required autocomplete="off">
+          </label>
+          <label id="u_passwordLabel">
+            <span data-i18n="users.form.password">Passwort</span>
+            <input type="password" id="u_password" autocomplete="new-password">
+          </label>
+          <label>
+            <span data-i18n="users.form.displayName">Anzeigename</span>
+            <input type="text" id="u_displayName" autocomplete="off">
+          </label>
+          <label>
+            <span data-i18n="users.form.email">E-Mail</span>
+            <input type="email" id="u_email" autocomplete="off">
+          </label>
+          <label>
+            <span data-i18n="users.form.department">Abteilung</span>
+            <input type="text" id="u_department" autocomplete="off">
+          </label>
+          <label>
+            <span data-i18n="users.form.deptCode">Abteilungs-Code</span>
+            <input type="text" id="u_deptCode" title="Leer lassen, um den Code automatisch aus der Abteilung abzuleiten (department_rules.json)." data-i18n-title="users.form.deptCode.title" autocomplete="off">
+          </label>
+          <label class="check-label"><input type="checkbox" id="u_isAdmin"> <span data-i18n="users.form.isAdmin">Admin-Rechte</span></label>
+          <label class="check-label" id="u_disabledLabel" hidden><input type="checkbox" id="u_disabled"> <span data-i18n="users.form.disabled">Deaktiviert (Anmeldung gesperrt)</span></label>
+          <div class="page-head-actions">
+            <button type="submit" id="userFormSubmit" data-i18n="users.form.createButton">Anlegen</button>
+            <button type="button" id="userFormCancel" class="ghost-btn" hidden data-i18n="users.form.cancelButton">Abbrechen</button>
+          </div>
+        </form>
+        <div id="userFormResult" class="result" role="status"></div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="usersTable">
+          <thead><tr>
+            <th scope="col" data-i18n="users.table.username">Benutzername</th>
+            <th scope="col" data-i18n="users.table.displayName">Anzeigename</th>
+            <th scope="col" data-i18n="users.table.department">Abteilung</th>
+            <th scope="col" data-i18n="users.table.admin">Admin</th>
+            <th scope="col" data-i18n="users.table.status">Status</th>
+            <th scope="col"><span class="sr-only" data-i18n="users.table.actions">Aktionen</span></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+{{end}}

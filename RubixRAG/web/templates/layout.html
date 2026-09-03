@@ -1,0 +1,389 @@
+{{define "layout"}}<!doctype html>
+<html lang="de" data-theme="rubix">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R3 — Rubix Ranked RAG</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2050%2050'%3E%3Cpolygon%20points='13,1%2037,1%2049,13%2049,37%2037,49%2013,49%201,37%201,13'%20fill='none'%20stroke='%23f5c400'%20stroke-width='2.8'/%3E%3Cline%20x1='14'%20y1='10'%20x2='43'%20y2='41'%20stroke='%23f5c400'%20stroke-width='7'%20stroke-linecap='round'/%3E%3Cline%20x1='43'%20y1='10'%20x2='14'%20y2='41'%20stroke='%23f5c400'%20stroke-width='7'%20stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- The traced artwork fills the navy background and leaves the logo shapes
+         as holes, so it's used as a mask (rect through the holes) rather than
+         filled directly. -->
+    <mask id="r3-logo-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="1774" height="887">
+      <rect x="0" y="0" width="1774" height="887" fill="white"/>
+      <g transform="translate(0.000000,887.000000) scale(0.100000,-0.100000)" fill="black" stroke="none">
+      <path d="M0 4435 l0 -4435 8870 0 8870 0 0 4435 0 4435 -8870 0 -8870 0 0
+      -4435z m4237 2202 c33 -9 179 -89 409 -227 570 -338 679 -407 678 -421 -1 -8
+      -36 -60 -79 -117 -55 -72 -84 -102 -95 -99 -9 2 -149 83 -311 179 -162 96
+      -363 216 -448 267 -174 103 -216 119 -273 101 -21 -6 -276 -154 -566 -329
+      -290 -175 -644 -389 -787 -475 -151 -91 -271 -170 -285 -188 -24 -30 -25 -37
+      -28 -199 l-3 -168 -41 15 c-53 18 -126 18 -184 -2 -25 -8 -49 -12 -52 -9 -4 4
+      -7 100 -6 213 1 190 3 211 23 258 29 67 84 118 211 194 58 35 166 100 240 145
+      74 45 272 165 440 267 168 101 447 270 620 375 400 243 419 250 537 220z
+      m3879 -678 c72 -49 376 -351 395 -394 17 -36 19 -71 19 -335 0 -176 -4 -311
+      -11 -335 -8 -32 -37 -65 -150 -175 -93 -90 -139 -142 -139 -156 0 -27 174
+      -407 349 -763 51 -105 61 -147 39 -169 -9 -9 -71 -12 -219 -12 -182 0 -209 2
+      -227 18 -18 15 -342 709 -342 732 0 5 -7 16 -16 24 -13 13 -45 16 -190 16
+      -229 0 -214 -15 -214 210 0 227 -20 210 242 210 l202 0 113 113 113 113 0 154
+      0 154 -92 95 c-51 53 -102 101 -113 108 -14 9 -101 12 -311 13 -259 0 -293 -2
+      -305 -17 -12 -13 -14 -175 -14 -960 l0 -945 -24 -19 c-21 -17 -41 -19 -195
+      -19 -139 0 -176 3 -194 16 l-22 15 0 1151 c0 1065 1 1153 17 1170 16 18 43 18
+      633 16 l616 -3 40 -26z m1120 17 c18 -14 19 -38 24 -864 l5 -850 109 -104 c59
+      -56 120 -108 134 -114 31 -14 450 -18 484 -5 36 14 229 202 244 238 11 26 14
+      184 14 854 0 751 1 824 17 841 14 16 35 18 199 18 178 0 183 -1 198 -22 14
+      -20 16 -124 16 -926 0 -816 -2 -907 -16 -938 -9 -19 -99 -120 -199 -224 -200
+      -207 -229 -234 -269 -250 -17 -6 -182 -10 -444 -10 -382 0 -420 2 -457 19 -53
+      24 -431 410 -456 466 -18 38 -19 89 -19 940 0 799 2 903 16 923 15 21 20 22
+      198 22 141 0 187 -3 202 -14z m3102 0 c15 -8 102 -90 193 -183 147 -149 167
+      -173 177 -215 15 -61 16 -449 1 -503 -8 -30 -36 -66 -110 -141 -55 -55 -99
+      -104 -99 -109 0 -5 45 -54 100 -110 54 -56 104 -114 110 -129 13 -35 13 -508
+      0 -556 -14 -51 -47 -91 -147 -182 -133 -121 -215 -185 -264 -207 -42 -20 -65
+      -21 -656 -21 -600 0 -613 0 -633 20 -20 20 -20 33 -20 1163 0 1137 0 1143 20
+      1165 l21 22 640 0 c532 0 645 -2 667 -14z m1076 -8 c14 -20 16 -147 16 -1165
+      0 -1130 0 -1143 -20 -1163 -18 -18 -33 -20 -193 -20 -140 0 -177 3 -195 16
+      l-22 15 0 1147 c0 1022 2 1150 16 1170 15 21 20 22 199 22 179 0 184 -1 199
+      -22z m746 9 c28 -14 22 -5 277 -402 103 -159 274 -419 380 -577 143 -212 193
+      -294 193 -316 0 -22 -39 -85 -153 -248 -84 -121 -231 -334 -327 -474 -95 -140
+      -203 -298 -240 -350 -36 -52 -144 -209 -239 -348 -95 -138 -182 -259 -194
+      -267 -18 -12 -66 -15 -273 -15 -321 0 -312 -7 -201 151 323 460 1061 1519
+      1071 1537 10 17 29 -13 -427 675 -392 591 -407 616 -373 639 20 14 478 9 506
+      -5z m1818 1 c7 -7 12 -18 12 -25 0 -7 -120 -173 -267 -370 -146 -197 -331
+      -445 -410 -551 -119 -160 -148 -193 -166 -190 -33 5 -257 341 -257 386 0 26
+      41 92 208 335 114 166 218 319 230 339 13 20 37 49 53 63 l31 25 277 0 c202 0
+      280 -3 289 -12z m-10253 -222 c235 -146 240 -149 243 -178 3 -22 -37 -80 -210
+      -308 -117 -155 -306 -406 -419 -558 -113 -152 -213 -281 -222 -286 -23 -15
+      -41 5 -181 199 -91 124 -116 166 -116 191 0 34 18 60 523 737 200 267 208 277
+      240 277 12 0 76 -33 142 -74z m-1694 -249 c15 -7 64 -61 109 -122 46 -60 125
+      -164 175 -230 341 -447 658 -870 667 -890 12 -26 46 23 -422 -595 -89 -118
+      -240 -319 -335 -446 -95 -127 -180 -234 -190 -238 -9 -3 -132 -6 -274 -6 -265
+      0 -281 2 -281 41 0 14 150 223 477 664 220 296 393 543 393 562 0 14 -50 88
+      -123 185 -68 90 -151 201 -185 248 -34 47 -88 121 -120 165 -461 629 -467 639
+      -424 664 26 15 500 13 533 -2z m2147 -1227 c2 -1120 1 -1155 -36 -1168 -6 -2
+      -63 67 -126 153 l-116 155 0 831 0 831 33 41 c19 23 76 95 127 160 82 104 95
+      116 104 100 8 -12 12 -346 14 -1103z m-2953 950 c60 -29 88 -72 93 -144 4 -44
+      0 -68 -13 -92 l-18 -33 53 -71 52 -70 158 0 c137 0 161 -2 180 -18 14 -11 23
+      -29 23 -47 0 -51 -19 -56 -222 -53 l-185 3 -54 70 c-29 39 -61 82 -69 96 -14
+      23 -24 27 -74 31 -72 5 -121 37 -150 96 -41 84 -6 187 79 232 48 25 95 25 147
+      0z m-837 -424 c42 -22 79 -67 92 -111 l12 -40 70 -1 70 0 36 -45 c20 -24 55
+      -63 77 -87 l40 -43 465 1 c519 0 510 2 510 -64 0 -62 11 -61 -474 -62 -243 0
+      -466 2 -497 4 l-57 4 -73 89 -74 89 -66 0 c-54 0 -69 -4 -85 -21 -60 -66 -179
+      -65 -241 2 -78 85 -61 211 36 276 40 27 117 31 159 9z m12993 -578 c668 -964
+      625 -898 597 -926 -17 -17 -483 -17 -517 1 -36 18 -570 814 -571 850 0 19 35
+      76 121 197 97 137 126 170 144 170 20 0 59 -51 226 -292z m-11639 -105 c22
+      -20 24 -66 2 -87 -14 -14 -72 -16 -487 -16 l-472 -1 -78 -89 -78 -90 -68 0
+      -68 0 -17 -43 c-40 -105 -158 -145 -253 -87 -141 86 -76 320 89 320 54 0 121
+      -29 140 -60 10 -16 24 -20 70 -20 l57 0 82 95 82 95 490 0 c442 0 492 -2 509
+      -17z m1559 -290 c95 -131 272 -371 393 -533 256 -343 255 -342 237 -363 -7 -9
+      -93 -63 -191 -121 -120 -71 -189 -106 -209 -106 -34 0 -44 12 -234 280 -64 91
+      -198 277 -297 414 -146 201 -180 254 -180 281 0 25 24 65 111 186 61 85 120
+      164 132 177 44 47 53 39 238 -215z m-1554 -59 c15 -24 15 -29 2 -53 l-15 -26
+      -249 -3 -250 -2 -53 -53 c-52 -51 -53 -53 -48 -97 14 -111 -61 -200 -170 -200
+      -83 0 -151 56 -169 137 -13 66 32 155 96 188 32 17 96 20 133 5 23 -8 31 -3
+      88 60 l63 70 277 0 278 0 17 -26z m-1412 -241 c39 3 80 8 93 12 l22 7 0 -132
+      c0 -99 4 -140 16 -165 13 -28 62 -61 297 -201 155 -92 518 -309 807 -482 634
+      -381 570 -359 752 -252 68 40 233 139 368 218 135 80 285 169 334 199 49 30
+      93 50 97 46 4 -4 44 -57 89 -118 80 -109 80 -110 59 -125 -55 -38 -912 -536
+      -977 -567 -69 -34 -76 -35 -160 -31 -77 3 -95 8 -147 38 -133 75 -1673 1000
+      -1712 1029 -28 20 -51 50 -73 93 -31 64 -31 65 -34 249 -2 101 1 189 6 195 6
+      9 20 8 51 -3 28 -10 65 -13 112 -10z m5358 -319 c51 -48 107 -102 125 -120
+      l32 -34 0 -162 0 -162 -91 -86 -91 -86 35 -69 c19 -39 69 -133 111 -209 42
+      -76 76 -144 76 -151 0 -27 -30 -35 -139 -36 -62 0 -116 2 -119 6 -4 3 -52 90
+      -107 193 l-101 187 -129 5 -130 5 -3 95 c-1 52 2 102 8 110 7 12 37 15 155 16
+      l146 1 52 49 c69 66 67 61 67 130 l0 61 -59 57 -60 56 -198 -2 -198 -3 -3
+      -469 c-1 -326 -6 -473 -13 -483 -14 -16 -215 -19 -239 -3 -13 8 -15 85 -18
+      576 -2 498 -1 570 13 590 l15 24 386 0 386 0 91 -86z m1129 69 c8 -10 27 -47
+      42 -83 221 -514 345 -800 395 -914 43 -96 60 -147 56 -163 -5 -22 -8 -23 -124
+      -23 -83 0 -121 4 -128 13 -5 6 -31 63 -58 124 l-48 113 -216 2 c-194 3 -216 5
+      -219 20 -4 21 63 179 81 190 6 4 67 8 135 8 81 0 122 4 122 11 0 12 -145 355
+      -160 379 -5 8 -11 12 -13 10 -2 -3 -40 -93 -85 -200 -45 -107 -122 -291 -172
+      -408 -49 -117 -90 -217 -90 -221 0 -4 -8 -16 -19 -25 -15 -14 -37 -16 -132
+      -14 -107 3 -114 4 -117 24 -2 11 78 205 176 430 98 225 207 477 242 559 35 83
+      70 158 78 168 13 14 33 17 127 17 94 0 114 -3 127 -17z m1525 -32 c32 -26 91
+      -82 131 -124 71 -74 72 -75 72 -129 0 -32 -6 -62 -16 -76 -14 -20 -23 -22
+      -118 -22 -108 0 -126 7 -126 46 0 15 -20 40 -57 73 l-57 51 -165 0 -166 0 -62
+      -56 -63 -56 0 -258 0 -258 62 -56 61 -56 169 0 169 0 60 57 c57 54 59 57 59
+      108 0 39 -4 54 -16 59 -9 3 -64 6 -124 6 -60 0 -115 3 -124 6 -13 5 -16 23
+      -16 93 0 54 5 92 12 99 9 9 78 12 250 12 l238 0 15 -24 c14 -21 16 -55 13
+      -222 l-3 -197 -120 -113 -119 -114 -293 0 -293 0 -48 42 c-26 23 -82 76 -124
+      117 l-78 76 0 361 0 362 110 108 c61 60 121 114 133 121 16 9 100 12 299 13
+      l277 0 58 -49z m791 -547 c2 -611 2 -615 -40 -599 -12 5 -17 32 -22 118 -7
+      129 1 1044 10 1059 3 5 16 8 27 6 l22 -3 3 -581z"/>
+      <path d="M11447 5562 c-16 -17 -17 -76 -17 -759 0 -704 1 -741 18 -756 16 -15
+      54 -17 320 -17 165 0 311 4 324 9 13 6 60 46 106 89 l82 80 0 107 0 108 -85
+      86 -84 86 -241 5 c-224 5 -243 6 -256 24 -11 15 -14 58 -14 182 0 224 -22 206
+      256 208 142 1 226 6 239 13 11 6 55 47 97 90 l78 78 6 87 c5 58 3 96 -5 115
+      -6 16 -48 62 -93 103 l-82 75 -316 3 c-299 3 -317 2 -333 -16z"/>
+      <path d="M3104 5105 c-34 -52 29 -115 81 -81 28 18 35 72 13 94 -22 22 -76 15
+      -94 -13z"/>
+      <path d="M2282 4694 c-44 -30 -18 -114 36 -114 18 0 62 46 62 65 0 19 -44 65
+      -62 65 -8 0 -24 -7 -36 -16z"/>
+      <path d="M2282 3904 c-26 -18 -30 -65 -6 -88 23 -24 70 -20 88 6 22 31 20 45
+      -9 73 -28 29 -42 31 -73 9z"/>
+      <path d="M2927 3552 c-35 -38 -9 -102 40 -102 47 0 71 71 35 103 -24 22 -55
+      21 -75 -1z"/>
+      </g>
+    </mask>
+  </defs>
+</svg>
+<button id="menuToggle" class="menu-toggle" aria-label="Menü öffnen" data-i18n-aria-label="sidebar.menuToggle.ariaLabel" aria-expanded="false" aria-controls="sidebar">
+  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+    <path d="M3 5h14M3 10h14M3 15h14"/>
+  </svg>
+</button>
+<div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <a href="/" class="brand-logo-link" aria-label="Zur Startseite" data-i18n-aria-label="sidebar.brandLink.ariaLabel">
+        <svg class="brand-logo" viewBox="0 0 1774 887" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RUBIX RAG">
+          <rect x="0" y="0" width="1774" height="887" fill="currentColor" mask="url(#r3-logo-mask)"/>
+        </svg>
+      </a>
+      <button id="sidebarCollapse" class="sidebar-collapse-btn" type="button" title="Seitenleiste einklappen" aria-label="Seitenleiste einklappen" data-i18n-title="sidebar.collapse.label" data-i18n-aria-label="sidebar.collapse.label" aria-pressed="false">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12.5 5L7.5 10l5 5"/>
+        </svg>
+      </button>
+    </div>
+
+    <nav role="tablist" aria-orientation="vertical" aria-label="Hauptnavigation" data-i18n-aria-label="nav.mainNavigation.ariaLabel">
+      <button id="sidebarNewChat" type="button" class="nav-item nav-primary nav-action" data-i18n-title="sidebar.newChat.title" data-i18n-aria-label="sidebar.newChat.title" title="Neues Gespräch beginnen">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M13.5 3.5a2 2 0 012.8 2.8L7 15.6l-3.7 1 1-3.7z"/>
+        </svg>
+        <span data-i18n="sidebar.newChat">Neues Gespräch</span>
+      </button>
+      <button id="navtab-chat" role="tab" aria-selected="true" aria-controls="tab-chat"
+              data-tab="chat" class="nav-item active">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v9a1 1 0 01-1 1H6l-3 2.5V4z"/>
+        </svg>
+        <span data-i18n="nav.chat">Chat</span>
+      </button>
+      <button id="navtab-mail" role="tab" aria-selected="false" aria-controls="tab-mail"
+              data-tab="mail" class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="5" width="14" height="10" rx="1.5"/>
+          <path d="M3 6l7 5 7-5"/>
+        </svg>
+        <span data-i18n="nav.mail">Mail</span>
+      </button>
+      <button id="navtab-help" role="tab" aria-selected="false" aria-controls="tab-help"
+              data-tab="help" class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.5"/>
+          <path d="M7.6 7.8a2.4 2.4 0 014.6.9c0 1.6-2.2 1.9-2.2 3.3"/>
+          <path d="M10 14.6h.01"/>
+        </svg>
+        <span data-i18n="nav.help">Hilfe</span>
+      </button>
+      <button id="navtab-account" class="nav-item nav-action" data-i18n-title="sidebar.account.title" data-i18n-aria-label="sidebar.account.title" aria-haspopup="dialog" aria-controls="accountModal" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10" cy="7" r="3.2"/>
+          <path d="M3.5 16c1.3-3 4-4.5 6.5-4.5s5.2 1.5 6.5 4.5"/>
+        </svg>
+        <span data-i18n="nav.account">Mein Konto</span>
+      </button>
+      <button id="navtab-history" class="nav-item nav-action" data-i18n-title="sidebar.history.title" data-i18n-aria-label="sidebar.history.title" aria-haspopup="dialog" aria-controls="historyModal" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.5"/>
+          <path d="M10 6v4l3 2"/>
+        </svg>
+        <span data-i18n="nav.history">Verlauf</span>
+      </button>
+      <div class="nav-divider admin-only" role="presentation" hidden>
+        <span data-i18n="nav.adminSection">Admin-Bereich</span>
+      </div>
+      <button id="navtab-import" role="tab" aria-selected="false" aria-controls="tab-import"
+              data-tab="import" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10 3v9M7 9.5l3 3 3-3M3 14v2a1 1 0 001 1h12a1 1 0 001-1v-2"/>
+        </svg>
+        <span data-i18n="nav.import">Import</span>
+      </button>
+      <button id="navtab-sources" role="tab" aria-selected="false" aria-controls="tab-sources"
+              data-tab="sources" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 5H5a2 2 0 00-2 2v9a2 2 0 002 2h10a2 2 0 002-2V8"/>
+          <rect x="7" y="2" width="9" height="13" rx="1.5"/>
+          <path d="M10 6h3M10 9h3M10 12h2"/>
+        </svg>
+        <span data-i18n="nav.sources">Quellen</span>
+      </button>
+      <button id="navtab-chunks" role="tab" aria-selected="false" aria-controls="tab-chunks"
+              data-tab="chunks" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2" y="2" width="7" height="7" rx="1.2"/>
+          <rect x="11" y="2" width="7" height="7" rx="1.2"/>
+          <rect x="2" y="11" width="7" height="7" rx="1.2"/>
+          <rect x="11" y="11" width="7" height="7" rx="1.2"/>
+        </svg>
+        <span data-i18n="nav.chunks">Chunks</span>
+      </button>
+      <button id="navtab-prompts" role="tab" aria-selected="false" aria-controls="tab-prompts"
+              data-tab="prompts" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 6l-4 4 4 4M14 6l4 4-4 4M12 4l-4 12"/>
+        </svg>
+        <span data-i18n="nav.prompts">Prompts</span>
+      </button>
+      <button id="navtab-jobs" role="tab" aria-selected="false" aria-controls="tab-jobs"
+              data-tab="jobs" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.5"/>
+          <path d="M10 6v4l2.8 2"/>
+        </svg>
+        <span data-i18n="nav.jobs">Jobs</span>
+      </button>
+      <button id="navtab-users" role="tab" aria-selected="false" aria-controls="tab-users"
+              data-tab="users" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="8" cy="6" r="3"/>
+          <path d="M2.5 17c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5"/>
+          <circle cx="15" cy="7" r="2.2"/>
+          <path d="M13 11.3c1.9.4 3.4 2 3.6 4.2"/>
+        </svg>
+        <span data-i18n="nav.users">Benutzer</span>
+      </button>
+      <button id="navtab-settings" role="tab" aria-selected="false" aria-controls="tab-settings"
+              data-tab="settings" class="nav-item admin-only" hidden>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+          <line x1="3" y1="5" x2="17" y2="5"/>
+          <line x1="3" y1="10" x2="17" y2="10"/>
+          <line x1="3" y1="15" x2="17" y2="15"/>
+          <circle cx="8" cy="5" r="2.2" fill="currentColor" stroke="none"/>
+          <circle cx="13" cy="10" r="2.2" fill="currentColor" stroke="none"/>
+          <circle cx="7" cy="15" r="2.2" fill="currentColor" stroke="none"/>
+        </svg>
+        <span data-i18n="nav.settings">Einstellungen</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div id="kbStats" class="kb-stats" data-i18n-title="sidebar.kbStats.title"></div>
+
+      <div class="theme-menu">
+        <button type="button" id="themeMenuToggle" class="theme-menu-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="themeMenuPopover" data-i18n-aria-label="sidebar.theme.groupLabel">
+          <span class="theme-swatch" id="themeMenuToggleSwatch" data-theme="rubix" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+          <span class="theme-menu-toggle-text">
+            <span class="theme-menu-toggle-label" data-i18n="sidebar.theme.label">Theme</span>
+            {{/* No data-i18n here on purpose: its text is owned by
+                 applyTheme() (app.js), reflecting the *actual* current
+                 choice — a static data-i18n attribute would make
+                 setLocale()'s applyI18n() re-stamp pass reset it back to
+                 whatever this element's original HTML said, regardless of
+                 which theme is actually active (same class of bug the
+                 login-toggle-label comment above already documents). */}}
+            <span id="themeMenuCurrentName">Rubix</span>
+          </span>
+          <svg class="theme-menu-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 8l5 5 5-5"/>
+          </svg>
+        </button>
+        <div id="themeMenuPopover" class="theme-menu-popover" role="menu" data-i18n-aria-label="sidebar.theme.groupLabel" hidden>
+          <button type="button" class="theme-menu-option active" data-t="dark" role="menuitemradio" aria-checked="true">
+            <span class="theme-swatch" data-theme="dark" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+            <span data-i18n="theme.dark">Dunkel</span>
+          </button>
+          <button type="button" class="theme-menu-option" data-t="light" role="menuitemradio" aria-checked="false">
+            <span class="theme-swatch" data-theme="light" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+            <span data-i18n="theme.light">Hell</span>
+          </button>
+          <button type="button" class="theme-menu-option" data-t="ocean" role="menuitemradio" aria-checked="false">
+            <span class="theme-swatch" data-theme="ocean" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+            <span data-i18n="theme.ocean">Ozean</span>
+          </button>
+          <button type="button" class="theme-menu-option" data-t="rubix" role="menuitemradio" aria-checked="false">
+            <span class="theme-swatch" data-theme="rubix" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+            <span data-i18n="theme.rubix">Rubix</span>
+          </button>
+          <button type="button" class="theme-menu-option" data-t="solarized" role="menuitemradio" aria-checked="false">
+            <span class="theme-swatch" data-theme="solarized" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+            <span data-i18n="theme.solarized">Solarized</span>
+          </button>
+          <button type="button" class="theme-menu-option" data-t="win2k" role="menuitemradio" aria-checked="false">
+            <span class="theme-swatch" data-theme="win2k" aria-hidden="true"><i class="ts-bar"></i><i class="ts-accent"></i></span>
+            <span data-i18n="theme.win2k">Classic</span>
+          </button>
+          <button type="button" class="theme-menu-option" data-t="auto" role="menuitemradio" aria-checked="false">
+            <span class="theme-swatch theme-swatch-auto" aria-hidden="true"><i class="ts-half" data-theme="dark"></i><i class="ts-half" data-theme="light"></i></span>
+            <span data-i18n="theme.auto">Automatisch (System)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="font-size-switcher" role="group" data-i18n-aria-label="sidebar.fontSize.groupLabel">
+        <span class="theme-switcher-label" data-i18n="sidebar.fontSize.label">Schrift</span>
+        <button class="font-size-btn" data-fs="small"  data-i18n-title="fontSize.small"  data-i18n-aria-label="fontSize.small.ariaLabel"  aria-pressed="false">A</button>
+        <button class="font-size-btn active" data-fs="normal" data-i18n-title="fontSize.normal" data-i18n-aria-label="fontSize.normal.ariaLabel" aria-pressed="true">A</button>
+        <button class="font-size-btn" data-fs="large"  data-i18n-title="fontSize.large"  data-i18n-aria-label="fontSize.large.ariaLabel"  aria-pressed="false">A</button>
+        <button class="font-size-btn" data-fs="larger" data-i18n-title="fontSize.larger" data-i18n-aria-label="fontSize.larger.ariaLabel" aria-pressed="false">A</button>
+        <button class="font-size-btn" data-fs="huge"   data-i18n-title="fontSize.huge"   data-i18n-aria-label="fontSize.huge.ariaLabel"   aria-pressed="false">A</button>
+      </div>
+
+      <div class="lang-switcher" role="group" data-i18n-aria-label="sidebar.lang.groupLabel">
+        <span class="theme-switcher-label" data-i18n="sidebar.lang.label">Sprache</span>
+        <button type="button" class="lang-btn" data-lang="de" data-i18n-title="lang.de" data-i18n-aria-label="lang.de" aria-pressed="false">DE</button>
+        <button type="button" class="lang-btn" data-lang="en" data-i18n-title="lang.en" data-i18n-aria-label="lang.en" aria-pressed="false">EN</button>
+        <button type="button" class="lang-btn" data-lang="fr" data-i18n-title="lang.fr" data-i18n-aria-label="lang.fr" aria-pressed="false">FR</button>
+        <button type="button" class="lang-btn" data-lang="it" data-i18n-title="lang.it" data-i18n-aria-label="lang.it" aria-pressed="false">IT</button>
+      </div>
+
+      <div class="login-area">
+        <button id="adminToggle" class="login-toggle-btn" aria-expanded="false" aria-controls="adminLoginBox">
+          <svg class="lbtn-icon lbtn-locked" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="9" width="12" height="9" rx="2"/>
+            <path d="M7 9V7a3 3 0 016 0v2"/>
+          </svg>
+          <svg class="lbtn-icon lbtn-unlocked" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="9" width="12" height="9" rx="2"/>
+            <path d="M7 9V6a3 3 0 016 0"/>
+          </svg>
+          {{/* Deliberately NO data-i18n here: this label is state-derived
+               (applyAdminVisibility flips it between "Anmelden" and
+               "Abmelden (Name)"), so the i18n re-stamp pass must never
+               overwrite it — that was exactly the bug where a signed-in
+               user's button kept saying "Anmelden". */}}
+          <span id="adminToggleLabel">Anmelden</span>
+        </button>
+        <form id="adminLoginBox" class="admin-login" hidden>
+          <label class="sr-only" for="adminUsername" data-i18n="login.username">Benutzername</label>
+          <input id="adminUsername" type="text" data-i18n-placeholder="login.username" autocomplete="username">
+          <label class="sr-only" for="adminPassword" data-i18n="login.password">Passwort</label>
+          <input id="adminPassword" type="password" data-i18n-placeholder="login.password" autocomplete="current-password">
+          <button type="submit" data-i18n="login.signIn">Anmelden</button>
+          <div id="adminLoginResult" class="result" role="status"></div>
+        </form>
+      </div>
+    </div>
+  </aside>
+
+  <main>
+{{template "tab-chat"}}
+{{template "tab-mail"}}
+{{template "tab-help"}}
+{{template "tab-import"}}
+{{template "tab-sources"}}
+{{template "tab-chunks"}}
+{{template "tab-prompts"}}
+{{template "tab-jobs"}}
+{{template "tab-users"}}
+{{template "tab-settings"}}
+  </main>
+</div>
+
+{{template "modal-history"}}
+{{template "modal-source"}}
+{{template "modal-account"}}
+
+<script src="/i18n.js"></script>
+<script src="/novapop.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
+{{end}}

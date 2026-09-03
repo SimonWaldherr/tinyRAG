@@ -1,0 +1,54 @@
+{{define "modal-account"}}
+<div id="accountModal" class="modal-overlay" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+    <div class="modal-head">
+      <h2 id="accountModalTitle" data-i18n="account.title">Mein Konto</h2>
+      <button type="button" id="accountModalClose" class="ghost-btn" data-i18n-aria-label="modal.close">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M5 5l10 10M15 5L5 15"/>
+        </svg>
+      </button>
+    </div>
+    <dl id="accountModalFields" class="account-fields"></dl>
+
+    <h3 class="account-section-title" data-i18n="account.personal.title">Persönlicher Kontext (optional)</h3>
+    <p class="hint" data-i18n="account.personal.hint">Deine eigenen Angaben über dich — für Anrede, Tonfall und Signatur in Antworten und E-Mail-Entwürfen. Wird nur verwendet, wenn du es unten explizit aktivierst, und nur, wenn dies auch serverweit erlaubt ist.</p>
+    <label class="check-label" title="Ohne dieses Häkchen bleiben die Angaben unten gespeichert, fließen aber in keine Antwort/keinen Entwurf ein.">
+      <input type="checkbox" id="accountPersonalUse">
+      <span data-i18n="account.personal.useLabel">Für Personalisierung verwenden</span>
+    </label>
+    <div class="account-personal-fields">
+      <label><span data-i18n="account.personal.displayName">Bevorzugter Name</span>
+        <input type="text" id="accountPersonalDisplayName" maxlength="200">
+      </label>
+      <label><span data-i18n="account.personal.position">Position</span>
+        <input type="text" id="accountPersonalPosition" maxlength="200">
+      </label>
+      <label><span data-i18n="account.personal.department">Abteilung</span>
+        <input type="text" id="accountPersonalDepartment" maxlength="200">
+      </label>
+      <label><span data-i18n="account.personal.contactInfo">Kontaktdaten</span>
+        <input type="text" id="accountPersonalContactInfo" maxlength="200" placeholder="z. B. Telefon/Mobil" data-i18n-placeholder="account.personal.contactInfoPlaceholder">
+      </label>
+      <label><span data-i18n="account.personal.communicationStyle">Bevorzugte Kommunikationsweise</span>
+        <input type="text" id="accountPersonalCommunicationStyle" maxlength="300" placeholder="z. B. direkt und knapp" data-i18n-placeholder="account.personal.communicationStylePlaceholder">
+      </label>
+      <label><span data-i18n="account.personal.signature">Signatur</span>
+        <textarea id="accountPersonalSignature" class="prompt-editor" rows="3" maxlength="1000"></textarea>
+      </label>
+      <label><span data-i18n="account.personal.typicalPhrasing">Typische Formulierungen</span>
+        <textarea id="accountPersonalTypicalPhrasing" class="prompt-editor" rows="2" maxlength="1000"></textarea>
+      </label>
+      <label><span data-i18n="account.personal.aiNotes">Hinweise für die KI</span>
+        <textarea id="accountPersonalAINotes" class="prompt-editor" rows="2" maxlength="1000"></textarea>
+      </label>
+    </div>
+    <div id="accountPersonalResult" class="result" role="status"></div>
+
+    <div class="modal-actions">
+      <button type="button" id="accountPersonalSave" class="ghost-btn" data-i18n="account.personal.save">Speichern</button>
+      <button type="button" id="accountModalLogout" class="ghost-btn" data-i18n="account.logout">Abmelden</button>
+    </div>
+  </div>
+</div>
+{{end}}

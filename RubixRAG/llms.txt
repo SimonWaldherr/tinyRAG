@@ -1,0 +1,65 @@
+# R3 — Rubix Ranked RAG
+
+> Provenance-first Retrieval-Augmented Generation system for mailbox and
+> document knowledge bases. Every answer is grounded in ranked, cited
+> chunks (vector similarity + keyword overlap + recency) and every
+> citation traces back to a specific source_id/load_id/timestamp — no
+> answer is generated without retrieval, and no source is ever fabricated.
+
+R3 is a single Go binary with an embedded vector store (tinySQL or
+SQLite) and an embedded browser frontend — no separate database or build
+step. It imports PST mailbox exports (incl. attachments), plain
+files/Office/PDF documents, SharePoint, Exchange Online/IMAP mail (incl.
+attachments), Microsoft Teams channels, Confluence pages, Jira issues and
+generic websites, then answers questions with inline `[Qn]` citation
+markers resolved against the sources that actually grounded the answer.
+Every connector is read-only against its source system, with one
+deliberate, human-in-the-loop exception: draft-reply generation
+(`draft.go`) can *append* a proposed reply to a mailbox's Drafts folder
+for a person to review/edit/discard — R3 never sends mail autonomously,
+and nothing else in this codebase writes to a connected system at all.
+
+## For LLM agents calling this instance
+
+- `POST /api/ask` — ask a question, get a cited answer. Body:
+  `{"question": "...", "format": "json"}` for a single buffered
+  `{"answer": "...", "citations": [...]}` response (recommended for
+  non-browser callers), or omit `format` for an NDJSON token stream. See
+  `/api/openapi.json` for the full request/response schema.
+- `POST /api/search` — ranked retrieval only, no LLM call: returns the
+  scored chunks a question would be grounded in, without generating an
+  answer. Useful for a caller that wants to do its own answer synthesis.
+- `GET /api/openapi.json` — machine-readable OpenAPI 3.0 spec for both
+  endpoints above; load this into any codegen/agent tool instead of
+  hand-parsing this file.
+- Auth: open by default; if `settings.api.require_api_key` is enabled,
+  send `X-API-Key: <key>` or `Authorization: Bearer <key>`. A missing/
+  invalid key on a gated instance returns `401`.
+- `GET /healthz` — liveness probe, no auth, no dependency checks.
+- Also reachable via MCP (`r3_ask`/`r3_search` tools) for MCP-speaking
+  agents (Claude Desktop, Claude Code, etc.), and via a small `r3cli`
+  wrapper for terminal/scripting use — see `docs/API.md` for both.
+
+## Docs (in this repository, not served by the running instance)
+
+- `README.md` — architecture, data sources, configuration, security
+  posture; the canonical technical reference (English).
+- `ANLEITUNG.md` — the same ground covered operationally, in German, for
+  day-to-day running/configuring/extending R3.
+- `AGENTS.md` — environment-specific notes for AI coding agents working
+  on this codebase (toolchain quirks, build scope, etc.), not relevant to
+  an agent only *calling* the running API above.
+
+## Notes for agents answering questions about R3 itself
+
+- Every citation an answer returns already passed two filters server-side
+  (see README.md "Security / privacy considerations"): it was actually
+  referenced by the model (not just retrieved), and its source_kind isn't
+  configured as hidden (`source_visibility`) or department-restricted
+  (`source_access`) for the requester. Don't assume a citation list you
+  receive is the complete set of everything that *could* have been
+  retrieved — restricted/unused candidates are dropped before you see them.
+- R3 has no built-in authentication beyond the optional API key above and
+  optional LDAP-gated admin routes — treat any instance you're pointed at
+  as potentially open to whoever can reach it on the network, and don't
+  assume every deployment restricts access the same way.

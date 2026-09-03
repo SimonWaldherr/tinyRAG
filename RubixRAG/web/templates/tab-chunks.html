@@ -1,0 +1,93 @@
+{{define "tab-chunks"}}
+    <section id="tab-chunks" class="panel" role="tabpanel" aria-labelledby="navtab-chunks">
+      <header class="page-head">
+        <h1 data-i18n="page.chunks.title">Chunk-Viewer</h1>
+        <p class="hint" data-i18n="page.chunks.hint">Alle gespeicherten Chunks mit Herkunft, Lade-Zeitpunkt und Aktualitäts-Score.</p>
+        <div class="page-head-actions">
+          <button type="button" id="chunksRefresh" class="ghost-btn" title="Lädt die aktuelle Seite mit den bestehenden Filtern neu." data-i18n-title="chunks.refresh.title" data-i18n="chunks.refresh.button">Aktualisieren</button>
+        </div>
+      </header>
+
+      <form id="chunksFilterForm" class="chunk-filters">
+        <label class="sr-only" for="cf_q" data-i18n="chunks.filter.searchLabel">Volltextsuche</label>
+        <input type="text" id="cf_q" placeholder="Volltextsuche (Inhalt/Quelle)…" data-i18n-placeholder="chunks.filter.searchLabel" title="Durchsucht Chunk-Inhalt und Quellname nach diesem Text (Teilstring, Groß-/Kleinschreibung egal). Wirkt zusätzlich zu den anderen Filtern." data-i18n-title="chunks.filter.searchTitle">
+        <label class="sr-only" for="cf_source_id" data-i18n="chunks.filter.sourceIdLabel">Quell-ID enthält</label>
+        <input type="text" id="cf_source_id" placeholder="Quell-ID enthält…" data-i18n-placeholder="chunks.filter.sourceIdLabel" title="Grenzt auf Quellen ein, deren interne Quell-ID diesen Text enthält (Teilstring). Wird auch von Sprungmarken aus anderen Tabs (z. B. Feedback-Auswertung) automatisch befüllt." data-i18n-title="chunks.filter.sourceIdTitle">
+        <label class="sr-only" for="cf_source_kind" data-i18n="chunks.filter.kindLabel">Quelltyp</label>
+        <select id="cf_source_kind" title="Grenzt auf genau diesen Quelltyp ein (exakte Übereinstimmung)." data-i18n-title="chunks.filter.kindTitle">
+          <option value="" data-i18n="chunks.filter.allKinds">Alle Typen</option>
+          <option value="file">file</option>
+          <option value="pst_email">pst_email</option>
+          <option value="pst_attachment">pst_attachment</option>
+          <option value="imap_email">imap_email</option>
+          <option value="imap_attachment">imap_attachment</option>
+          <option value="outlook_email">outlook_email</option>
+          <option value="outlook_attachment">outlook_attachment</option>
+          <option value="sharepoint_file">sharepoint_file</option>
+          <option value="sharepoint_page">sharepoint_page</option>
+          <option value="sharepoint_link">sharepoint_link</option>
+          <option value="confluence_page">confluence_page</option>
+          <option value="jira_issue">jira_issue</option>
+          <option value="teams_message">teams_message</option>
+          <option value="web_page">web_page</option>
+        </select>
+        <label class="sr-only" for="cf_embed_model" data-i18n="chunks.filter.embedModelLabel">Embedding-Modell</label>
+        <input type="text" id="cf_embed_model" placeholder="Embedding-Modell…" data-i18n-placeholder="chunks.filter.embedModelLabel" title="Exakter Modellname (kein Teilstring!) — z. B. „text-embedding-3-small“ oder der lokale Modellname. Der genaue Name steht bei jedem Chunk in der aufgeklappten Detailansicht (Embedding-Modell) oder unter Einstellungen → Speicher." data-i18n-title="chunks.filter.embedModelTitle">
+        <label class="sr-only" for="cf_sort" data-i18n="chunks.filter.sortLabel">Sortierung</label>
+        <select id="cf_sort">
+          <option value="loaded_at" data-i18n="chunks.sort.loadedAt">Sortierung: Geladen</option>
+          <option value="doc_date" data-i18n="chunks.sort.docDate">Sortierung: Dok.-Datum</option>
+          <option value="freshness" data-i18n="chunks.sort.freshness">Sortierung: Aktualität</option>
+          <option value="chunk_idx" data-i18n="chunks.sort.chunkIdx">Sortierung: Chunk-Position</option>
+          <option value="source_name" data-i18n="chunks.sort.source">Sortierung: Quelle</option>
+          <option value="chars" data-i18n="chunks.sort.chars">Sortierung: Länge</option>
+        </select>
+        <button type="button" id="cf_order" data-order="desc" title="Sortierrichtung umschalten" aria-label="Sortierrichtung umschalten" data-i18n-title="chunks.order.toggleTitle" data-i18n-aria-label="chunks.order.toggleTitle" data-i18n="chunks.order.desc">↓ absteigend</button>
+        <label class="sr-only" for="cf_limit" data-i18n="chunks.filter.limitLabel">Seitengröße</label>
+        <select id="cf_limit">
+          <option value="25" data-i18n="chunks.pageSize.25">25 / Seite</option>
+          <option value="50" selected data-i18n="chunks.pageSize.50">50 / Seite</option>
+          <option value="100" data-i18n="chunks.pageSize.100">100 / Seite</option>
+          <option value="200" data-i18n="chunks.pageSize.200">200 / Seite</option>
+        </select>
+        <button type="submit" data-i18n="chunks.filter.submitButton">Filtern</button>
+      </form>
+
+      <div id="chunksMeta" class="hint" role="status"></div>
+
+      <div class="table-wrap">
+        <table id="chunksTable">
+          <thead>
+            <tr>
+              <th scope="col" data-i18n="chunks.table.source">Quelle</th>
+              <th scope="col" data-i18n="chunks.table.kind">Typ</th>
+              <th scope="col" data-i18n="chunks.table.index">#</th>
+              <th scope="col" data-i18n="chunks.table.chars">Zeichen</th>
+              <th scope="col" data-i18n="chunks.table.loaded">Geladen</th>
+              <th scope="col" data-i18n="chunks.table.docDate">Dok.-Datum</th>
+              <th scope="col" title="Exponentieller Verfall seit dem Dokumentendatum (ersatzweise dem Lade-Zeitpunkt, falls kein Dokumentendatum bekannt ist) — 100% = gerade erst, danach stetig abnehmend. Die Abklingzeit (Halbwertszeit) ist unter Einstellungen → Retrieval/Ranking → „Halbwertszeit Aktualität“ konfigurierbar. Beeinflusst nur die Rangfolge bei der Suche (recency_weight), nicht ob ein Dokument überhaupt gefunden wird." data-i18n-title="chunks.table.freshnessTitle" data-i18n="chunks.table.freshness">Aktualität</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="chunksPager" class="chunks-pager"></div>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="chunks.searchTest.title">Testsuche</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="chunks.searchTest.hint">Führt für eine Beispielfrage dieselbe Suche aus, die auch Chat/Agent verwendet (Vektor- + Stichwort- + Aktualitäts-Score, siehe Einstellungen → Retrieval/Ranking) — ohne Sprachmodell-Aufruf, nur die reine Suche. Hilft zu klären, warum eine bestimmte Quelle bei einer Frage (nicht) auftaucht, oder ob die Gewichtung sinnvoll eingestellt ist. Läuft unrestriktiert (wie ein Admin), unabhängig von Abteilungs-/Preset-Beschränkungen.</p>
+            <form id="chunksSearchTestForm" class="chunk-filters">
+              <label class="sr-only" for="cst_query" data-i18n="chunks.searchTest.queryLabel">Testfrage</label>
+              <input type="text" id="cst_query" placeholder="Testfrage eingeben…" data-i18n-placeholder="chunks.searchTest.queryPlaceholder">
+              <button type="submit" data-i18n="chunks.searchTest.button">Suchen</button>
+            </form>
+            <div id="chunksSearchTestResult" class="result" role="status"></div>
+            <ol id="chunksSearchTestList" class="debug-chunk-list"></ol>
+          </div>
+        </div>
+      </details>
+    </section>
+{{end}}

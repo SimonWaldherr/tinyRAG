@@ -22,6 +22,9 @@ func TestProviderHintFromURL(t *testing.T) {
 		"http://127.0.0.1:5000":                     "text-generation-webui",
 		"http://localhost:5001":                     "KoboldCpp",
 		"http://localhost:1337":                     "Jan",
+		"http://localhost:8091":                     "GopherLLM",
+		"http://gopherllm.local:9000":               "GopherLLM",
+		"http://rustyllm.local:9000":                "RustyLLM",
 		"http://10.0.0.5:8000":                      "vLLM", // port-based fallback for non-local hosts
 	}
 	for in, want := range cases {
@@ -85,8 +88,8 @@ func TestIsLocalLLMBase(t *testing.T) {
 
 func TestLocalLLMCandidates(t *testing.T) {
 	candidates := localLLMCandidates()
-	if len(candidates) != 7 {
-		t.Fatalf("expected 7 candidates, got %d", len(candidates))
+	if len(candidates) != 8 {
+		t.Fatalf("expected 8 candidates, got %d", len(candidates))
 	}
 	seen := map[string]bool{}
 	for _, c := range candidates {

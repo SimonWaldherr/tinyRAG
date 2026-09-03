@@ -1,0 +1,100 @@
+{{define "tab-chat"}}
+    <section id="tab-chat" class="panel chat-panel active" role="tabpanel" aria-labelledby="navtab-chat">
+      <div id="chatLog" class="chat-log" role="log" aria-label="Chat-Verlauf" data-i18n-aria-label="chat.logAriaLabel">
+        <div id="chatEmpty" class="chat-empty">
+          <svg class="chat-empty-mark" viewBox="195 213 460 460" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="195" y="213" width="460" height="460" fill="currentColor" mask="url(#r3-logo-mask)"/>
+          </svg>
+          <h1 data-i18n="chat.emptyTitle">Was möchtest du wissen?</h1>
+          <!-- No data-i18n here on purpose: loadStats() (app.js) overwrites
+               this with a stats-derived message and must be the last writer —
+               applyI18n() re-runs on every setLocale() call (e.g. once
+               /api/settings resolves) and would otherwise race it back to
+               this static placeholder. -->
+          <p id="chatEmptyStats" class="chat-empty-stats">Antworten mit zitierten Quellen aus deiner Wissensbasis.</p>
+          <!-- Starter-question chips, built by renderChatSuggestions (app.js)
+               from /api/stats' `kinds` — content-derived, so no data-i18n:
+               loadStats() re-renders them on every language switch. -->
+          <div id="chatSuggestions" class="suggestions" hidden></div>
+        </div>
+      </div>
+      <div id="ariaStatus" class="sr-only" role="status" aria-live="polite"></div>
+      <form id="askForm" class="ask-form">
+        <button type="button" id="scrollBottomBtn" class="scroll-bottom-btn" data-i18n-title="chat.scrollToBottom" data-i18n-aria-label="chat.scrollToBottom" title="Nach unten" hidden>
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 4v12M4.5 10.5L10 16l5.5-5.5"/>
+          </svg>
+        </button>
+        <div class="composer">
+          <label class="sr-only" for="question" data-i18n="chat.questionLabel">Frage an die Wissensbasis</label>
+          <textarea id="question" rows="1" data-i18n-placeholder="chat.questionPlaceholder"></textarea>
+          <div id="chatAttachList" class="attach-list" hidden></div>
+          <div class="composer-bar">
+            <button type="button" id="chatAttachBtn" class="ask-secondary-btn" title="Bild/Foto/Scan oder Dokument anhängen" data-i18n-title="chat.attachImage.title">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14.5 6.5l-6.8 6.8a2.7 2.7 0 003.8 3.8l6.6-6.6a4.3 4.3 0 00-6.1-6.1L5.3 11.2"/>
+              </svg>
+            </button>
+            <button type="button" id="chatVoiceBtn" class="ask-secondary-btn" title="Sprachaufnahme starten — lokales Whisper transkribiert die Sprache in das Fragefeld" data-i18n-title="chat.voice.idle" aria-label="Sprachaufnahme starten" data-i18n-aria-label="chat.voice.idle">🎙️</button>
+            {{/* accept is a UI convenience only (drag&drop and some OS file
+                 dialogs don't enforce it) — chatimages.go's decodeAskImages
+                 is the real gate, and accepts this same set (images plus
+                 whatever isExtractableDocument/extract.go recognizes) or
+                 rejects with a clear error either way. */}}
+            <input type="file" id="chatAttachInput" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.rtf,.odt,.ods,.odp,.epub,.txt,.md,.csv" multiple hidden>
+            <label class="inline-label" data-i18n-title="chat.tierLabel.title">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;flex:none">
+                <path d="M11 2 4 11h4l-1 7 7-9h-4z"/>
+              </svg>
+              <select id="askTier" data-i18n-aria-label="chat.tierLabel.ariaLabel" data-i18n-title="chat.tierLabel.title">
+                <option value="instant" data-i18n="chat.tierInstant">Instant · nur Wissensbasis</option>
+                <option value="standard" selected data-i18n="chat.tierStandard">Standard · mit Live-Tools</option>
+                <option value="agent" data-i18n="chat.tierAgent">Agent · mehrstufig</option>
+              </select>
+            </label>
+            <label class="inline-label" data-i18n-title="chat.profileLabel">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;flex:none">
+                <rect x="2" y="2" width="7" height="7" rx="1"/>
+                <rect x="11" y="2" width="7" height="7" rx="1"/>
+                <rect x="2" y="11" width="7" height="7" rx="1"/>
+                <rect x="11" y="11" width="7" height="7" rx="1"/>
+              </svg>
+              <select id="askProfile" data-i18n-aria-label="chat.profileLabel">
+                <option value="" data-i18n="chat.profileDefault">Standard</option>
+                <option value="local" data-i18n="chat.profileLocal">Lokal</option>
+                <option id="askProfileAzureOption" value="azure" data-i18n="chat.profileAzure">Azure</option>
+                <option id="askProfileOpenAIOption" value="openai">OpenAI</option>
+                <option id="askProfileOpenRouterOption" value="openrouter">OpenRouter</option>
+                <option id="askProfileClaudeOption" value="claude">Claude</option>
+                <option id="askProfileGeminiOption" value="gemini">Gemini</option>
+              </select>
+            </label>
+            <label class="inline-label" title="Schränkt diese Frage auf eine bestimmte, vom Admin definierte Quellen-/Werkzeug-Gruppe ein (zusätzlich zur eigenen Abteilungs-Zugriffskontrolle, nie mehr zeigend als diese). 'Standard' stellt keine zusätzliche Einschränkung." data-i18n-title="chat.presetLabel.title">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:14px;height:14px;flex:none">
+                <path d="M3 5h14M3 10h14M3 15h8"/>
+              </svg>
+              <select id="askPreset" aria-label="Zugriffs-Preset" title="Schränkt diese Frage auf eine bestimmte, vom Admin definierte Quellen-/Werkzeug-Gruppe ein." data-i18n-aria-label="chat.presetLabel.ariaLabel" data-i18n-title="chat.presetSelect.title">
+                <option value="" data-i18n="chat.presetDefault">Standard (kein Preset)</option>
+              </select>
+            </label>
+            <span class="composer-hint" data-i18n="chat.composerHint">Enter senden · Shift+Enter neue Zeile</span>
+            <div class="ask-actions">
+              <button type="button" id="exportChatComposer" class="ask-secondary-btn" data-i18n-title="sidebar.exportChat.title" data-i18n-aria-label="chat.exportAction">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 3v9M7 9.5l3 3 3-3M3 14v2a1 1 0 001 1h12a1 1 0 001-1v-2"/>
+                </svg>
+              </button>
+              <button type="submit" id="askSubmit" class="send-btn" data-i18n-aria-label="chat.sendAriaLabel" data-i18n-title="chat.send">
+                <svg class="icon-send" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 16V4M4.5 9.5L10 4l5.5 5.5"/>
+                </svg>
+                <svg class="icon-stop" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <rect x="5" y="5" width="10" height="10" rx="2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </section>
+{{end}}

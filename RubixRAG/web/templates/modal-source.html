@@ -1,0 +1,28 @@
+{{define "modal-source"}}
+<div id="sourceModal" class="modal-overlay" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="sourceModalTitle">
+    <div class="modal-head">
+      <h2 id="sourceModalTitle"></h2>
+      <button type="button" id="sourceModalClose" class="ghost-btn" data-i18n-aria-label="modal.close">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M5 5l10 10M15 5L5 15"/>
+        </svg>
+      </button>
+    </div>
+    <div id="sourceModalMeta" class="hint"></div>
+    <div id="sourceModalBody" class="modal-content" role="status" data-i18n="modal.loading">Lädt…</div>
+
+    <div id="sourceModalDraft" class="draft-section" hidden>
+      <p class="draft-banner" data-i18n="modal.draftBanner">⚠ Entwurf zur Prüfung durch einen Menschen — R3 versendet nichts automatisch.</p>
+      <div id="sourceModalDraftBody" class="modal-content" role="status"></div>
+      <div id="sourceModalDraftCitations" class="citations"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" id="sourceModalDraftBtn" class="ghost-btn" hidden data-i18n="modal.createDraft">Antwortentwurf erstellen</button>
+      <button type="button" id="sourceModalDraftCopy" class="ghost-btn" hidden data-i18n="modal.copyDraft">Entwurf kopieren</button>
+      <a id="sourceModalDownload" class="ghost-btn" hidden download data-i18n="modal.downloadOriginal">Original herunterladen</a>
+    </div>
+  </div>
+</div>
+{{end}}

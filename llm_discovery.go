@@ -20,14 +20,16 @@ func mustJSON(v any) string {
 
 // llmCheckReq is the request structure for model/endpoint validation.
 type llmCheckReq struct {
-	BaseURL   string `json:"base_url"`
-	OpenAIKey string `json:"openai_api_key"`
+	BaseURL      string `json:"base_url"`
+	InferenceAPI string `json:"inference_api"`
+	OpenAIKey    string `json:"openai_api_key"`
 }
 
 // llmCheckResp is the response structure returned when validating an LLM endpoint.
 type llmCheckResp struct {
 	OK             bool     `json:"ok"`
 	BaseURL        string   `json:"base_url"`
+	APIStyle       string   `json:"api_style,omitempty"`
 	ProviderHint   string   `json:"provider_hint"`
 	Error          string   `json:"error,omitempty"`
 	Models         []string `json:"models,omitempty"`
@@ -67,12 +69,18 @@ func providerHintFromURL(base string) string {
 			return "KoboldCpp"
 		case "1337":
 			return "Jan"
+		case "8091":
+			return "GopherLLM"
 		}
 		return "Local LLM"
 	}
 
 	// Remote providers matched by hostname suffix.
 	switch {
+	case strings.Contains(host, "gopherllm"):
+		return "GopherLLM"
+	case strings.Contains(host, "rustyllm"):
+		return "RustyLLM"
 	case host == "api.openai.com" || strings.HasSuffix(host, ".openai.com"):
 		return "OpenAI"
 	case host == "api.anthropic.com" || strings.HasSuffix(host, ".anthropic.com"):
@@ -114,6 +122,8 @@ func providerHintFromURL(base string) string {
 		return "KoboldCpp"
 	case "1337":
 		return "Jan"
+	case "8091":
+		return "GopherLLM"
 	}
 
 	return "OpenAI-compatible"
@@ -198,7 +208,7 @@ func isLocalLLMBase(base string) bool {
 // localLLMCandidates lists base URLs for common local model runners, probed
 // in order by maybePreferOfflineLLM on startup when the configured endpoint
 // is unreachable. Covers LM Studio, llmster/llama.cpp/LocalAI (8080),
-// Ollama, vLLM, text-generation-webui, KoboldCpp and Jan.
+// Ollama, vLLM, text-generation-webui, KoboldCpp, Jan and GopherLLM/RustyLLM.
 func localLLMCandidates() []string {
 	return []string{
 		"http://localhost:1234",
@@ -208,6 +218,7 @@ func localLLMCandidates() []string {
 		"http://localhost:5000",
 		"http://localhost:5001",
 		"http://localhost:1337",
+		"http://localhost:8091",
 	}
 }
 

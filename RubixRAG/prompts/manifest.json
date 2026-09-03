@@ -1,0 +1,39 @@
+{
+  "skills": [
+    {
+      "filename": "skill_mechatronic.md",
+      "display_name": "Mechatronik",
+      "description": "Fachwissen zu mechatronischen Komponenten, Antriebstechnik und Wartungsverfahren",
+      "enabled": true,
+      "tags": ["mechatronik", "antrieb", "motor", "getriebe", "steuerung", "sps", "sensor", "wartung", "ersatzteil", "instandhaltung", "störung", "reparatur"]
+    },
+    {
+      "filename": "skill_ppe.md",
+      "display_name": "PSA / Schutzausrüstung",
+      "description": "Regeln und Prozesse für persönliche Schutzausrüstung nach DGUV und Betriebsanweisung",
+      "enabled": true,
+      "tags": ["psa", "schutzausruestung", "sicherheit", "arbeitsschutz", "helm", "handschuh", "gehoerschutz", "atemschutz", "schutzbrille", "warnweste"]
+    },
+    {
+      "filename": "skill_projektmanagement.md",
+      "display_name": "Projektmanagement",
+      "description": "Prozesse, Vorlagen und Eskalationswege für das interne Projektmanagement nach Rubix-Projektleitfaden",
+      "enabled": true,
+      "tags": ["projekt", "projektmanagement", "meilenstein", "termin", "statusbericht", "risiko", "besprechung", "protokoll", "budget", "ressource", "psp", "lenkungskreis"]
+    },
+    {
+      "filename": "skill_qualitaet.md",
+      "display_name": "Qualitätsmanagement",
+      "description": "QM-Prozesse, Normen (ISO 9001, IATF 16949) und Fehlerbehandlung gemäß Rubix-QM-Handbuch",
+      "enabled": true,
+      "tags": ["qualitaet", "qm", "iso", "norm", "reklamation", "fehler", "pruefung", "freigabe", "audit", "korrektiv", "8d", "spc", "aql", "wareneingangskontrolle", "erstmuster"]
+    },
+    {
+      "filename": "skill_einkauf.md",
+      "display_name": "Einkauf & Beschaffung",
+      "description": "Beschaffungsprozesse, Freigabegrenzen und Lieferantenmanagement gemäß Einkaufsrichtlinie",
+      "enabled": true,
+      "tags": ["einkauf", "beschaffung", "lieferant", "bestellung", "anfrage", "angebot", "rahmenvertrag", "banf", "freigabe", "budget", "rechnungsprüfung", "kreditkarte"]
+    }
+  ]
+}

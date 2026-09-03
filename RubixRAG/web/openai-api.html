@@ -1,0 +1,28 @@
+<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>R3 OpenAI-kompatible API</title><style>body{font:16px system-ui,sans-serif;line-height:1.55;max-width:900px;margin:40px auto;padding:0 20px;color:#18212b}code,pre{font-family:ui-monospace,monospace}pre{background:#15202b;color:#e8f1fa;padding:16px;border-radius:8px;overflow:auto}h1{color:#075985}.note{background:#ecfeff;border-left:4px solid #0891b2;padding:14px 18px;border-radius:4px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #d7dee5;padding:6px 10px;text-align:left;vertical-align:top}th{background:#f1f5f9}</style><body>
+<h1>R3 als OpenAI-kompatibler RAG-/Werkzeug-Endpunkt</h1>
+<p>Diese Schnittstelle macht R3 für Programme nutzbar, die bereits die OpenAI-Chat-Completions-API sprechen: Open WebUI, IDE-Assistenten, interne Agenten oder eigene Automatisierungen. Sie verwenden eine normale OpenAI-Base-URL, erhalten aber Antworten, die je nach konfiguriertem <strong>Endpoint</strong> mit Ihrer R3-Wissensbasis angereichert sind und/oder R3s Werkzeuge nutzen können.</p>
+<div class="note"><strong>Warum das nützlich ist:</strong> R3 ist dabei nicht bloß ein Modell-Endpunkt. Je Endpoint lässt sich unabhängig wählen, ob R3s Wissensbasis-Suche (RAG) und/oder die konfigurierten Live-Werkzeuge (SQL, Shop, REST) mitwirken — bis hin zu einem reinen LLM-Zugang ganz ohne beides. Mit einem fest vorgegebenen Backend (z. B. <code>azure</code>) wird ein Endpoint zugleich zum kontrollierten Proxy für Azure OpenAI: Das aufrufende Tool braucht weder Azure-URL noch Azure-Schlüssel.</div>
+<h2>Mehrere Endpoints, ein Port</h2>
+<p>Ein gemeinsamer Port bedient beliebig viele benannte Endpoints — jeder mit eigenem URL-Pfad und eigener Fähigkeits-Kombination:</p>
+<table><tr><th>Kombination</th><th>Typischer Einsatz</th></tr>
+<tr><td>Nichts (RAG aus, Werkzeuge aus)</td><td>Reiner LLM-Zugang — das Partner-Werkzeug bekommt genau das konfigurierte Standard-LLM, ohne R3-Wissen. Eigene System-Anweisungen des Aufrufers werden dabei unverändert durchgereicht.</td></tr>
+<tr><td>Nur RAG</td><td>Grounded Q&amp;A ohne Werkzeugaufrufe — wie der Chat-Tab.</td></tr>
+<tr><td>Nur Werkzeuge</td><td>Live-Datenzugriff (SQL/Shop/REST) ohne Wissensbasis-Kontext.</td></tr>
+<tr><td>RAG + Werkzeuge</td><td>Volle Fähigkeit — wie ein Agent, nur über die OpenAI-Schnittstelle nutzbar.</td></tr>
+</table>
+<p>Ein Endpoint ohne Namen wird unpräfigiert unter <code>/v1/chat/completions</code> bereitgestellt (praktisch, wenn nur ein Endpoint gebraucht wird); ein benannter Endpoint <code>partner-a</code> liegt unter <code>/partner-a/v1/chat/completions</code>.</p>
+<h2>Einrichtung</h2><ol><li>Unter <strong>Einstellungen → API-Zugriff</strong> einen API-Key anlegen.</li><li>Unter <strong>Einstellungen → OpenAI-kompatible API</strong> aktivieren, den gemeinsamen Port setzen, und mindestens einen Endpoint anlegen: Name (leer = Root-Pfad), RAG/Werkzeuge nach Bedarf, optional ein festes Backend und ein Zugriffs-Preset.</li><li>Im anderen Tool als Base URL <code>http(s)://R3-HOST:PORT[/ENDPOINT-NAME]/v1</code> und den R3-API-Key eintragen.</li></ol>
+<p>Verfügbare Modellnamen im <code>model</code>-Feld: <code>local</code>, <code>azure</code>, <code>openai</code>, <code>openrouter</code>, <code>claude</code>, <code>gemini</code> — sofern jeweils konfiguriert. Ist der Endpoint auf ein Backend fest eingestellt, wird das <code>model</code>-Feld des Aufrufers ignoriert. Ohne Modellangabe (und ohne feste Vorgabe) nutzt R3 das Standard-Chatprofil.</p>
+<h2>Schnelltest</h2><pre>curl http://R3-HOST:PORT/v1/chat/completions \
+  -H "Authorization: Bearer R3_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"azure","messages":[{"role":"user","content":"Was wissen wir über Lieferzeiten?"}]}'
+
+# Ein benannter Endpoint "partner-a":
+curl http://R3-HOST:PORT/partner-a/v1/chat/completions \
+  -H "Authorization: Bearer R3_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Welche Artikel sind aktuell auf Lager?"}]}'</pre>
+<p><code>stream: true</code> aktiviert Server-Sent Events. <code>GET /v1/models</code> (bzw. <code>/ENDPOINT-NAME/v1/models</code>) listet die für diesen Endpoint nutzbaren Profilnamen — bei fest vorgegebenem Backend nur dieses eine. Die API akzeptiert Textnachrichten und liefert eine Chat-Completions-kompatible Antwort; sie unterstützt absichtlich nur eine Antwort pro Request (<code>n: 1</code>).</p>
+<h2>Sicherheit</h2><p>Jeder Aufruf benötigt einen R3-API-Key, für jeden Endpoint. Das Zugriffs-Preset eines Endpoints begrenzt serverseitig sichtbare Quelltypen und Werkzeuge; der aufrufende Client kann diese Begrenzung nicht lockern. Ein Endpoint ohne RAG/Werkzeuge zieht kein Preset heran. Verwenden Sie für die Datenbank zusätzlich immer einen Nur-Lese-Login.</p>
+</body></html>

@@ -178,6 +178,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"base_url":                         s.BaseURL,
+				"inference_api":                    s.InferenceAPI,
 				"chat_base":                        s.ChatBase,
 				"embed_base":                       s.EmbedBase,
 				"chat_model":                       s.ChatModel,
@@ -220,6 +221,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			// Accept chat_base/embed_base and optional OpenAI key for mixed backends
 			var req struct {
 				BaseURL                      string `json:"base_url"`
+				InferenceAPI                 string `json:"inference_api"`
 				ChatBase                     string `json:"chat_base"`
 				EmbedBase                    string `json:"embed_base"`
 				ChatModel                    string `json:"chat_model"`
@@ -250,9 +252,11 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				return
 			}
 			// Normalize and fall back
+			inferenceAPISupplied := strings.TrimSpace(req.InferenceAPI) != ""
 			if req.BaseURL != "" {
 				req.BaseURL = normalizeBaseURL(req.BaseURL)
 			}
+			req.InferenceAPI = normalizeInferenceAPI(req.InferenceAPI)
 			if req.ChatBase == "" {
 				req.ChatBase = req.BaseURL
 			} else {
@@ -268,8 +272,13 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				return
 			}
 
-			// Warn on embedding model changes if DB already has data
+			// Warn on embedding model changes if DB already has data.  Keep an
+			// explicitly configured protocol when an older API client omits the
+			// new field from an otherwise valid settings update.
 			old := settings.get()
+			if !inferenceAPISupplied {
+				req.InferenceAPI = normalizeInferenceAPI(old.InferenceAPI)
+			}
 			if old.EmbedModel != "" && old.EmbedModel != req.EmbedModel && rag.docCount() > 0 && !req.Force {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(409)
@@ -287,6 +296,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 				settings.s.BaseURL = req.BaseURL
 			}
 			settings.s.ChatBase = req.ChatBase
+			settings.s.InferenceAPI = req.InferenceAPI
 			settings.s.EmbedBase = req.EmbedBase
 			settings.s.ChatModel = req.ChatModel
 			settings.s.EmbedModel = req.EmbedModel
@@ -365,8 +375,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			if key == "" {
 				key = os.Getenv("OPENAI_API_KEY")
 			}
-			chatLM := newLMClient(applied.ChatBase, applied.EmbedModel, applied.ChatModel, key)
-			embedLM := newLMClient(applied.EmbedBase, applied.EmbedModel, applied.ChatModel, key)
+			chatLM := newLMClientWithAPI(applied.ChatBase, applied.EmbedModel, applied.ChatModel, key, applied.InferenceAPI)
+			embedLM := newLMClientWithAPI(applied.EmbedBase, applied.EmbedModel, applied.ChatModel, key, applied.InferenceAPI)
 			var provider lmProvider
 			if applied.ChatBase == applied.EmbedBase {
 				provider = chatLM
@@ -384,6 +394,68 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 	})
+
+	// Persistent agent memory is deliberately separate from chat history. Only
+	// explicit UI/API actions can add or remove entries; model output and tool
+	// results never mutate it.
+	mux.HandleFunc("/api/memory", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			enabled, entries := settings.agentMemory()
+			writeJSON(w, map[string]any{"enabled": enabled, "items": entries, "limit": maxAgentMemoryEntries})
+		case http.MethodPost:
+			var req struct {
+				Content string `json:"content"`
+				Enabled *bool  `json:"enabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid JSON")
+				return
+			}
+			if req.Enabled != nil {
+				if err := settings.setAgentMemoryEnabled(*req.Enabled); err != nil {
+					writeError(w, http.StatusInternalServerError, "could not save memory setting")
+					return
+				}
+			}
+			var created *agentMemoryEntry
+			if strings.TrimSpace(req.Content) != "" {
+				entry, err := settings.addAgentMemory(req.Content)
+				if err != nil {
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				created = &entry
+			}
+			enabled, entries := settings.agentMemory()
+			writeJSON(w, map[string]any{"ok": true, "enabled": enabled, "items": entries, "created": created, "limit": maxAgentMemoryEntries})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "GET or POST only")
+		}
+	}))
+	mux.HandleFunc("/api/memory/delete", adminGuard(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "POST only")
+			return
+		}
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		removed, err := settings.removeAgentMemory(req.ID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if !removed {
+			writeError(w, http.StatusNotFound, "memory entry not found")
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	}))
 
 	// POST /api/settings/theme — lightweight theme switch (no LLM validation)
 	mux.HandleFunc("/api/settings/theme", func(w http.ResponseWriter, r *http.Request) {
@@ -677,7 +749,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			if key == "" {
 				key = os.Getenv("OPENAI_API_KEY")
 			}
-			tmp := newLMClient(base, "x", "x", key)
+			tmp := newLMClientWithAPI(base, "x", "x", key, inferenceAPIAuto)
 			models, err := tmp.listModels(base)
 			if err != nil {
 				c.OK = false
@@ -708,7 +780,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 		// Use live settings snapshot for base URL
 		cur := settings.get()
-		json.NewEncoder(w).Encode(map[string]any{"ok": ok, "base_url": cur.BaseURL, "message": msg})
+		json.NewEncoder(w).Encode(map[string]any{"ok": ok, "base_url": cur.BaseURL, "inference_api": cur.InferenceAPI, "message": msg})
 	})
 
 	// POST /api/llm/list-models — validate an endpoint and list models
@@ -735,9 +807,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		if key == "" {
 			key = os.Getenv("OPENAI_API_KEY")
 		}
-		tmp := newLMClient(req.BaseURL, "x", "x", key)
+		tmp := newLMClientWithAPI(req.BaseURL, "x", "x", key, req.InferenceAPI)
 		models, err := tmp.listModels(req.BaseURL)
-		resp := llmCheckResp{BaseURL: req.BaseURL, ProviderHint: providerHintFromURL(req.BaseURL)}
+		resp := llmCheckResp{BaseURL: req.BaseURL, APIStyle: tmp.inferenceAPI(), ProviderHint: providerHintFromURL(req.BaseURL)}
 		if err != nil {
 			resp.OK = false
 			resp.Error = err.Error()
@@ -839,6 +911,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			chats.setPersona(conv.ID, personaID)
 		}
 		chats.addMessage(conv.ID, "user", req.Question)
+		priorMessages := chats.historyBeforeLast(conv.ID, contextualRewriteHistoryMessages)
+		retrievalQuestion := req.Question
+		queryRewritten := false
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -912,6 +987,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		flusher.Flush()
 
 		log.Printf("ASK[%s] chat=%s mode=%s debug=%t deep=%t offline=%t auto_search=%t q=%q", reqID, conv.ID, mode, req.Debug, req.Deep, req.Offline, req.AutoSearch, req.Question)
+		if !req.Offline {
+			retrievalQuestion, queryRewritten = rewriteRetrievalQuery(r.Context(), rag.getLM(), req.Question, priorMessages)
+		}
 
 		// Prepare context: support Deep-Research mode with larger K
 		var ctxText string
@@ -920,9 +998,9 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		if req.Deep {
 			log.Printf("REQ %s: DEEP: k=%d (base=%d, total_chunks=%d)", reqID, usedK, rag.k, totalChunks)
-			ctxText, di, err = rag.prepareContextWithK(req.Question, req.Debug, usedK)
+			ctxText, di, err = rag.prepareContextWithKContext(r.Context(), retrievalQuestion, req.Debug, usedK)
 		} else {
-			ctxText, di, err = rag.prepareContext(req.Question, req.Debug)
+			ctxText, di, err = rag.prepareContextWithKContext(r.Context(), retrievalQuestion, req.Debug, rag.k)
 			if di != nil {
 				di.UsedK = usedK
 			}
@@ -951,6 +1029,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			Offline:            req.Offline,
 			Deep:               req.Deep,
 			Question:           req.Question,
+			RetrievalQuery:     retrievalQuestion,
+			QueryRewritten:     queryRewritten,
 			UsedK:              usedK,
 			BaseK:              rag.k,
 			ChunkSize:          s.ChunkSize,
@@ -999,11 +1079,12 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		}
 
 		// Normal mode: call LM with SSE streaming via StreamingEngine
-		allTools := append(customAPIs.allTools(), modules.enabledTools()...)
-		if connectors != nil {
-			allTools = append(allTools, connectors.enabledToolDefs()...)
-		}
-		allTools = filterToolsForRole(allTools, s.ActiveRole)
+		engine := newStreamingEngine(rag.getLM(), rag, settings, customAPIs, modules, connectors, connectorExec)
+		// Only capabilities that pass the same autonomous-execution policy as
+		// the engine are advertised to the model. Manual and mutating actions
+		// remain available through their explicit workflows, not via free-form
+		// model output.
+		allTools := engine.autonomousToolDefs(s, req.AutoSearch)
 		// build system prompt; in deep mode add research instructions
 		var systemPrompt string
 		systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep, s)
@@ -1013,10 +1094,16 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		// Validate system prompt isn't absurdly long
 		if len(systemPrompt) > 32000 {
-			log.Printf("REQ %s: WARN system prompt too long (%d chars), truncating context", reqID, len(systemPrompt))
+			log.Printf("REQ %s: WARN system prompt too long (%d chars), compacting context", reqID, len(systemPrompt))
 			if len(ctxText) > 5000 {
-				ctxText = ctxText[:5000] + "\n[... Kontext gekürzt ...]"
+				ctxText = compactAssembledContext(ctxText, 5000)
+				if di != nil {
+					di.ContextTruncated = true
+				}
 				systemPrompt = buildToolSystemPrompt(ctxText, allTools, req.Deep, s)
+				if personaPrompt != "" {
+					systemPrompt = personaPrompt + "\n\n" + systemPrompt
+				}
 			}
 		}
 		debugBase.SystemPromptChars = len(systemPrompt)
@@ -1088,7 +1175,6 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 
 		// Run the streaming engine
 		sw := &sseWriter{w: w, flusher: flusher}
-		engine := newStreamingEngine(rag.getLM(), rag, settings, customAPIs, modules, connectors, connectorExec)
 		engReq := EngineRequest{
 			RequestID:    reqID,
 			Question:     req.Question,
@@ -1098,7 +1184,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			Debug:        req.Debug,
 			PlanFirst:    req.Agent || s.AgentPlannerEnabled,
 		}
-		answerStr, engineErr := engine.Run(context.Background(), engReq, sw, tel)
+		answerStr, engineErr := engine.Run(r.Context(), engReq, sw, tel)
 		if di != nil && len(di.Citations) > 0 {
 			answerStr = ensureCitedAnswer(answerStr, di.Citations)
 			if !validateCitationsAgainstSources(answerStr, di.Citations) {
@@ -1121,6 +1207,24 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		chats.addMessageWithMeta(conv.ID, "assistant", answerStr, "", s.ChatModel, modelMeta)
 	}))
 
+	// POST /api/feedback — record a thumbs-up/down for the cited documents of
+	// one answer. The handler stores identifiers only and does not alter live
+	// retrieval ranking.
+	mux.HandleFunc("/api/feedback", adminGuard(feedbackHandler(rag, settings)))
+	// GET /api/debug/feedback — aggregate collected feedback for administrators.
+	mux.HandleFunc("/api/debug/feedback", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		summaries, err := rag.feedbackSummaries(100)
+		if err != nil {
+			http.Error(w, "could not load feedback", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, summaries)
+	}))
+
 	// GET /api/tools — list available tools
 	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1139,8 +1243,8 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req toolRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tool == "" || req.Query == "" {
-			http.Error(w, "missing tool or query", 400)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Tool) == "" || (strings.TrimSpace(req.Query) == "" && len(req.Arguments) == 0) {
+			http.Error(w, "missing tool input", 400)
 			return
 		}
 
@@ -1153,7 +1257,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		var text string
 		var source string
 		var fetchErr error
-		text, source, fetchErr = executeToolRequest(req, s, rag, customAPIs, modules, connectors, connectorExec)
+		text, source, fetchErr = executeToolRequestWithContext(r.Context(), req, s, rag, customAPIs, modules, connectors, connectorExec)
 
 		if fetchErr != nil {
 			http.Error(w, fmt.Sprintf("Tool %q fehlgeschlagen: %v", req.Tool, fetchErr), 500)
@@ -1184,6 +1288,7 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		json.NewEncoder(w).Encode(map[string]any{
 			"tool":       req.Tool,
 			"query":      req.Query,
+			"arguments":  req.Arguments,
 			"source":     source,
 			"chars":      len(text),
 			"chunks":     len(chunks),
@@ -2315,13 +2420,35 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 		})
 	}))
 
-	// GET /api/debug/vector-cache — tinySQL v0.19.1 vector cache telemetry.
+	// GET /api/debug/vector-cache — tinySQL v0.49.0 vector cache telemetry.
 	mux.HandleFunc("/api/debug/vector-cache", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "GET only", http.StatusMethodNotAllowed)
 			return
 		}
 		writeJSON(w, tinysql.VectorCacheAnalytics())
+	}))
+
+	// GET /api/debug/database-snapshot — portable tinySQL snapshot for an
+	// administrator-operated backup. SaveToWriter is atomic from the caller's
+	// perspective and avoids relying on the configured storage backend's files.
+	mux.HandleFunc("/api/debug/database-snapshot", requireAdminSession(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		var snapshot bytes.Buffer
+		rag.dbMu.Lock()
+		err := tinysql.SaveToWriter(rag.db, &snapshot)
+		rag.dbMu.Unlock()
+		if err != nil {
+			http.Error(w, "create database snapshot: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="tinyrag.snapshot.gob"`)
+		w.Header().Set("Content-Length", strconv.Itoa(snapshot.Len()))
+		_, _ = w.Write(snapshot.Bytes())
 	}))
 
 	// POST /api/import/csv — bulk-import a CSV/TSV file as RAG chunks (admin only).
@@ -2660,19 +2787,20 @@ func runWebServer(rag *ragSystem, addr string, settings *settingsStore, chats *c
 			return
 		}
 		var req struct {
-			Article string `json:"article"`
+			DocumentID string `json:"document_id"`
+			Article    string `json:"article"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Article == "" {
-			http.Error(w, "missing article", 400)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.DocumentID == "" && req.Article == "") {
+			http.Error(w, "missing document_id or article", 400)
 			return
 		}
 		s := settings.get()
-		if err := rag.deleteSourceForRole(req.Article, s.ActiveRole); err != nil {
+		if err := rag.deleteSourceForRole(req.DocumentID, req.Article, s.ActiveRole); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"deleted": req.Article, "total": rag.docCountForRole(s.ActiveRole)})
+		json.NewEncoder(w).Encode(map[string]any{"deleted": firstNonEmpty(req.DocumentID, req.Article), "total": rag.docCountForRole(s.ActiveRole)})
 	})
 
 	// GET /api/chats — list conversations
@@ -3608,6 +3736,7 @@ func main() {
 
 	// Defaults for first run (written to settings.json if it doesn't exist)
 	urlFlag := flag.String("url", "http://localhost:1234", "Default OpenAI-compatible base URL (first run only)")
+	inferenceAPIFlag := flag.String("inference-api", "", "Inference wire protocol: auto, openai or ollama (overrides settings when provided)")
 	embedModel := flag.String("embed-model", "text-embedding-nomic-embed-text-v1.5", "Default embedding model (first run only)")
 	chatModel := flag.String("chat-model", "mistralai/ministral-3-14b-reasoning", "Default chat model (first run only)")
 	k := flag.Int("k", 5, "Top-K results (first run only)")
@@ -3640,6 +3769,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load settings: %v", err)
 	}
+	if strings.TrimSpace(*inferenceAPIFlag) != "" {
+		settings.mu.Lock()
+		settings.s.InferenceAPI = normalizeInferenceAPI(*inferenceAPIFlag)
+		_ = settings.saveLocked()
+		settings.mu.Unlock()
+	}
 
 	// Provisioning one-shots: pure settings/config operations that need
 	// neither an LLM endpoint nor the RAG store, so they run before the LLM
@@ -3667,6 +3802,7 @@ func main() {
 		demoBase := "http://" + *demoLLMAddr
 		settings.mu.Lock()
 		settings.s.BaseURL = demoBase
+		settings.s.InferenceAPI = inferenceAPIOpenAI
 		settings.s.ChatBase = demoBase
 		settings.s.EmbedBase = demoBase
 		settings.s.ChatModel = modelName
@@ -3693,8 +3829,8 @@ func main() {
 		embedBase = s.BaseURL
 	}
 
-	chatLM := newLMClient(chatBase, s.EmbedModel, s.ChatModel, openaiKey)
-	embedLM := newLMClient(embedBase, s.EmbedModel, s.ChatModel, openaiKey)
+	chatLM := newLMClientWithAPI(chatBase, s.EmbedModel, s.ChatModel, openaiKey, s.InferenceAPI)
+	embedLM := newLMClientWithAPI(embedBase, s.EmbedModel, s.ChatModel, openaiKey, s.InferenceAPI)
 
 	fmt.Printf("Connecting to chat endpoint (%s) and embed endpoint (%s)… ", chatBase, embedBase)
 	var llmAvailable = false

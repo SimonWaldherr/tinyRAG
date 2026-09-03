@@ -1,0 +1,49 @@
+# Konfiguration fuer /etc/init.d/r3 (siehe deploy/r3.init).
+# Auf dem Server nach /etc/default/r3 kopieren, NICHT nach /etc/init.d/ -
+# das init-Skript sourced diese Datei, wenn sie dort liegt.
+#
+# Diese Datei enthaelt (potenziell) Secrets (AZURE_OPENAI_API_KEY,
+# R3_ADMIN_PASSWORD) - deshalb:
+#   chown root:root /etc/default/r3 && chmod 600 /etc/default/r3
+# und NIEMALS in git einchecken (diese Vorlage hier im Repo enthaelt bewusst
+# keine echten Werte).
+
+# --- Pfade ---------------------------------------------------------------
+# Installationsverzeichnis auf dem Server (siehe ANLEITUNG.md/README.md
+# "Status": aktuell /mnt/application/R3).
+R3_DIR=/mnt/application/R3
+R3_BIN="$R3_DIR/R3"
+R3_SETTINGS="$R3_DIR/settings.json"
+R3_LOGFILE="$R3_DIR/r3.log"
+R3_PIDFILE=/var/run/r3.pid
+
+# --- Start-Flags -----------------------------------------------------------
+# -storage-backend/-storage-path/-storage-mode/-storage-max-mem-mb wirken nur
+# beim allerersten Start (seeden settings.json) - nach dem ersten Start liest
+# R3 die storage-Sektion aus settings.json, diese Flags koennen dann bleiben
+# oder weg, ohne Effekt.
+R3_ADDR=:8090
+R3_STORAGE_BACKEND=tinysql
+R3_STORAGE_PATH=r3-data
+
+# Zusaetzliche Flags nach Bedarf (z.B. -lang, -chunk, -k) - leer lassen,
+# wenn settings.json das schon abdeckt (nur beim ersten Start relevant).
+R3_EXTRA_ARGS=""
+
+# --- Verbose-Logging ---------------------------------------------------
+# 1 aktiviert -verbose (jeder Request, jeder Embed/Chat-Call inkl.
+# Provider/Modell/Base-URL, jeder Import-Schritt - siehe README.md
+# "Running"). 0 fuer den normalen Produktivbetrieb (still).
+R3_VERBOSE=0
+
+# --- Ausfuehrender User --------------------------------------------------
+# Aktuell laeuft die Produktivinstanz noch als root (siehe README.md
+# "Deployment" - Wechsel auf einen dedizierten unprivilegierten Service-User
+# ist geplant, aber noch nicht entschieden/umgesetzt). Sobald der User
+# feststeht: hier eintragen, R3_DIR/R3_LOGFILE/R3_PIDFILE-Berechtigungen
+# entsprechend anpassen.
+R3_USER=root
+
+# --- Secrets (nur falls benoetigt, sonst auskommentiert lassen) ----------
+# AZURE_OPENAI_API_KEY=
+# R3_ADMIN_PASSWORD=

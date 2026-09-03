@@ -37,21 +37,29 @@ type vectorChunkStore interface {
 	checkArticleExists(documentID, roleScope string) (bool, error)
 	// insertChunks persists a batch of pre-embedded chunks.
 	insertChunks(chunks []storedChunk) error
+	// replaceDocumentChunks safely updates the visible chunks for one document
+	// after all replacement embeddings have been prepared. A failed write must
+	// leave the previous document available.
+	replaceDocumentChunks(documentID, roleScope string, chunks []storedChunk) error
 	// searchTopK executes a cosine-similarity search and returns up to limit hits.
 	// Returned hits have Score = raw cosine similarity; R3Score is zero and must be
 	// filled in by the caller.
 	searchTopK(vec []float64, embedModel, roleFilter string, limit int) ([]retrievalHit, error)
-	// fetchNeighborContent retrieves the text of a specific chunk by article+index.
-	fetchNeighborContent(article string, chunkIdx int, roleFilter string) (string, bool)
+	// fetchNeighborContent retrieves a neighboring chunk. documentID is the
+	// authoritative source identity; article is used only for legacy rows that
+	// have no document ID.
+	fetchNeighborContent(documentID, article string, chunkIdx int, roleFilter string) (string, bool)
 	// loadArticleChunks returns all chunks for an article as a generic row map.
 	// Keys: content, article, chunk_idx, chunk_id, document_id, source_system,
 	// source_type, source_title, source_url, sensitivity, trust_level,
 	// updated_at, open_link_allowed.
 	loadArticleChunks(article, roleFilter string) ([]map[string]any, error)
-	// listSources returns distinct article titles with their chunk counts.
+	// listSources returns source documents with their chunk counts. The result
+	// includes document_id and article display metadata.
 	listSources(roleFilter string) []map[string]any
-	// deleteSource removes all chunks that belong to article and match roleFilter.
-	deleteSource(article, roleFilter string) error
+	// deleteSource removes one document when documentID is available. article is
+	// retained as a legacy fallback for rows without a stable document ID.
+	deleteSource(documentID, article, roleFilter string) error
 	// countChunks returns the number of stored chunks visible to roleFilter.
 	countChunks(roleFilter string) int
 	// save persists the store to disk (no-op for memory-only backends).
@@ -262,6 +270,15 @@ func (s *tinySQLChunkStore) checkArticleExists(documentID, roleScope string) (bo
 }
 
 func (s *tinySQLChunkStore) insertChunks(chunks []storedChunk) error {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	return s.insertChunksLocked(chunks)
+}
+
+// insertChunksLocked persists one batch while the shared database lock is
+// already held. Keeping this separate lets replaceDocumentChunks either commit
+// a full replacement or remove only its newly written batches on failure.
+func (s *tinySQLChunkStore) insertChunksLocked(chunks []storedChunk) error {
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -295,7 +312,6 @@ func (s *tinySQLChunkStore) insertChunks(chunks []storedChunk) error {
 	if err != nil {
 		return fmt.Errorf("parse bulk insert: %w", err)
 	}
-	s.dbMu.Lock()
 	_, execErr := tinysql.Execute(context.Background(), s.db, "default", st)
 	if execErr != nil && strings.Contains(strings.ToLower(execErr.Error()), "unknown column") {
 		// Fallback to legacy schema for storage engines without all R3 columns.
@@ -304,9 +320,96 @@ func (s *tinySQLChunkStore) insertChunks(chunks []storedChunk) error {
 			_, execErr = tinysql.Execute(context.Background(), s.db, "default", lst)
 		}
 	}
-	s.dbMu.Unlock()
 	if execErr != nil {
 		return fmt.Errorf("exec bulk insert: %w", execErr)
+	}
+	return nil
+}
+
+// replaceDocumentChunks coordinates a safe in-process replacement: it
+// preserves the previous document until every new batch has been written. The
+// shared lock prevents readers of this process from observing a partial source.
+// If writing or cleanup fails, old chunks stay available and newly inserted
+// chunks are removed on a best-effort basis.
+func (s *tinySQLChunkStore) replaceDocumentChunks(documentID, roleScope string, chunks []storedChunk) error {
+	if len(chunks) == 0 {
+		return fmt.Errorf("replacement requires at least one chunk")
+	}
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+
+	oldIDs, err := s.documentChunkIDsLocked(documentID, roleScope)
+	if err != nil {
+		return err
+	}
+	newIDs := make([]int, 0, len(chunks))
+	const batchSize = 16
+	for start := 0; start < len(chunks); start += batchSize {
+		end := start + batchSize
+		if end > len(chunks) {
+			end = len(chunks)
+		}
+		if err := s.insertChunksLocked(chunks[start:end]); err != nil {
+			_ = s.deleteChunkIDsLocked(newIDs)
+			return fmt.Errorf("write replacement batch %d: %w", start/batchSize, err)
+		}
+		for _, chunk := range chunks[start:end] {
+			newIDs = append(newIDs, chunk.ID)
+		}
+	}
+	if err := s.deleteChunkIDsLocked(oldIDs); err != nil {
+		cleanupErr := s.deleteChunkIDsLocked(newIDs)
+		if cleanupErr != nil {
+			return fmt.Errorf("remove previous chunks: %w (also could not clean replacement: %v)", err, cleanupErr)
+		}
+		return fmt.Errorf("remove previous chunks: %w", err)
+	}
+	return nil
+}
+
+func (s *tinySQLChunkStore) documentChunkIDsLocked(documentID, roleScope string) ([]int, error) {
+	q := fmt.Sprintf(
+		"SELECT id FROM chunks WHERE document_id = '%s' AND role_scope = '%s'",
+		escapeSQ(documentID), escapeSQ(roleScope),
+	)
+	stmt, err := tinysql.ParseSQL(q)
+	if err != nil {
+		return nil, err
+	}
+	rs, err := tinysql.Execute(context.Background(), s.db, "default", stmt)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(rs.Rows))
+	for _, row := range rs.Rows {
+		if id, ok := tinysql.GetVal(row, "id"); ok {
+			ids = append(ids, resultInt(id))
+		}
+	}
+	return ids, nil
+}
+
+func (s *tinySQLChunkStore) deleteChunkIDsLocked(ids []int) error {
+	const batchSize = 128
+	for start := 0; start < len(ids); start += batchSize {
+		end := start + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		predicates := make([]string, 0, end-start)
+		for _, id := range ids[start:end] {
+			predicates = append(predicates, fmt.Sprintf("id = %d", id))
+		}
+		if len(predicates) == 0 {
+			continue
+		}
+		stmt, err := tinysql.ParseSQL("DELETE FROM chunks WHERE " + strings.Join(predicates, " OR "))
+		if err != nil {
+			return err
+		}
+		if _, err := tinysql.Execute(context.Background(), s.db, "default", stmt); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -467,8 +570,8 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, embedModel, roleFilter str
 			candidateLimit = 64
 		}
 		q = fmt.Sprintf(
-			"SELECT %s, 1.0 - _vec_distance AS score FROM VEC_SEARCH('chunks', 'embedding', VEC_FROM_JSON('%s'), %d, 'cosine', 'flat')"+
-				" WHERE embed_model = '%s' AND %s ORDER BY _vec_distance ASC LIMIT %d",
+			"SELECT %s, _vec_similarity AS score FROM VEC_SEARCH('chunks', 'embedding', VEC_FROM_JSON('%s'), %d, 'cosine', 'flat')"+
+				" WHERE embed_model = '%s' AND %s ORDER BY _vec_similarity DESC LIMIT %d",
 			selectColumns, escapeSQ(vecJSON(vec)), candidateLimit, escapeSQ(embedModel), roleFilter, limit,
 		)
 	}
@@ -509,11 +612,110 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, embedModel, roleFilter str
 	return hits, nil
 }
 
-func (s *tinySQLChunkStore) fetchNeighborContent(article string, chunkIdx int, roleFilter string) (string, bool) {
+// searchFullTextCandidates returns an ACL-filtered, keyword-ranked candidate
+// set for a pre-sanitized FTS query. It is deliberately separate from
+// searchTopK: callers may treat it as an optional enrichment and retain
+// vector-only retrieval if the full-text capability is unavailable.
+func (s *tinySQLChunkStore) searchFullTextCandidates(ftsQuery string, vec []float64, embedModel, roleFilter string, limit int) ([]retrievalHit, error) {
+	ftsQuery = strings.TrimSpace(ftsQuery)
+	if ftsQuery == "" || limit < 1 {
+		return nil, nil
+	}
+	selectColumns := "id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type," +
+		" source_title, source_url, source_object_id, source_version, role_scope, acl_groups," +
+		" business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score," +
+		" feedback_score, imported_at, updated_at, content_hash, open_link_allowed"
 	q := fmt.Sprintf(
-		"SELECT content FROM chunks WHERE article = '%s' AND chunk_idx = %d AND %s",
-		escapeSQ(article), chunkIdx, roleFilter,
+		"SELECT %s,"+
+			" VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score, _fts_rank"+
+			" FROM FTS_SEARCH('chunks', '%s', %d, 'content')"+
+			" WHERE embed_model = '%s' AND (%s) ORDER BY _fts_rank ASC LIMIT %d",
+		selectColumns,
+		escapeSQ(vecJSON(vec)),
+		escapeSQ(ftsQuery),
+		limit,
+		escapeSQ(embedModel),
+		roleFilter,
+		limit,
 	)
+	stmt, err := tinysql.ParseSQL(q)
+	if err != nil {
+		return nil, err
+	}
+	s.dbMu.Lock()
+	rs, err := tinysql.Execute(context.Background(), s.db, "default", stmt)
+	s.dbMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	searchKeys := []string{
+		"id", "content", "article", "chunk_idx", "chunk_id", "document_id",
+		"source_system", "source_type", "source_title", "source_url", "source_object_id",
+		"source_version", "role_scope", "acl_groups", "business_owner", "sensitivity",
+		"trust_level", "source_quality", "freshness_score", "quality_score", "feedback_score",
+		"imported_at", "updated_at", "content_hash", "open_link_allowed", "score", "_fts_rank",
+	}
+	hits := make([]retrievalHit, 0, len(rs.Rows))
+	for _, row := range rs.Rows {
+		m := tinySQLRowToMap(row, searchKeys)
+		score := resultFloat(m["score"])
+		hit := rowToRetrievalHit(m, score)
+		hit.FullTextRank = resultInt(m["_fts_rank"])
+		hits = append(hits, hit)
+	}
+	return hits, nil
+}
+
+func resultFloat(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case string:
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func resultInt(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(v))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (s *tinySQLChunkStore) fetchNeighborContent(documentID, article string, chunkIdx int, roleFilter string) (string, bool) {
+	var q string
+	if documentID = strings.TrimSpace(documentID); documentID != "" {
+		// Do not fall back to title matching when the authoritative identity is
+		// known. Missing context is safer than mixing two same-titled sources.
+		q = fmt.Sprintf(
+			"SELECT content FROM chunks WHERE document_id = '%s' AND chunk_idx = %d AND %s",
+			escapeSQ(documentID), chunkIdx, roleFilter,
+		)
+	} else {
+		q = fmt.Sprintf(
+			"SELECT content FROM chunks WHERE article = '%s' AND chunk_idx = %d AND %s",
+			escapeSQ(article), chunkIdx, roleFilter,
+		)
+	}
 	st, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return "", false
@@ -562,7 +764,7 @@ func (s *tinySQLChunkStore) loadArticleChunks(article, roleFilter string) ([]map
 
 func (s *tinySQLChunkStore) listSources(roleFilter string) []map[string]any {
 	q := fmt.Sprintf(
-		"SELECT article, COUNT(*) AS cnt FROM chunks WHERE %s GROUP BY article ORDER BY article",
+		"SELECT document_id, article, COUNT(*) AS cnt FROM chunks WHERE %s GROUP BY document_id, article ORDER BY article, document_id",
 		roleFilter,
 	)
 	st, err := tinysql.ParseSQL(q)
@@ -577,23 +779,36 @@ func (s *tinySQLChunkStore) listSources(roleFilter string) []map[string]any {
 	}
 	var out []map[string]any
 	for _, row := range rs.Rows {
-		art, ok1 := tinysql.GetVal(row, "article")
-		cnt, ok2 := tinysql.GetVal(row, "cnt")
-		if ok1 && ok2 {
-			out = append(out, map[string]any{
+		documentID, hasDocumentID := tinysql.GetVal(row, "document_id")
+		art, hasArticle := tinysql.GetVal(row, "article")
+		cnt, hasCount := tinysql.GetVal(row, "cnt")
+		if hasArticle && hasCount {
+			source := map[string]any{
 				"article": fmt.Sprintf("%v", art),
 				"chunks":  cnt,
-			})
+			}
+			if hasDocumentID {
+				source["document_id"] = fmt.Sprintf("%v", documentID)
+			}
+			out = append(out, source)
 		}
 	}
 	return out
 }
 
-func (s *tinySQLChunkStore) deleteSource(article, roleFilter string) error {
-	q := fmt.Sprintf(
-		"DELETE FROM chunks WHERE article = '%s' AND %s",
-		escapeSQ(article), roleFilter,
-	)
+func (s *tinySQLChunkStore) deleteSource(documentID, article, roleFilter string) error {
+	var q string
+	if documentID = strings.TrimSpace(documentID); documentID != "" {
+		q = fmt.Sprintf(
+			"DELETE FROM chunks WHERE document_id = '%s' AND %s",
+			escapeSQ(documentID), roleFilter,
+		)
+	} else {
+		q = fmt.Sprintf(
+			"DELETE FROM chunks WHERE article = '%s' AND %s",
+			escapeSQ(article), roleFilter,
+		)
+	}
 	st, err := tinysql.ParseSQL(q)
 	if err != nil {
 		return err
@@ -684,17 +899,20 @@ func (s *sqliteVecChunkStore) checkArticleExists(_, _ string) (bool, error) {
 func (s *sqliteVecChunkStore) insertChunks(_ []storedChunk) error {
 	return errSQLiteVecUnavailable
 }
+func (s *sqliteVecChunkStore) replaceDocumentChunks(_, _ string, _ []storedChunk) error {
+	return errSQLiteVecUnavailable
+}
 func (s *sqliteVecChunkStore) searchTopK(_ []float64, _, _ string, _ int) ([]retrievalHit, error) {
 	return nil, errSQLiteVecUnavailable
 }
-func (s *sqliteVecChunkStore) fetchNeighborContent(_ string, _ int, _ string) (string, bool) {
+func (s *sqliteVecChunkStore) fetchNeighborContent(_, _ string, _ int, _ string) (string, bool) {
 	return "", false
 }
 func (s *sqliteVecChunkStore) loadArticleChunks(_, _ string) ([]map[string]any, error) {
 	return nil, errSQLiteVecUnavailable
 }
 func (s *sqliteVecChunkStore) listSources(_ string) []map[string]any { return nil }
-func (s *sqliteVecChunkStore) deleteSource(_, _ string) error        { return errSQLiteVecUnavailable }
+func (s *sqliteVecChunkStore) deleteSource(_, _, _ string) error     { return errSQLiteVecUnavailable }
 func (s *sqliteVecChunkStore) countChunks(_ string) int              { return 0 }
 func (s *sqliteVecChunkStore) save() error                           { return errSQLiteVecUnavailable }
 func (s *sqliteVecChunkStore) close() error                          { return nil }

@@ -1,0 +1,880 @@
+{{define "tab-settings"}}
+    <section id="tab-settings" class="panel" role="tabpanel" aria-labelledby="navtab-settings">
+      <header class="page-head">
+        <h1 data-i18n="page.settings.title">Einstellungen</h1>
+        <p class="hint" data-i18n="page.settings.hint">Backends, Routing, Retrieval und Import-Verhalten.</p>
+        <div class="page-head-actions">
+          <div class="settings-search-wrap">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="6.5"></circle><path d="M18 18l-4.3-4.3"></path></svg>
+            <input type="search" id="settingsSearch" class="settings-search" placeholder="Einstellungen durchsuchen …" title="Filtert die Abschnitte unten nach Titel und Feldbeschriftungen — passende Abschnitte werden aufgeklappt, alle anderen ausgeblendet. Feld leeren stellt die normale Ansicht wieder her." data-i18n-placeholder="settings.search.placeholder" data-i18n-title="settings.search.title">
+          </div>
+          <button type="button" id="settingsReload" class="ghost-btn" title="Lädt den aktuell gespeicherten Stand neu. Ungespeicherte Änderungen in diesem Tab gehen dabei verloren." data-i18n-title="settings.reload.title" data-i18n="settings.reload.label">Neu laden</button>
+          <button type="button" id="settingsExpandAll" class="ghost-btn" title="Klappt alle Abschnitte unten auf." data-i18n-title="settings.expandAll.title" data-i18n="settings.expandAll.label">Alle aufklappen</button>
+          <button type="button" id="settingsCollapseAll" class="ghost-btn" title="Klappt alle Abschnitte unten ein." data-i18n-title="settings.collapseAll.title" data-i18n="settings.collapseAll.label">Alle einklappen</button>
+        </div>
+      </header>
+
+      <nav class="settings-jumpnav" aria-label="Abschnitte springen" data-i18n-aria-label="settings.jumpnav.ariaLabel">
+        <a href="#settings-group-general" data-i18n="settings.jumpnav.general">Allgemein</a>
+        <a href="#settings-group-llm" data-i18n="settings.jumpnav.llm">LLM &amp; Antworten</a>
+        <a href="#settings-group-storage" data-i18n="settings.jumpnav.storage">Speicher</a>
+        <a href="#settings-group-connectors" data-i18n="settings.jumpnav.connectors">Datenquellen</a>
+        <a href="#settings-group-tools" data-i18n="settings.jumpnav.tools">Werkzeuge</a>
+        <a href="#settings-group-access" data-i18n="settings.jumpnav.access">Zugriff &amp; Sicherheit</a>
+        <a href="#settings-group-external" data-i18n="settings.jumpnav.external">Externe Schnittstellen</a>
+        <a href="#settings-group-log" data-i18n="settings.jumpnav.log">Protokoll</a>
+      </nav>
+
+      <div class="settings-group" id="settings-group-general">
+      <h2 class="settings-group-title" data-i18n="settings.group.general">Allgemein</h2>
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="settings.section.languageUi">Sprache &amp; Oberfläche</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section">
+            <label title="Sprache der Weboberfläche für alle Nutzer:innen dieses Servers — kein Nutzer-Einzelprofil, gilt serverweit. Wirkt sofort nach 'Einstellungen speichern' (kein Neustart nötig)." data-i18n-title="settings.langUi.title"><span data-i18n="settings.langUi.label">Oberflächensprache</span>
+              <select id="s_lang">
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+                <option value="it">Italiano</option>
+              </select>
+            </label>
+          </div>
+          <div class="settings-section span-2">
+            <h3>Speicherorte (serverseitig)</h3>
+            <p class="hint">Wo R3 bestimmte Dateien auf dem Server ablegt/liest — nur relevant für Backup, Umzug auf ein anderes Laufwerk, oder eine mehrfache Installation. Änderungen wirken erst nach einem Neustart.</p>
+            <label title="Ordner mit dem globalen System-Prompt (index.md) und den skill_*.md-Dateien, die im Prompts-Tab bearbeitet werden. Ändern zeigt R3 nur auf einen anderen Ordner — bereits vorhandene Dateien am alten Ort werden dabei nicht automatisch mitverschoben.">Prompts-/Skills-Ordner <input id="s_prompts_dir" placeholder="prompts"></label>
+            <label title="Datei, in der persönliche Voreinstellungen je angemeldeter Person gespeichert werden (aktuell: die eigene Sprachauswahl, falls abweichend vom Server-Standard oben).">Persönliche Voreinstellungen (Datei) <input id="s_user_prefs_path" placeholder="r3-userprefs.db"></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2>Darstellung (Chat/Agent-Diagramme)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Woher der Browser die Bibliotheken für Diagramme (Mermaid, z. B. Flussdiagramme) und Datenvisualisierungen (d3.js) lädt, wenn das Sprachmodell im Chat/Agent ein solches Diagramm zeichnet. Nur bei einem abgeschotteten Netz ohne Internetzugriff relevant — im Regelfall unverändert lassen.</p>
+            <label title="Adresse, von der die Mermaid-Bibliothek geladen wird (Standard: öffentliches CDN). Bei einem Server ohne Internetzugriff hier eine intern gehostete Kopie eintragen, oder einen Bindestrich '-' eintragen, um Diagramme ganz zu deaktivieren (der Diagramm-Quelltext wird dann stattdessen als Text angezeigt). Leer = Standard.">Mermaid-Bibliothek (URL) <input id="s_render_mermaid_url" placeholder="leer = Standard, - = deaktiviert"></label>
+            <label title="Adresse, von der die d3.js-Bibliothek für Datenvisualisierungen geladen wird. Gleiche Regeln wie bei der Mermaid-Bibliothek links: eigene URL für ein abgeschottetes Netz, '-' zum Deaktivieren, leer = Standard.">d3.js-Bibliothek (URL) <input id="s_render_d3_url" placeholder="leer = Standard, - = deaktiviert"></label>
+          </div>
+        </div>
+      </details>
+      </div>
+
+      <div class="settings-group" id="settings-group-llm">
+      <h2 class="settings-group-title" data-i18n="settings.group.llm">LLM &amp; Antworten</h2>
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="settings.section.llmBackends">LLM-Backends &amp; Routing</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section">
+            <h3>LLM-Backend: Lokal</h3>
+            <p class="hint">Ein OpenAI-kompatibler Server (LM Studio, Ollama, vLLM, …).</p>
+            <label title="Basis-URL des lokalen OpenAI-kompatiblen Servers, z. B. http://localhost:1234 für LM Studio. Ohne /v1-Suffix angeben — R3 ergänzt das selbst und entfernt ein versehentlich mit eingegebenes /v1 automatisch.">Base URL <input id="local_base_url" placeholder="http://localhost:1234"></label>
+            <label title="Name/ID des Chat-Modells, exakt wie es der lokale Server erwartet (z. B. mistralai/ministral-3-3b bei LM Studio). Das Modell muss dort bereits geladen sein — sonst schlagen Chat-Anfragen mit einem Verbindungs-/Modellfehler fehl. „Modelle laden&quot; unten befüllt die Auswahlliste automatisch, statt den Namen blind eintippen zu müssen.">Chat-Modell <input id="local_chat_model" list="localModelList"></label>
+            <label title="Name/ID des Embedding-Modells für dieses Backend. Wichtig: Wird dieser Wert nachträglich geändert, sind bereits gespeicherte Chunks noch mit dem alten Modell embedded und werden bei der Suche nicht mehr gefunden, bis sie neu importiert wurden — Modell also nicht leichtfertig wechseln.">Embedding-Modell <input id="local_embed_model" list="localModelList"></label>
+            <datalist id="localModelList"></datalist>
+            <label title="Nur nötig, wenn der lokale Server selbst einen API-Key verlangt (bei LM Studio/Ollama in der Regel nicht der Fall). Leer lassen, wenn unklar.">API Key <input id="local_api_key" placeholder="optional"></label>
+            <button type="button" id="llmLocalListModels" class="ghost-btn" title="Fragt mit der obigen Base-URL/API-Key (noch nicht gespeichert) GET /v1/models ab und befüllt die Auswahllisten von Chat-Modell/Embedding-Modell oben — so lässt sich der exakte Modellname auswählen statt ihn blind abzutippen. Nur für lokale/OpenAI-kompatible Server, nicht für Azure.">Modelle laden</button>
+            <button type="button" id="llmLocalTest" class="ghost-btn" title="Sendet mit den obigen (noch nicht gespeicherten) Werten einen echten Embedding- und einen echten Chat-Testaufruf gegen das lokale Backend, ohne etwas zu speichern.">Verbindung testen</button>
+            <div id="llmLocalTestResult" class="result" role="status"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>LLM-Backend: Azure OpenAI</h3>
+            <p class="hint">Für größere/leistungsfähigere Modelle. Den API-Key über eine Umgebungsvariable setzen.</p>
+            <label title="Die Azure-OpenAI-Resource-URL, z. B. https://mein-resource.openai.azure.com — ohne Deployment-Pfad, den ergänzt R3 selbst je nach Chat-/Embedding-Deployment.">Resource-URL <input id="azure_base_url" placeholder="https://mein-resource.openai.azure.com"></label>
+            <label title="Von Azure vorgegebene API-Version (z. B. 2024-10-21) — muss zur eingesetzten Azure-OpenAI-Version passen, sonst schlagen Anfragen mit einem Versionsfehler fehl.">API-Version <input id="azure_api_version" placeholder="2024-10-21"></label>
+            <label title="Name des Chat-Deployments in Azure — nicht der zugrundeliegende Modellname, sondern der beim Anlegen des Deployments selbst gewählte Name.">Chat-Deployment <input id="azure_chat_model" placeholder="z.B. gpt-4o"></label>
+            <label title="Cloud-Profile werden in RubixRAG nur für Chat verwendet. Dieses Feld bleibt aus Kompatibilitätsgründen erhalten und wird für Embeddings ignoriert.">Embedding-Deployment (ungenutzt) <input id="azure_embed_model" placeholder="nicht verwendet"></label>
+            <label title="Name der Umgebungsvariable, die den Azure-API-Key enthält — empfohlen statt direkter Eingabe rechts, damit der Schlüssel nicht im Klartext in settings.json landet.">API Key (env-Variable) <input id="azure_api_key_env" placeholder="AZURE_OPENAI_API_KEY"></label>
+            <label title="Der Azure-API-Key im Klartext, nur zur schnellen lokalen Entwicklung gedacht. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">API Key (direkt, nur Dev) <input id="azure_api_key" placeholder="optional, besser: env-Variable"></label>
+            <button type="button" id="llmAzureTest" class="ghost-btn" title="Sendet mit den obigen (noch nicht gespeicherten) Werten einen echten Embedding- und einen echten Chat-Testaufruf gegen das Azure-Deployment, ohne etwas zu speichern — ping() allein reicht bei Azure nicht aus, da es dort keinen sinnvollen unauthentifizierten Health-Check gibt.">Verbindung testen</button>
+            <div id="llmAzureTestResult" class="result" role="status"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>LLM-Backend: OpenAI</h3>
+            <p class="hint">Originale OpenAI Chat-Completions. Nur Chat; Embeddings bleiben lokal.</p>
+            <label title="Basis-URL der OpenAI Chat-Completions API. Im Regelfall unverändert lassen — nur anpassen, wenn ein OpenAI-kompatibler Proxy/Gateway mit eigener URL dazwischengeschaltet ist.">Base URL <input id="openai_base_url" placeholder="https://api.openai.com/v1"></label>
+            <label title="Exakter OpenAI-Modellname, z. B. gpt-4o-mini (günstig, Standard) oder gpt-4o (leistungsfähiger, teurer). Muss ein bei OpenAI aktuell verfügbares Chat-Modell sein.">Chat-Modell <input id="openai_chat_model" placeholder="gpt-4o-mini"></label>
+            <label title="Name der Umgebungsvariable mit dem OpenAI-API-Key (platform.openai.com → API keys) — empfohlen statt direkter Eingabe rechts, damit der Schlüssel nicht im Klartext in settings.json landet.">API Key (env-Variable) <input id="openai_api_key_env" placeholder="OPENAI_API_KEY"></label>
+            <label title="Der OpenAI-API-Key im Klartext, nur zur schnellen lokalen Entwicklung gedacht. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">API Key (direkt, nur Dev) <input id="openai_api_key" placeholder="optional"></label>
+            <button type="button" id="llmOpenAITest" class="ghost-btn" title="Sendet mit den obigen (noch nicht gespeicherten) Werten einen echten Chat-Testaufruf gegen dieses Backend, ohne etwas zu speichern.">Chat-Verbindung testen</button>
+            <div id="llmOpenAITestResult" class="result" role="status"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>LLM-Backend: OpenRouter</h3>
+            <p class="hint">OpenAI-kompatibler Proxy für viele Modelle. Nur Chat; Embeddings bleiben lokal.</p>
+            <label title="Basis-URL des OpenRouter-Proxys. Im Regelfall unverändert lassen.">Base URL <input id="openrouter_base_url" placeholder="https://openrouter.ai/api/v1"></label>
+            <label title="OpenRouter-Modellkennung im Format 'anbieter/modell', z. B. openai/gpt-4o-mini oder anthropic/claude-3.5-sonnet — die vollständige, laufend aktualisierte Liste steht unter openrouter.ai/models.">Chat-Modell <input id="openrouter_chat_model" placeholder="openai/gpt-4o-mini"></label>
+            <label title="Name der Umgebungsvariable mit dem OpenRouter-API-Key (openrouter.ai/keys) — empfohlen statt direkter Eingabe rechts, damit der Schlüssel nicht im Klartext in settings.json landet.">API Key (env-Variable) <input id="openrouter_api_key_env" placeholder="OPENROUTER_API_KEY"></label>
+            <label title="Der OpenRouter-API-Key im Klartext, nur zur schnellen lokalen Entwicklung gedacht. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">API Key (direkt, nur Dev) <input id="openrouter_api_key" placeholder="optional"></label>
+            <button type="button" id="llmOpenRouterTest" class="ghost-btn" title="Sendet mit den obigen (noch nicht gespeicherten) Werten einen echten Chat-Testaufruf gegen dieses Backend, ohne etwas zu speichern.">Chat-Verbindung testen</button>
+            <div id="llmOpenRouterTestResult" class="result" role="status"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>LLM-Backend: Claude</h3>
+            <p class="hint">Anthropic Messages API mit nativen Tool-Calls. Nur Chat; Embeddings bleiben lokal.</p>
+            <label title="Basis-URL der Anthropic Messages API. Im Regelfall unverändert lassen.">Base URL <input id="claude_base_url" placeholder="https://api.anthropic.com"></label>
+            <label title="Exakter Claude-Modellname/-Alias, z. B. claude-3-5-sonnet-20241022 oder ein neuerer Alias wie claude-sonnet-4-5 — siehe docs.anthropic.com für die aktuell verfügbaren Modelle.">Chat-Modell <input id="claude_chat_model" placeholder="claude-3-5-sonnet-20241022"></label>
+            <label title="Name der Umgebungsvariable mit dem Anthropic-API-Key (console.anthropic.com → API Keys) — empfohlen statt direkter Eingabe rechts, damit der Schlüssel nicht im Klartext in settings.json landet.">API Key (env-Variable) <input id="claude_api_key_env" placeholder="ANTHROPIC_API_KEY"></label>
+            <label title="Der Anthropic-API-Key im Klartext, nur zur schnellen lokalen Entwicklung gedacht. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">API Key (direkt, nur Dev) <input id="claude_api_key" placeholder="optional"></label>
+            <button type="button" id="llmClaudeTest" class="ghost-btn" title="Sendet mit den obigen (noch nicht gespeicherten) Werten einen echten Chat-Testaufruf gegen dieses Backend, ohne etwas zu speichern.">Chat-Verbindung testen</button>
+            <div id="llmClaudeTestResult" class="result" role="status"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>LLM-Backend: Gemini</h3>
+            <p class="hint">Google Gemini GenerateContent API mit nativen Function-Calls. Nur Chat; Embeddings bleiben lokal.</p>
+            <label title="Basis-URL der Google Gemini GenerateContent API. Im Regelfall unverändert lassen.">Base URL <input id="gemini_base_url" placeholder="https://generativelanguage.googleapis.com"></label>
+            <label title="Exakter Gemini-Modellname, z. B. gemini-2.0-flash (schnell/günstig) oder gemini-1.5-pro (leistungsfähiger) — siehe ai.google.dev/gemini-api/docs/models für die aktuell verfügbaren Modelle.">Chat-Modell <input id="gemini_chat_model" placeholder="gemini-2.0-flash"></label>
+            <label title="Name der Umgebungsvariable mit dem Gemini-API-Key (aistudio.google.com/apikey) — empfohlen statt direkter Eingabe rechts, damit der Schlüssel nicht im Klartext in settings.json landet.">API Key (env-Variable) <input id="gemini_api_key_env" placeholder="GEMINI_API_KEY"></label>
+            <label title="Der Gemini-API-Key im Klartext, nur zur schnellen lokalen Entwicklung gedacht. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">API Key (direkt, nur Dev) <input id="gemini_api_key" placeholder="optional"></label>
+            <button type="button" id="llmGeminiTest" class="ghost-btn" title="Sendet mit den obigen (noch nicht gespeicherten) Werten einen echten Chat-Testaufruf gegen dieses Backend, ohne etwas zu speichern.">Chat-Verbindung testen</button>
+            <div id="llmGeminiTestResult" class="result" role="status"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Routing</h3>
+            <label title="Embeddings werden in RubixRAG ausschließlich lokal mit LM Studio erzeugt. So bleiben die gespeicherten Vektoren stabil und Cloud-Chat-Provider können ohne Re-Import gewechselt werden.">Embeddings über
+              <select id="s_embed_profile">
+                <option value="local">Lokal (LM Studio)</option>
+              </select>
+            </label>
+            <label title="Backend, das Fragen standardmäßig beantwortet, wenn im Chat keines explizit ausgewählt wird. Einzelne Nutzer:innen können trotzdem pro Frage im Chat manuell auf 'Azure' umschalten (Dropdown neben dem Frage-Feld).">Standard-Chat-Backend
+              <select id="s_chat_profile">
+                <option value="local">Lokal</option>
+                <option value="azure">Azure</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="settings.section.chat">Chat</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section">
+            <label class="check-label" title="Antworten erscheinen Wort für Wort im Browser, statt erst komplett fertig angezeigt zu werden. Rein optisch — deaktivieren ändert nichts an dem, was das Modell antwortet, nur wie/wann der Text im Browser eintrifft."><input id="s_streaming" type="checkbox" checked> <span data-i18n="settings.chat.streamingLabel">Streaming-Antworten anzeigen</span></label>
+          </div>
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="settings.chatHistory.hint">Merkt sich frühere Gespräche der jeweiligen Person — wo, hängt vom Login ab: ohne AD-Anmeldung nur im Browser dieses Geräts (R3 sieht diese Daten nie); mit AD-Anmeldung (LDAP) zusätzlich serverseitig, streng pro Konto getrennt, damit der Verlauf über mehrere Geräte verfügbar ist. Ohne Aktivierung ändert sich nichts; bereits gespeicherter Verlauf bleibt erhalten, ist aber ausgeblendet, solange diese Einstellung aus ist.</p>
+            <label class="check-label" title="Blendet den Sidebar-Button 'Verlauf' ein, über den frühere Gespräche wieder geöffnet werden können. Nicht eingeloggt oder AD-Anmeldung generell aus: Speicherort ist ausschließlich der localStorage dieses Browsers/Geräts, R3 bekommt diese Daten nie zu sehen. Eingeloggt über AD-Anmeldung (LDAP): Gespräche werden zusätzlich serverseitig in einer Datenbank abgelegt (siehe Speicherort rechts), streng pro Konto abgegrenzt."><input id="s_chat_history_enabled" type="checkbox"> <span data-i18n="settings.chatHistory.toggle">Chat-Verlauf aktivieren (im Browser gespeichert)</span></label>
+            <label title="Datei, in der serverseitiger Chat-Verlauf für per AD (LDAP) angemeldete Personen abgelegt wird (siehe Erklärung links) — unabhängig vom Wissensbasis-Speicherort oben unter 'Speicher'.">Chat-Verlauf (serverseitig, Datei) <input id="s_chat_history_path" placeholder="r3-chathistory.db"></label>
+          </div>
+          <div class="settings-section span-2">
+            <h3>Anhänge &amp; Eingabelänge (Chat/Agent)</h3>
+            <h4>Bild</h4>
+            <label title="Legt fest, wie ein in Chat/Agent hochgeladenes Bild/Foto/Scan verarbeitet wird. 'markitdown/OCR': lokal per tesseract in Text umgewandelt, kein LLM-Aufruf, keine Zusatzkosten (braucht 'markitdown-/tesseract-Aufrufe erlauben' unter Einstellungen → Import). 'Vision-Modell': die komplette Frage wird ans unten gewählte Vision-Backend geschickt — unabhängig davon, was im Chat/Agent-Profil-Dropdown gerade ausgewählt ist.">Bild-Uploads verarbeiten über
+              <select id="s_upload_image_mode">
+                <option value="ocr">markitdown/OCR (lokal, kein LLM)</option>
+                <option value="vision">Vision-Modell (LLM)</option>
+              </select>
+            </label>
+            <label title="Nur relevant, wenn oben 'Vision-Modell' gewählt ist: welches Profil hochgeladene Bilder tatsächlich bekommt — unabhängig vom Standard-Chat-Backend unter Routing, da das Vision-fähige Backend (typischerweise Azure) oft ein anderes ist als das für normalen Text-Chat.">Vision-Backend
+              <select id="s_upload_vision_profile">
+                <option value="local">Lokal</option>
+                <option value="azure">Azure</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+            <label title="Maximale Kantenlänge (längste Seite in Pixeln), auf die ein an ein Vision-Modell geschicktes Bild vor dem Versand verkleinert wird — spart Kosten/Latenz bei großen Foto-Uploads, ohne dass das Modell den Inhalt schlechter lesen könnte. Wirkt nur auf den Vision-Pfad, nicht auf OCR (tesseract bekommt weiterhin die Originalauflösung). 0 = Standard (1600 px).">Vision: max. Bildkante (px)
+              <input id="s_upload_vision_max_dim" type="number" min="800" max="1600" step="100" placeholder="0 = Standard (1600)">
+            </label>
+            <label title="JPEG-Qualität (1–100), mit der ein für Vision verkleinertes Bild neu kodiert wird — niedriger spart mehr Bandbreite/Kosten, kann aber feine Details (z. B. kleine Schrift auf einem Scan) sichtbar verschlechtern. 0 = Standard (85).">Vision: JPEG-Qualität
+              <input id="s_upload_vision_jpeg_quality" type="number" min="50" max="95" step="5" placeholder="0 = Standard (85)">
+            </label>
+            <h4>Datei</h4>
+            <label title="Maximale Größe eines einzelnen Chat/Agent-Anhangs (Bild oder Dokument) in Megabyte, vor der Base64-Kodierung — größere Anhänge werden mit einer Fehlermeldung abgelehnt, nicht abgeschnitten. Gilt für Bild- UND Dokument-Anhänge gleichermaßen. 0 = Standard (8 MB).">Max. Anhangsgröße (MB)
+              <input id="s_upload_max_attachment_mb" type="number" min="1" max="50" step="1" placeholder="0 = Standard (8)">
+            </label>
+            <h4>Prompt-Länge</h4>
+            <label title="Maximale Länge einer einzelnen Chat/Agent-Frage in Zeichen — eine längere Frage wird mit einer Fehlermeldung abgelehnt, nicht abgeschnitten. Schützt vor einem versehentlich (oder absichtlich) riesigen Textblock, der Retrieval/LLM-Kosten unnötig aufbläst; für eine tatsächlich lange, aber sinnvolle Frage nach Bedarf erhöhen. 0 = Standard (20000).">Max. Fragenlänge (Zeichen)
+              <input id="s_upload_max_prompt_chars" type="number" min="2000" max="100000" step="1000" placeholder="0 = Standard (20000)">
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.draftReplies">Antwortentwürfe</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Erzeugt auf Wunsch einen KI-Antwortentwurf zu einer importierten E-Mail, gestützt auf ähnliche Fälle aus der Wissensbasis. Reiner Vorschlag zur Prüfung durch einen Menschen — R3 verschickt nichts automatisch.</p>
+            <label class="check-label" title="Schaltet den Button 'Antwortentwurf erstellen' in der Quellenansicht importierter E-Mails frei. Erzeugt bei jedem Klick einen neuen LLM-Aufruf und damit einen reinen Textvorschlag zur Prüfung — es wird nie automatisch etwas versendet oder in ein Postfach geschrieben, ohne dass ein Mensch das anstößt."><input id="s_draft_replies_enabled" type="checkbox"> <span data-i18n="settings.draftReplies.enableLabel">Antwortentwürfe aktivieren (Button in der Quellenansicht für E-Mails)</span></label>
+            <label title="Welches Backend Antwortentwürfe generiert. Leer lassen = wie das Standard-Chat-Backend oben unter Routing; ein separates, ggf. leistungsfähigeres Backend nur für Entwürfe wählen, wenn deren Qualität wichtiger ist als die normaler Chat-Antworten.">Chat-Backend für Entwürfe
+              <select id="s_draft_chat_profile">
+                <option value="">Wie Standard-Chat-Backend</option>
+                <option value="local">Lokal</option>
+                <option value="azure">Azure</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+            <label title="Name eines der unten unter 'Zugriffs-Presets' definierten Presets, das Antwortentwürfe fest auf bestimmte Quelltypen/Werkzeuge einschränkt — anders als im Chat gibt es hier keine Auswahl durch die Nutzer:in, das Preset gilt für jeden Entwurf. Leer = kein Preset, nur die Zugriffskontrolle oben (Abteilungen) greift.">Zugriffs-Preset für Entwürfe <input id="s_mail_default_preset" placeholder="z. B. kunde"></label>
+            <label title="Werkzeug-Runden-Budget eigens für Antwortentwürfe, unabhängig von 'Max. Werkzeug-Runden' beim Agenten unten. Ein Antwortentwurf ist meist eine engere, einmaligere Aufgabe (suchen, ggf. eine Quelle nachschlagen, Antwort formulieren) als eine offene Agent-Unterhaltung — ein niedrigerer Wert liefert schnellere/günstigere Entwürfe, ein höherer erlaubt gründlichere Recherche (mehrere Shop-/MSSQL-/HTTP-Aufrufe nacheinander) für Entwürfe, ohne das Agent-Budget mit zu verändern. Leer/0 = wie 'Max. Werkzeug-Runden' beim Agenten (bisheriges Verhalten).">Werkzeug-Runden für Entwürfe <input id="s_draft_max_tool_rounds" type="number" min="0" max="20" step="1" placeholder="0 = wie Agent"></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="settings.section.retrieval">Retrieval / Ranking</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <label title="Anzahl der (Anfangs-)Treffer, die als Kontext an das Chat-Modell übergeben werden. Höher = mehr Kontext für die Antwort, aber langsamer/teurer pro Anfrage und mehr Rauschen; zu niedrig kann relevante Quellen abschneiden. Standardwert: 5. Beachte: Jeder Treffer zieht automatisch den gesamten Rest seiner Quelle nach (z. B. eine mehrteilige PDF-Anlage), pro Quelle jedoch gedeckelt auf ca. 6000 Zeichen — die tatsächlich übergebene Textmenge kann also deutlich über 'K Chunks' liegen, bleibt aber pro Treffer begrenzt.">K (Kontext-Chunks) <input id="s_k" type="number" min="1"></label>
+            <label title="Wie viele vorherige Gesprächsrunden (Frage+Antwort) eine Chat-Anfrage höchstens berücksichtigt — begrenzt sowohl, was das Hauptmodell an Verlauf sieht, als auch, wie viel Verlauf die konversationsbewusste Suchanfrage-Umschreibung (siehe unten) zur Verfügung hat. Höher = besseres Gedächtnis über ein langes Gespräch hinweg, aber mehr Text (Kosten/Tempo) pro Anfrage — besonders relevant bei einem kostenpflichtigen Cloud-Backend. Niedriger deckelt die Kosten bei langen Unterhaltungen. Leer/0 = Standard (12).">Max. Gesprächsrunden (Verlauf) <input id="s_history_max_turns" type="number" min="0" step="1" placeholder="0 = Standard (12)"></label>
+            <label title="Maximale Zeichenanzahl pro Chunk beim Zerlegen neu importierter Texte. Wirkt nur auf künftige Importe, nicht rückwirkend auf bereits gespeicherte Chunks. Kleinere Chunks liefern präzisere Treffer, erzeugen aber mehr Chunks pro Dokument und damit mehr Embedding-Aufrufe beim Import.">Chunk-Größe <input id="s_chunk_size" type="number" min="100"></label>
+            <label title="Anteil der reinen semantischen Ähnlichkeit (Cosinus-Distanz der Embeddings) am finalen Ranking-Score: final_score = Vektor-Gewicht·Ähnlichkeit + Keyword-Gewicht·Stichwort-Überlappung + Aktualitäts-Gewicht·Aktualität. Die drei Gewichte müssen sich nicht auf 1 summieren, nur ihr Verhältnis zueinander zählt.">Gewicht: Vektor-Ähnlichkeit <input id="s_w_vector" type="number" step="0.05"></label>
+            <label title="Anteil der wörtlichen Stichwort-Übereinstimmung am finalen Score — sorgt dafür, dass ein exakter Begriffstreffer nicht von einem nur semantisch ähnlichen, aber inhaltlich anderen Treffer verdrängt wird.">Gewicht: Keyword-Overlap <input id="s_w_keyword" type="number" step="0.05"></label>
+            <label title="Anteil der Dokumenten-Aktualität (Exponential-Zerfall ab Dokumentdatum, siehe Halbwertszeit rechts) am finalen Score. Höher gewichtet bevorzugt neuere Dokumente stärker gegenüber älteren, sonst gleich relevanten Treffern — z. B. damit eine drei Jahre alte E-Mail nicht automatisch einen aktuellen Stichwort-Treffer von letzter Woche überstimmt.">Gewicht: Aktualität <input id="s_w_recency" type="number" step="0.05"></label>
+            <label title="Nach wie vielen Tagen der Aktualitäts-Bonus eines Dokuments auf die Hälfte gesunken ist. Kleinere Werte lassen ältere Inhalte schneller an Ranking-Gewicht verlieren; 0 oder negativ schaltet die Aktualitäts-Gewichtung faktisch aus. Standardwert: 180 Tage.">Halbwertszeit Aktualität (Tage) <input id="s_recency_halflife" type="number" step="1"></label>
+            <label title="Wie viele Kandidaten die Vektorsuche vor dem Re-Ranking (Gewichtung) mindestens abruft — größer als K, damit Keyword-/Aktualitäts-Gewichtung noch etwas zum Umsortieren hat. 0 = Standard (80, oder 4×K, je nachdem was größer ist).">Kandidaten-Limit (vor Re-Ranking) <input id="s_candidate_limit" type="number" min="0" placeholder="0 = Standard (80)"></label>
+            <label title="Mindest-Vektor-Ähnlichkeit (Cosinus, 0–1), die ein Treffer haben muss, um überhaupt berücksichtigt zu werden — verhindert, dass ein völlig unpassender Treffer nur deshalb einen der K-Plätze belegt, weil in einer kleinen Wissensbasis nichts Besseres existiert. 0 = kein Schwellwert (Standard, wie bisher).">Mindest-Vektor-Ähnlichkeit <input id="s_min_similarity" type="number" step="0.05" min="0" max="1" placeholder="0 = aus"></label>
+            <label title="Mindest-Gesamt-Score (nach Gewichtung von Vektor/Keyword/Aktualität), den ein Treffer erreichen muss, um überhaupt in K einzufließen — verhindert, dass eine völlig themenfremde Frage trotzdem die 'am wenigsten schlechten' Treffer als Kontext verschickt. Bei Treffern ohne jede Stichwort-Übereinstimmung wird der Aktualitäts-Anteil vor diesem Vergleich abgezogen, damit reine Aktualität keinen fehlenden inhaltlichen Bezug ausgleicht. 0 = kein Schwellwert.">Mindest-Gesamt-Score <input id="s_min_final_score" type="number" step="0.05" min="0" placeholder="0 = aus"></label>
+            <label title="Wie 'Mindest-Gesamt-Score' links, aber nur für die erste, automatische Kontext-Suche im Agent-Modus (bevor der Agent selbst über das Werkzeug 'Wissensbasis durchsuchen' gezielt nachsucht). Höher gesetzt spart Token/Zeit, weil der Agent ohnehin selbst gezielt nachsuchen kann — kostet aber eine zusätzliche Werkzeug-Runde in den Fällen, wo die erste Suche eigentlich schon gereicht hätte. Leer/0 = wie 'Mindest-Gesamt-Score' links (bisheriges Verhalten, keine Änderung).">Mindest-Gesamt-Score (nur Agent-Modus) <input id="s_agent_mode_min_final_score" type="number" step="0.05" min="0" placeholder="0 = wie links"></label>
+            <label title="Wie viele unterschiedliche Quellen maximal in einer Antwort zitiert werden — unabhängig davon, wie viele der K Treffer noch weitere, neue Quellen wären. 0 = kein Limit (Standard).">Max. Anzahl Quellen <input id="s_max_sources" type="number" min="0" placeholder="0 = kein Limit"></label>
+            <label title="Wie viele der K Treffer-Plätze eine einzelne Quelle maximal belegen darf — verhindert, dass ein einziges langes Dokument mit vielen ähnlichen Abschnitten alle anderen Quellen aus dem Kontext verdrängt (Diversitäts-Schutz). 0 = kein Limit (Standard, bisheriges Verhalten).">Max. Treffer je Quelle <input id="s_max_hits_per_source" type="number" min="0" placeholder="0 = kein Limit"></label>
+            <label title="Wie viele Chunks vor dem gefundenen Chunk (in derselben Quelle) zusätzlich mit in den Kontext übernommen werden. -1 = kein Limit (gesamte Quelle, bisheriges Verhalten). 0 = keine Nachbar-Chunks, nur der Treffer selbst.">Kontext-Chunks davor <input id="s_context_before" type="number" min="-1" placeholder="-1 = ganze Quelle"></label>
+            <label title="Wie viele Chunks nach dem gefundenen Chunk (in derselben Quelle) zusätzlich mit in den Kontext übernommen werden. -1 = kein Limit (gesamte Quelle, bisheriges Verhalten). 0 = keine Nachbar-Chunks, nur der Treffer selbst.">Kontext-Chunks danach <input id="s_context_after" type="number" min="-1" placeholder="-1 = ganze Quelle"></label>
+            <label title="Maximale Zeichenanzahl, die eine einzelne zitierte (getroffene) Quelle zum Kontext beitragen darf — verhindert, dass ein Treffer in einem großen mehrteiligen Dokument (z. B. eine lange SharePoint-Datei) den gesamten Kontext flutet. 0 = Standard (6000 Zeichen).">Max. Zeichen je Quelle <input id="s_max_primary_chars" type="number" min="0" placeholder="0 = Standard (6000)"></label>
+            <label title="Maximale Zeichenanzahl, die ein zusätzlich mitgezogenes E-Mail-Geschwister (Anhang bzw. Ursprungs-Mail derselben Nachricht) zum Kontext beitragen darf. 0 = Standard (4000 Zeichen).">Max. Zeichen je E-Mail-Geschwister <input id="s_max_sibling_chars" type="number" min="0" placeholder="0 = Standard (4000)"></label>
+            <label title="Wie viele E-Mail-Geschwister (Anhänge bzw. Ursprungs-Mail derselben Nachricht) insgesamt maximal zusätzlich mit in den Kontext gezogen werden. 0 = Standard (6).">Max. Anzahl E-Mail-Geschwister <input id="s_max_family_siblings" type="number" min="0" placeholder="0 = Standard (6)"></label>
+          </div>
+        </div>
+      </details>
+
+      </div>
+
+      <div class="settings-group" id="settings-group-storage">
+      <h2 class="settings-group-title" data-i18n="settings.group.storage">Speicher</h2>
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.storageTinysql">Speicher (tinySQL)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Legt fest, wie und wo die durchsuchbaren Textabschnitte der importierten Dokumente ("Chunks") und die daraus berechneten Vergleichswerte für die Ähnlichkeitssuche ("Embeddings") gespeichert werden. <strong>Wichtig: Diese Einstellungen wirken erst nach einem Neustart des Servers</strong> — die laufende Datenbankverbindung wird nicht live umgeschaltet, R3 öffnet sie einmalig beim Start. Gespeicherte Werte gelten ab dem nächsten Start, auch ohne erneut übergebene <code>-storage-*</code>-Kommandozeilen-Parameter.</p>
+            <div id="storageStatusBox" class="result" role="status" data-i18n="settings.storage.loading">Lade aktuellen Status …</div>
+            <details id="storageCacheDetail" class="settings-accordion" hidden title="Technischer Diagnose-Einblick, hauptsächlich für den Support-Fall 'Suche ist plötzlich langsam': zeigt die letzten Suchanfragen an die Wissensbasis mit Zwischenspeicher-Trefferquote und Dauer. 'Metrik' = wie Ähnlichkeit berechnet wurde, 'Index' = welche interne Suchstruktur benutzt wurde, 'K' = wie viele Ergebnisse angefragt wurden, 'Cache' = ob die Antwort aus dem Kurzzeit-Zwischenspeicher kam oder neu berechnet werden musste. Für den normalen Betrieb nicht nötig, nur bei Performance-Rückfragen relevant.">
+              <summary>Vektor-Cache: letzte Suchanfragen</summary>
+              <table class="api-key-table" id="storageCacheTable">
+                <thead>
+                  <tr><th>Zeit</th><th>Tabelle</th><th>Spalte</th><th>Metrik</th><th>Index</th><th>K</th><th>Cache</th><th>Dauer</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </details>
+          </div>
+          <div class="settings-section span-2">
+            <label title="Backend für die Wissensbasis. 'tinysql' (Standard) hat einen eingebauten Suchindex für Vektor- und Stichwortsuche und bleibt damit auch bei vielen Dokumenten schnell. 'sqlite' speichert die Daten in einer gewöhnlichen SQLite-Datei ohne einen solchen Index — jede Suche vergleicht die Anfrage dafür der Reihe nach mit jedem gespeicherten Textabschnitt, was ab einigen Zehntausend Abschnitten spürbar langsamer wird. 'sqlite' deshalb nur wählen, wenn eine bereits bestehende SQLite-Installation weiterverwendet werden soll. Wirkt erst nach einem Neustart.">Backend
+              <select id="s_storage_backend">
+                <option value="tinysql">tinysql (Standard)</option>
+                <option value="sqlite">sqlite</option>
+              </select>
+            </label>
+            <label title="Speichermodus für das tinysql-Backend, von 'sqlite' ignoriert. 'disk' (Standard) hält die Chunks-Tabelle dauerhaft im Speicher resident und damit Vektor-/Volltextindex warm, bei inkrementellem Sichern nach jedem Import — Speicherverbrauch wächst mit dem Datenbestand, ohne Obergrenze. 'hybrid'/'index' begrenzen den Speicherverbrauch auf das Speicherbudget rechts, bauen den Vektor-/Volltextindex aber bei jeder Suche komplett neu auf, sobald die Chunks-Tabelle größer als dieses Budget ist — spürbar langsamere Antworten in einer wachsenden Wissensbasis. 'memory'/'wal' halten alles nur im Arbeitsspeicher (kein inkrementelles Sichern), nur für kleine, testweise Bestände geeignet. Wirkt erst nach einem Neustart.">Speichermodus (nur tinysql)
+              <select id="s_storage_mode">
+                <option value="disk">disk (Standard)</option>
+                <option value="hybrid">hybrid</option>
+                <option value="index">index</option>
+                <option value="memory">memory</option>
+                <option value="wal">wal</option>
+              </select>
+            </label>
+            <label title="Verzeichnis (disk/index/hybrid) bzw. Dateipfad (memory/wal/sqlite), unter dem die Wissensbasis abgelegt wird. Relativ zum Arbeitsverzeichnis des Server-Prozesses, wenn kein absoluter Pfad angegeben wird. Leer = eingebauter Standard (r3-data bzw. r3-data.db). Wirkt erst nach einem Neustart — ein geänderter Pfad öffnet beim nächsten Start eine andere/neue Wissensbasis, verschiebt aber nichts automatisch.">Pfad <input id="s_storage_path" placeholder="r3-data"></label>
+            <label title="Speicherbudget in MB für die Modi 'hybrid'/'index' — von 'disk'/'memory'/'wal' und vom sqlite-Backend ignoriert. Muss größer sein als die Chunks-Tabelle auf der Festplatte (siehe Status oben, 'Festplatte') — sonst passt die Tabelle nicht dauerhaft in den Puffer, und tinySQL baut Vektor-/Volltextindex bei jeder Suche neu auf. 0 = Standard (256 MB). Wirkt erst nach einem Neustart.">Speicherbudget in MB (nur hybrid/index) <input id="s_storage_max_mem_mb" type="number" min="0" placeholder="0 = Standard (256)"></label>
+          </div>
+        </div>
+      </details>
+      </div>
+
+      <div class="settings-group" id="settings-group-connectors">
+      <h2 class="settings-group-title" data-i18n="settings.group.connectors">Datenquellen (Connectors)</h2>
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.importGeneral">Import</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <label class="check-label" title="Entfernt E-Mail-Adressen, Telefonnummern, IBANs und Kartennummern aus extrahiertem Text, bevor er eingebettet/gespeichert wird (Muster-basiert, kein vollständiger PII-Scanner). Sinnvoll, wenn ein Postfach-Export einem größeren Kreis zugänglich sein wird als das ursprüngliche Postfach. Wirkt nur auf künftige Importe."><input id="s_redact_pii" type="checkbox"> <span data-i18n="settings.import.redactPii">Personenbezogene Daten beim Import schwärzen</span></label>
+            <label class="check-label" title="Schaltet externe Konverter frei: markitdown für Office/PDF, tesseract für Bild-OCR, ffmpeg für Audio-Normalisierung und Whisper für lokale Spracheingabe. Ohne diese Option werden keine externen Prozesse gestartet. Standardmäßig aus, damit ein frischer Checkout nie ungefragt ein Binary ausführt."><input id="s_allow_shell" type="checkbox"> <span data-i18n="settings.import.allowShell">Externe Konverter erlauben (markitdown, tesseract, ffmpeg, Whisper)</span></label>
+            <label title="Pfad oder Programmname der markitdown-Programmdatei, falls sie nicht unter dem Standardnamen 'markitdown' im PATH des Servers liegt. Nur relevant, wenn 'markitdown-/tesseract-Aufrufe erlauben' oben aktiv ist.">markitdown-Binary <input id="s_markitdown_bin"></label>
+            <label title="Optionaler Azure-Document-Intelligence-Endpoint für bessere OCR und Tabellen-/Layout-Erkennung bei PDFs und Office-Dateien. Leer lassen für lokale MarkItDown-Konverter. Der Inhalt wird dann an Azure übertragen und kann Kosten verursachen.">Azure Document-Intelligence-Endpoint <input id="s_markitdown_docintel_endpoint" placeholder="https://..."></label>
+            <label title="Pfad oder Programmname der ffmpeg-Programmdatei. Wird für MP4/WebM/MOV/MKV/AVI/FLV verwendet, um die Tonspur vor der Transkription als WAV bereitzustellen.">ffmpeg-Binary <input id="s_ffmpeg_bin" placeholder="ffmpeg"></label>
+            <label title="Pfad oder Programmname der 7z-Programmdatei für .7z-Archive. ZIP/TAR/TAR.GZ werden nativ verarbeitet; auch 7z bleibt durch Eintrags-, Größen- und Pfadgrenzen begrenzt.">7z-Binary <input id="s_sevenzip_bin" placeholder="7z"></label>
+            <label title="Pfad oder Programmname der tesseract-Programmdatei, falls sie nicht unter dem Standardnamen 'tesseract' im PATH des Servers liegt. Nur relevant, wenn 'markitdown-/tesseract-Aufrufe erlauben' oben aktiv ist und für die aktive Chat-/Agent-Anfrage kein Vision-Modell konfiguriert ist.">tesseract-Binary <input id="s_tesseract_bin" placeholder="tesseract"></label>
+            <label title="Sprachen, die tesseract beim Erkennen von Text in hochgeladenen Bildern berücksichtigt (tesseract-Sprachcodes, mit + kombinierbar). Standard deu+eng.">tesseract-Sprache(n) <input id="s_tesseract_lang" placeholder="deu+eng"></label>
+            <label title="Pfad oder Programmname des Whisper-kompatiblen CLI-Programms. Erwartet die whisper.cpp-Argumente -m, -f, -l, -otxt und -of. Standard: whisper-cli im PATH.">Whisper-Binary <input id="s_whisper_bin" placeholder="whisper-cli"></label>
+            <label title="Lokale Whisper-Modell-Datei, z. B. ggml-small.bin. Sie wird nicht von R3 heruntergeladen und bleibt auf dem Server.">Whisper-Modell <input id="s_whisper_model" placeholder="models/ggml-small.bin"></label>
+            <label title="Optionale Sprache für Whisper, z. B. de oder en. Leer = automatische Erkennung, sofern das Binary dies unterstützt.">Whisper-Sprache <input id="s_whisper_language" placeholder="de"></label>
+            <label title="Maximale Laufzeit eines einzelnen Whisper-Prozesses. 0 = 120 Sekunden; maximal 600 Sekunden.">Whisper-Timeout (Sekunden) <input id="s_whisper_timeout" type="number" min="0" max="600" step="1" placeholder="0 = 120"></label>
+            <label title="Anzahl CPU-Threads, die ein einzelner Whisper-Prozess nutzt (--threads). 0 = Whisper-eigener Standard (4).">Whisper-Threads <input id="s_whisper_threads" type="number" min="0" step="1" placeholder="0 = Standard (4)"></label>
+            <label title="Whisper-Beam-Size (--beam-size). Whisper-Standard (5) bevorzugt Genauigkeit; 1 (Greedy-Decoding) ist der übliche Tempo-Trade-off für kurze, informelle Sprachaufnahmen. 0 = Whisper-eigener Standard.">Whisper-Beam-Size <input id="s_whisper_beam_size" type="number" min="0" step="1" placeholder="0 = Standard (5)"></label>
+            <label class="check-label" title="Aktiviert Whisper.cpps schnelleren Flash-Attention-Kernel (--flash-attn). Nicht jede Build-/Modell-/Hardware-Kombination unterstützt dies gleichermaßen, daher standardmäßig aus.">Whisper-Flash-Attention <input id="s_whisper_flash_attn" type="checkbox"></label>
+            <label class="check-label" title="Aktiviert Sprachaktivitätserkennung (--vad), damit Whisper stille Abschnitte (z. B. Stille am Anfang/Ende einer kurzen Browser-Aufnahme) vor der eigentlichen Transkription überspringt — spart Zeit bei typischen Push-to-Talk-Klängen. Benötigt zusätzlich ein VAD-Modell (siehe nächstes Feld).">Whisper-VAD (Sprachaktivitätserkennung) <input id="s_whisper_vad" type="checkbox"></label>
+            <label title="Pfad zur VAD-Modelldatei (--vad-model), z. B. models/ggml-silero-v5.1.2.bin. Erforderlich, wenn 'Whisper-VAD' oben aktiviert ist — ohne Pfad wird die Einstellung beim Speichern abgelehnt.">Whisper-VAD-Modell <input id="s_whisper_vad_model" placeholder="models/ggml-silero-v5.1.2.bin"></label>
+            <label title="Wie viele Whisper-/FFmpeg-Transkriptionen server-weit gleichzeitig laufen dürfen — jede ist ein rechenintensiver Prozess, der sein Modell komplett neu von der Platte lädt; mehrere gleichzeitige Sprachaufnahmen könnten den Host sonst überlasten. 0 = Standard (2).">Whisper-Max. Parallelität <input id="s_whisper_max_concurrent" type="number" min="0" max="32" step="1" placeholder="0 = Standard (2)"></label>
+            <label title="Ordner, in dem eine Kopie der Original-Datei abgelegt wird, wenn beim Datei-Upload 'Original behalten' angehakt wurde — ermöglicht später, über das Quellen-Popup genau diese Originaldatei herunterzuladen, zusätzlich zum daraus extrahierten Text. Ohne dieses Häkchen bei einem Upload wird hier nichts gespeichert. Leer = eingebauter Standard (r3-originals).">Original-Dateien-Ordner <input id="s_import_originals_dir" placeholder="r3-originals"></label>
+            <label class="check-label" title="Erlaubt dem fetch_url-Werkzeug im Chat/Agent, auch URLs abzurufen, die ins interne Firmennetz auflösen (z. B. ein internes Wiki, ein Ticket, eine SharePoint-Seite) — standardmäßig ruft es nur öffentliche Internetseiten ab. Der R3-Host selbst (loopback) und Cloud-Metadaten-Adressen (169.254.0.0/16) bleiben immer gesperrt, unabhängig von dieser Option. Vorsicht: Ergebnisse landen im Chat und sind nicht admin-gated — jeder R3-Nutzer könnte damit interne Seiten abrufen lassen, die er sonst nicht sähe."><input id="s_allow_internal_fetch" type="checkbox"> <span data-i18n="settings.import.allowInternalFetch">fetch_url auch für internes Netz erlauben</span></label>
+          </div>
+          <div class="settings-section span-2">
+            <h3>Drosselung &amp; Limits</h3>
+            <p class="hint">Schützt sowohl R3 als auch die angebundenen Systeme davor, dass ein einziger Import in einem Rutsch riesige Mengen zieht (z. B. Zehntausende Tickets/Mails) oder die Gegenstelle mit Requests überflutet. Gilt für <strong>alle</strong> Connectoren. Resumierbare Quellen (IMAP, SharePoint-Delta) machen beim nächsten Lauf automatisch weiter, wo das Limit gegriffen hat — es geht nichts verloren, große Rückstände werden nur in Häppchen abgearbeitet.</p>
+            <label title="Höchstzahl an Elementen (Tickets, Mails, Seiten, Dateien …), die ein einzelner Import-Lauf verarbeitet. Wird die Grenze erreicht, stoppt der Lauf und meldet das; bei IMAP und SharePoint-Delta setzt der nächste Lauf/Auto-Sync genau dort fort. Leer/0 = Standard (500). Sicherheits-Obergrenze: 100000.">Max. Elemente pro Import-Lauf <input id="s_import_max_items" type="number" min="0" max="100000" step="1" placeholder="0 = Standard (500)"></label>
+            <label title="Maximale Größe einer einzelnen Datei (Anhang, hochgeladenes Dokument, gescanntes Bild …), die R3 beim Import überhaupt einliest, in Megabyte — eine größere Datei wird mit einer Fehlermeldung übersprungen statt gelesen zu werden. Gilt für E-Mail-Anhänge (PST/IMAP/Exchange) ebenso wie für Datei-Uploads. Leer/0 = Standard (25 MB). Höher setzen für z. B. große gescannte PDFs, niedriger, um den Arbeitsspeicher des Servers bei sehr großen Anhängen zu schonen.">Max. Dateigröße beim Import (MB) <input id="s_import_max_file_mb" type="number" min="0" step="1" placeholder="0 = Standard (25)"></label>
+            <label title="Absichtliche Pause zwischen den einzelnen Anfragen eines Imports, in Millisekunden — proaktive Drosselung, damit die Gegenstelle nicht so schnell wie möglich mit Requests beschossen wird (das reaktive Zurückfahren nach einem 429 bleibt zusätzlich bestehen). 0 = keine künstliche Pause (bisheriges Verhalten). Beispiel: 200 = max. 5 Anfragen/Sekunde.">Pause zwischen Anfragen (ms) <input id="s_import_request_delay" type="number" min="0" step="10" placeholder="0 = keine Pause"></label>
+            <label title="Wie viele Kandidaten die Vorschau-Listen (Confluence/Jira/Freshservice/Exchange/Teams) je Abruf holen, aus denen dann von Hand ausgewählt wird. Leer/0 = Standard (50). Obergrenze 1000; pro Connector zusätzlich durch dessen API-Seitengröße begrenzt.">Vorschau-Größe (Elemente) <input id="s_import_preview_limit" type="number" min="0" max="1000" step="1" placeholder="0 = Standard (50)"></label>
+            <label title="Wie oft eine Microsoft-Graph-Anfrage (SharePoint/Exchange/Teams) nach einer 429-(Rate-Limit)- oder 5xx-Antwort höchstens erneut versucht wird, bevor aufgegeben wird. Ein stark gedrosselter Tenant profitiert von mehr Versuchen bei einem großen, unbeaufsichtigten Import; beim Testen gegen einen instabilen Staging-Tenant kann weniger sinnvoll sein, um schneller einen echten Fehler zu sehen statt mehrere Backoff-Runden (bis zu 30s je Versuch) abzuwarten. Leer/0 = Standard (4).">Graph-Wiederholungen bei Fehlern <input id="s_import_graph_max_retries" type="number" min="0" step="1" placeholder="0 = Standard (4)"></label>
+            <label title="Wie oft eine generische REST-/HTTP-Vorlagen-Verbindung (Confluence/Jira/Freshservice/HTTP-Vorlage) nach einer 429- oder 5xx-Antwort höchstens erneut versucht wird — dieselbe Logik wie bei Graph-Wiederholungen oben, nur für Nicht-Graph-Connectoren. Leer/0 = Standard (4).">REST-Wiederholungen bei Fehlern <input id="s_import_connector_max_retries" type="number" min="0" step="1" placeholder="0 = Standard (4)"></label>
+            <label title="Maximale Laufzeit einer einzelnen Anfrage der generischen REST-/HTTP-Vorlagen-Verbindung (Confluence/Jira/Freshservice/HTTP-Vorlage), in Sekunden. Eine langsame interne API (z. B. über einen VPN-Hop mit hoher Latenz) braucht eventuell mehr als 30s; eine schnelle interne API hinter einem instabilen Proxy profitiert eher von einem kürzeren Timeout, um schneller auf einen Fehler zu reagieren statt den ganzen Import-Lauf zu blockieren. Leer/0 = Standard (30).">REST-Timeout (Sekunden) <input id="s_import_rest_timeout" type="number" min="0" step="1" placeholder="0 = Standard (30)"></label>
+            <label title="Wie viele Textabschnitte (Chunks) pro Aufruf an das Embedding-Modell/-Backend geschickt werden. Größer = weniger HTTP-Anfragen bei einem großen Import (hilft besonders bei einem entfernten/Cloud-Embedding-Dienst mit spürbarer Latenz pro Aufruf); kleiner = weniger Wartezeit bis zum ersten sichtbaren Fehler und schont ein lokales Embedding-Modell mit eigener kleiner Batch-Obergrenze. Leer/0 = Standard (16). Obergrenze 256.">Embedding-Batchgröße <input id="s_import_embed_batch_size" type="number" min="0" max="256" step="1" placeholder="0 = Standard (16)"></label>
+            <label title="Wie viele Antworten eines Teams-Threads maximal mit in das Import-Dokument des Ausgangs-Beitrags übernommen werden — begrenzt sowohl die Dokumentgröße eines sehr aktiven Threads als auch die Anzahl Graph-Anfragen (je 50 Antworten eine weitere Seite). Leer/0 = Standard (200).">Max. Teams-Antworten je Thread <input id="s_teams_max_replies" type="number" min="0" max="2000" step="1" placeholder="0 = Standard (200)"></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.sharepoint">SharePoint</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für den Import direkt aus einer oder mehreren SharePoint-Dokumentbibliotheken über Microsoft Graph. Braucht je Verbindung eine Azure-AD-App-Registrierung mit der <em>application</em>-Berechtigung <code>Sites.Selected</code> und Admin-Consent, plus eine explizite Freigabe für die jeweilige Site (macht die IT via Graph, nicht diese Einstellungsseite) — Client-Credentials-Flow, kein Anmeldedialog nötig. <strong>Nicht</strong> <code>Sites.Read.All</code> verwenden: das gibt tenant-weiten Lesezugriff (auch auf persönliche OneDrives und andere Geschäftsbereiche) statt nur auf die konfigurierte Site. Details siehe <code>ANLEITUNG.md</code>, Abschnitt „SharePoint".</p>
+            <div id="s_sp_editor"></div>
+            <button type="button" id="s_sp_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.outlook">Outlook / Exchange Online (Microsoft Graph)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für ein oder mehrere gemeinsame/dienstliche Postfächer. Braucht je Verbindung eine <em>application</em>-Berechtigung <code>Mail.Read</code> (idealerweise per Exchange-Anwendungszugriffsrichtlinie auf das jeweilige Postfach beschränkt) und Admin-Consent. Kann dieselbe App-Registrierung wie SharePoint verwenden, wenn dort schon eine existiert.</p>
+            <div id="s_ex_editor"></div>
+            <button type="button" id="s_ex_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2>OneDrive for Business</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Importiert einen <strong>explizit ausgewählten</strong> OneDrive-/Microsoft-365-Drive über Microsoft Graph und hält ihn per Delta-Sync aktuell. Für jede Verbindung ist die unveränderliche <code>Drive-ID</code> erforderlich (nicht „Mein OneDrive“ oder eine E-Mail-Adresse); so bleibt der Umfang prüfbar. Die App benötigt eine passende <em>application</em>-Leseberechtigung für diesen Drive. Möglichst eine dedizierte, restriktiv berechtigte App verwenden – OneDrive-App-Rechte sind in vielen Tenants weiter gefasst als SharePoints <code>Sites.Selected</code>.</p>
+            <div id="s_onedrive_editor"></div>
+            <button type="button" id="s_onedrive_add" class="ghost-btn">+ Verbindung hinzufügen</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.teams">Microsoft Teams</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für einen oder mehrere Kanäle. Braucht je Verbindung eine <em>application</em>-Berechtigung <code>ChannelMessage.Read.All</code> und Admin-Consent — diese Berechtigung erlaubt tenant-weiten Lesezugriff auf Kanalnachrichten, daher den Zugriff auf diese App-Registrierung entsprechend beschränken. Anders als SharePoint/Outlook oben gibt es hier (noch) keine Struktur-Erkunden-Hilfe — Team-/Kanal-ID stattdessen von Hand aus der Teams-Web-URL des Kanals ablesen: „Kanal-Link kopieren" in Teams liefert eine URL der Form <code>.../channel/19%3a<em>KANAL-ID</em>%40thread.tacv2/...?groupId=<em>TEAM-ID</em>&amp;...</code> — die <strong>Team-ID</strong> ist der <code>groupId</code>-Parameter (eine GUID), die <strong>Kanal-ID</strong> der Teil vor <code>%40thread.tacv2</code> inklusive des vorangestellten <code>19%3a</code> (in <code>19:…@thread.tacv2</code> URL-dekodiert).</p>
+            <div id="s_teams_editor"></div>
+            <button type="button" id="s_teams_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.imap">IMAP (On-Prem Exchange / generische Postfächer)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Alternative zu Outlook/Exchange über Graph — funktioniert mit jedem IMAP-fähigen Postfach (On-Prem Exchange, Microsoft 365, …), braucht aber eigene Zugangsdaten statt einer Azure-AD-App. Mehrere Postfächer sind als getrennte Verbindungen möglich.</p>
+            <div id="s_imap_editor"></div>
+            <button type="button" id="s_imap_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.queryRewrite">Konversationsbewusste Suchanfrage (Vorab-Umschreibung)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Zusätzlicher, optionaler Schritt vor jeder Chat-Antwort mit Gesprächsverlauf: ein eigener, schneller LLM-Aufruf formt aus einer Anschlussfrage wie „und bei Kistenpfennig?" eine eigenständige Suchanfrage (z. B. „Lieferantenrichtlinie Kistenpfennig"), <strong>nur für die Suche in der Wissensbasis</strong> — die Frage, wie sie im Chat angezeigt wird, und die Antwort des Hauptmodells bleiben unverändert. Ohne diesen Schritt sucht R3 bei einer Anschlussfrage nur mit deren eigenem (oft bedeutungsarmem) Text. Wird übersprungen, wenn noch kein Gesprächsverlauf vorliegt (erste Frage) — <strong>kostet sonst einen zusätzlichen LLM-Aufruf pro Anfrage</strong>, deshalb standardmäßig aus.</p>
+            <label class="check-label" title="Aktiviert die Vorab-Umschreibung der Suchanfrage für Chat-Anfragen mit Gesprächsverlauf. Ohne Häkchen ändert sich nichts am bisherigen Verhalten (die Suche verwendet weiterhin unverändert die aktuelle Frage)."><input id="s_query_rewrite_enabled" type="checkbox"> <span data-i18n="settings.queryRewrite.enableLabel">Suchanfrage-Umschreibung aktivieren</span></label>
+            <label title="Welches Backend die Umschreibung durchführt. Leer = das für Chat konfigurierte Standard-Backend — ein eigenes, ggf. günstigeres/schnelleres Modell nur für diesen Schritt wählen, wenn gewünscht.">Modell für die Umschreibung
+              <select id="s_query_rewrite_profile">
+                <option value="">Chat-Standard</option>
+                <option value="local">Lokal</option>
+                <option value="azure">Azure</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.confluence">Confluence</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für einen oder mehrere Spaces. Nutzt einen Atlassian-API-Token (Atlassian-Konto → Sicherheit → API-Tokens) statt Passwort.</p>
+            <div id="s_conf_editor"></div>
+            <button type="button" id="s_conf_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.jira">Jira</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für ein oder mehrere Projekte. Nutzt einen Atlassian-API-Token (Atlassian-Konto → Sicherheit → API-Tokens) statt Passwort — derselbe Token wie für Confluence funktioniert, falls der Account beides lesen darf.</p>
+            <div id="s_jira_editor"></div>
+            <button type="button" id="s_jira_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.freshservice">Freshservice</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für eine oder mehrere Freshservice-Instanzen. Nutzt einen Freshservice-API-Key (Profil → API-Key) als HTTP-Basic-Benutzername statt Passwort.</p>
+            <div id="s_fs_editor"></div>
+            <button type="button" id="s_fs_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2>GitHub</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Importiert README, Issues und Pull Requests eines Repositories von GitHub.com oder GitHub Enterprise. Verwende einen <strong>feingranularen, nur lesenden</strong> Token, der auf genau dieses Repository beschränkt ist; der Token gehört bevorzugt in eine Umgebungsvariable. Code-Dateien und Wiki-Git-Repositories werden bewusst nicht blind gespiegelt – sie können als eigener Ordner-/Git-Export gezielt importiert werden.</p>
+            <div id="s_github_editor"></div>
+            <button type="button" id="s_github_add" class="ghost-btn">+ Verbindung hinzufügen</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2>SAP S/4HANA (OData)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Liest eine einzelne, ausdrücklich konfigurierte OData-Entity ausschließlich per <code>GET</code>. Lege ID-, Titel- und Inhaltsfelder fest; R3 setzt daraus einen <code>$select</code>-Filter und importiert keine anderen Felder. Unterstützt OData-V2- und V4-Antworten sowie Delta-Links, wenn der SAP-Service sie bereitstellt. Für interne Zertifikate die Unternehmens-CA im Betriebssystem/Container hinterlegen – Zertifikatsprüfung wird nicht abgeschaltet.</p>
+            <div id="s_sap_s4_editor"></div>
+            <button type="button" id="s_sap_s4_add" class="ghost-btn">+ Verbindung hinzufügen</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.serverFolder">Server-Ordner (geplanter Import)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Für einen oder mehrere Server-Ordner, die R3 regelmäßig automatisch neu einliest (rekursiv) — der geplante Gegenpart zum einmaligen „Server-Ordner importieren" im Import-Tab. Unveränderte Dateien werden bei jedem Lauf übersprungen. Der Ordner muss für den R3-Serverprozess selbst erreichbar sein (lokaler Pfad oder bereits eingebundene Netzwerkfreigabe) — R3 bindet nichts selbst ein.</p>
+            <div id="s_folder_editor"></div>
+            <button type="button" id="s_folder_add" class="ghost-btn"><span data-i18n="settings.connectors.addConnectionButton">+ Verbindung hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.smtp">E-Mail (SMTP)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Wird bisher ausschließlich für die „Antwort an mich senden"-Funktion im Chat genutzt — R3 verschickt darüber immer nur an die eigene angemeldete AD-Mailadresse, nie an ein Freitextziel.</p>
+            <label class="check-label" title="Schaltet den SMTP-Versand frei — ohne diese Einstellung bleibt der „An mich senden&quot;-Button im Chat ohne Wirkung."><input id="s_smtp_enabled" type="checkbox"> <span data-i18n="settings.smtp.enableLabel">E-Mail-Versand aktivieren</span></label>
+            <label title="Hostname des SMTP-Relays, z. B. webmail.zitec.de.">SMTP-Host <input id="s_smtp_host" placeholder="webmail.zitec.de"></label>
+            <label title="Port des SMTP-Relays — meist 25 (unauthentifiziert/STARTTLS im internen Netz) oder 587 (STARTTLS mit Anmeldung).">Port <input id="s_smtp_port" type="number" min="1" max="65535" placeholder="25"></label>
+            <label title="Benutzername für die SMTP-Anmeldung, falls das Relay eine verlangt — leer lassen für ein unauthentifiziertes internes Relay.">Benutzername <input id="s_smtp_username" placeholder="optional"></label>
+            <label title="Name der Umgebungsvariable mit dem SMTP-Passwort — empfohlen statt direkter Eingabe rechts.">Passwort (env-Variable) <input id="s_smtp_password_env" placeholder="SMTP_PASS"></label>
+            <label title="Das SMTP-Passwort, nur zur schnellen lokalen Entwicklung. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">Passwort (direkt, nur Dev) <input id="s_smtp_password" type="password" placeholder="optional, besser: env-Variable"></label>
+            <label title="Absenderadresse, mit der R3 E-Mails verschickt, z. B. r3-notifications@rubix.com.">Absender (From) <input id="s_smtp_from" placeholder="r3-notifications@rubix.com"></label>
+            <label title="Empfängeradresse nur für die Testmail unten — wird nirgends gespeichert, nur für diesen einen Testversand verwendet.">Test-Empfänger (nur für Testmail) <input id="s_smtp_test_recipient" type="email" placeholder="deine.adresse@rubix.com"></label>
+            <button type="button" id="smtpTest" class="ghost-btn" title="Verschickt mit den obigen (noch nicht gespeicherten) Werten sofort eine echte Testmail an den Test-Empfänger oben — unabhängig davon, ob 'E-Mail-Versand aktivieren' bereits angehakt ist.">Testmail senden</button>
+            <div id="smtpTestResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+
+      </div>
+
+      <div class="settings-group" id="settings-group-tools">
+      <h2 class="settings-group-title" data-i18n="settings.group.tools">Werkzeuge (Live-Tools)</h2>
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.mssql">MSSQL (Live-Abfrage-Tool fürs Chat-Modell)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Kein Import — das Chat-Modell kann bei Bedarf selbst eine SELECT-Abfrage gegen diese Datenbank stellen (Function/Tool-Calling). Erfordert ein Chat-Modell mit Tool-Calling-Unterstützung; viele kleine lokale Modelle können das nicht, dann bleibt diese Einstellung wirkungslos. Der Datenbank-Login sollte nur Lesezugriff (SELECT) haben — die serverseitige SELECT-only-Prüfung ist zusätzlicher Schutz, kein Ersatz dafür.</p>
+            <label class="check-label" title="Schaltet das SELECT-Live-Werkzeug frei, das das Chat-Modell per Tool-Calling selbst aufrufen kann. Kein Import — nichts von hier wird embedded oder gespeichert, jede Abfrage läuft live zum Zeitpunkt der Antwort."><input id="s_mssql_enabled" type="checkbox"> <span data-i18n="settings.mssql.enableLabel">MSSQL-Tool aktivieren</span></label>
+            <label title="Hostname/IP des SQL-Server-Servers, z. B. sql.rubix.com.">Server <input id="s_mssql_host" placeholder="sql.rubix.com"></label>
+            <label title="TCP-Port des SQL-Server-Servers, Standard 1433.">Port <input id="s_mssql_port" type="number" placeholder="1433"></label>
+            <label title="Name der Datenbank, gegen die SELECT-Abfragen laufen dürfen.">Datenbank <input id="s_mssql_database"></label>
+            <label title="Benutzername des SQL-Server-Logins. Dringend empfohlen: ein Login, das ausschließlich SELECT-Rechte auf den relevanten Tabellen/Views hat — die serverseitige SELECT-only-Prüfung im Code ist zusätzlicher Schutz, kein Ersatz für eine echte Nur-Lese-Rolle.">Benutzername <input id="s_mssql_username"></label>
+            <label title="Name der Umgebungsvariable mit dem Datenbank-Passwort — empfohlen statt direkter Eingabe rechts.">Passwort (env-Variable) <input id="s_mssql_password_env" placeholder="MSSQL_PASSWORD"></label>
+            <label title="Das Datenbank-Passwort im Klartext, nur zur schnellen lokalen Entwicklung. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">Passwort (direkt, nur Dev) <input id="s_mssql_password" type="password" placeholder="optional, besser: env-Variable"></label>
+            <label class="check-label" title="Akzeptiert das TLS-Zertifikat des SQL-Servers ungeprüft, ohne es gegen eine vertrauenswürdige Zertifizierungsstelle zu validieren — nötig bei den meisten On-Prem-SQL-Server-Instanzen mit selbstsigniertem Zertifikat. Bei einem Server mit echtem, von einer CA ausgestelltem Zertifikat deaktivieren."><input id="s_mssql_trust_cert" type="checkbox" checked> <span data-i18n="settings.mssql.trustCertLabel">Server-Zertifikat ungeprüft akzeptieren (On-Prem/selbstsigniert)</span></label>
+            <label title="Begrenzt, wie viele Ergebniszeilen das Modell pro Abfrage höchstens zurückbekommt, damit eine breite Abfrage nicht das gesamte Kontextfenster/Token-Budget füllt.">Max. Zeilen pro Abfrage <input id="s_mssql_max_rows" type="number" placeholder="200"></label>
+            <label title="Maximale Laufzeit einer einzelnen Abfrage in Sekunden — danach wird sie abgebrochen, statt die Antwort unbegrenzt lange blockieren zu lassen.">Timeout (Sekunden) <input id="s_mssql_timeout" type="number" placeholder="10"></label>
+            <label title="Spaltennamen (kommagetrennt, Groß-/Kleinschreibung egal), die in JEDEM Abfrageergebnis — egal ob freie Abfrage oder Vorlage — durch „•••“ ersetzt werden, bevor das Chat-Modell sie sieht. Für Spalten mit personenbezogenen Daten (E-Mail, Telefon, IBAN, …), die das Modell nicht im Klartext sehen soll, obwohl die Tabelle als Ganzes für Aggregate/Zeilenzahlen nützlich bleibt.">Zu maskierende Spalten <input id="s_mssql_mask_columns" placeholder="email, phone, iban"></label>
+            <label class="check-label" title="Standardmäßig AUS: Solange dieses Kästchen leer ist, kann das Modell nur die unten fest hinterlegten SQL-Abfrage-Vorlagen nutzen, keine frei formulierten SELECTs. Erst aktivieren, wenn Verbindung, Rechte und Verhalten des query_mssql-Tools bewusst geprüft und für sicher befunden wurden — nicht als Standard für jede Umgebung gedacht."><input id="s_mssql_allow_generic" type="checkbox"> <span data-i18n="settings.mssql.allowGenericLabel">Freie SELECT-Abfragen durch das Modell erlauben (query_mssql-Tool)</span></label>
+            <label title="Zusätzliche Zugriffsbeschränkung (kommagetrennt, E-Mail oder Login-Name) — nur diese Benutzer dürfen das MSSQL-Werkzeug nutzen, zusätzlich zur bestehenden Registriert-/Admin-Stufe. Leer = keine zusätzliche Einschränkung (Standard, unverändertes Verhalten).">Zusätzlich berechtigte Benutzer <input id="s_mssql_access_users" placeholder="alice@rubix.com, bob@rubix.com"></label>
+            <label title="Zusätzliche Zugriffsbeschränkung (eine AD-Gruppen-DN je Zeile — ein Gruppen-DN enthält selbst Kommas, daher NICHT kommagetrennt) — Mitglieder einer hier gelisteten Gruppe dürfen das MSSQL-Werkzeug ebenfalls nutzen. Leer = keine zusätzliche Einschränkung.">Zusätzlich berechtigte AD-Gruppen (eine je Zeile) <textarea id="s_mssql_access_groups" class="prompt-editor" rows="2" placeholder="CN=SQL-Nutzer,OU=Gruppen,DC=rubix,DC=com"></textarea></label>
+            <button type="button" id="mssqlTest" class="ghost-btn" title="Baut mit den obigen (noch nicht gespeicherten) Werten eine echte Verbindung auf und führt einen Ping aus (keine Abfrage-Vorlage wird ausgeführt) — prüft damit Server, Port, Datenbank und Zugangsdaten in einem Schritt.">Verbindung testen</button>
+            <div id="mssqlTestResult" class="result" role="status"></div>
+          </div>
+          <div class="settings-section span-2">
+            <h3>SQL-Abfrage-Vorlagen (MCP-artige Konnektoren)</h3>
+            <p class="hint">Am einfachsten und sichersten sind feste Vorlagen: „SQL-Vorlage hinzufügen“ erzeugt eine kleine, parameterisierte SELECT-Abfrage als Startpunkt. Ersetzen Sie nur Tabelle/Spalten und beschreiben Sie, wann das Modell sie nutzen soll. Werte gehören immer in <code>{parameter}</code>, nie per Text-Einbau ins SQL. Freie SELECTs bleiben bewusst standardmäßig aus. Kommentare und Textwerte dürfen Schlüsselwörter enthalten; seiteneffektbehaftete SQL-Server-Befehle sowie <code>SELECT … INTO</code> werden abgewiesen.</p>
+            <div id="mssqlTemplatesEditor" class="qt-editor"></div>
+            <button type="button" id="mssqlTemplateAdd" class="ghost-btn"><span data-i18n="settings.mssql.addTemplateButton">+ SQL-Vorlage hinzufügen</span></button>
+            <details class="qt-raw">
+              <summary>Als JSON bearbeiten (Fortgeschritten)</summary>
+              <textarea id="s_mssql_query_templates" class="prompt-editor" rows="10" placeholder='[]'></textarea>
+              <button type="button" id="mssqlTemplateFromJson" class="ghost-btn">JSON übernehmen → Formular</button>
+            </details>
+            <p class="hint">Wird zusammen mit den übrigen Einstellungen über den Button "Einstellungen speichern" unten gespeichert — kein eigener Speichern-Button, wie bei den anderen Feldern auf dieser Seite.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.shop">Shop-Anbindung (de.rubix.com)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Kein Import — das Chat-/Agent-/Mail-Modell kann bei Bedarf selbst den Rubix-Onlineshop ansprechen (Function/Tool-Calling), live zum Zeitpunkt der Antwort, über drei getrennte Werkzeuge: Volltextsuche (Name, Artikelnummer, Hersteller, EAN, technische Kerndaten — bewusst ohne Preis/Lagerbestand), Auflösen einer bereits bekannten Produkt-ID (z. B. aus einer alten Bestellung/URL) zu Name und Artikelnummer, sowie aktuelle Verfügbarkeit/Lieferzeit/Preis zu bereits bekannten Artikeln. Preis/Lagerbestand werden bewusst nicht bei jeder Suche pauschal mitgeladen, sondern nur gezielt abgerufen, wenn tatsächlich danach gefragt wird. Alle drei Werkzeuge benötigen ein echtes, hier hinterlegtes Shop-Konto.</p>
+            <label class="check-label" title="Schaltet das Shop-Suche-Werkzeug frei, das Chat, Agent und Mail-Entwürfe per Tool-Calling selbst aufrufen können."><input id="s_shop_enabled" type="checkbox"> <span data-i18n="settings.shop.enableLabel">Shop-Suche aktivieren</span></label>
+            <label title="Basis-URL des Shops, Standard https://de.rubix.com.">Basis-URL <input id="s_shop_base_url" placeholder="https://de.rubix.com"></label>
+            <label title="Benutzername des Shop-Kontos.">Benutzername <input id="s_shop_username"></label>
+            <label title="Name der Umgebungsvariable mit dem Shop-Passwort — empfohlen statt direkter Eingabe rechts.">Passwort (env-Variable) <input id="s_shop_password_env" placeholder="SHOP_PASSWORD"></label>
+            <label title="Das Shop-Passwort im Klartext, nur zur schnellen lokalen Entwicklung. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">Passwort (direkt, nur Dev) <input id="s_shop_password" type="password" placeholder="optional, besser: env-Variable"></label>
+            <label title="Der feste 'Browser-API-Client'-Wert, den der Shop selbst bei jedem Login mitschickt (z. B. per Browser-Devtools am Netzwerk-Tab von de.rubix.com beim eigenen Login abzulesen), nicht das eigene Kontokennwort.">Client-ID <input id="s_shop_client_id" placeholder="z. B. api_rest_browser"></label>
+            <label title="Name der Umgebungsvariable mit dem festen Client-Secret des Shops — empfohlen statt direkter Eingabe rechts.">Client-Secret (env-Variable) <input id="s_shop_client_secret_env" placeholder="SHOP_CLIENT_SECRET"></label>
+            <label title="Das feste Client-Secret des Shops im Klartext, nur zur schnellen lokalen Entwicklung. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">Client-Secret (direkt, nur Dev) <input id="s_shop_client_secret" type="password" placeholder="optional, besser: env-Variable"></label>
+            <label title="Begrenzt, wie viele Suchergebnisse das Modell pro Aufruf höchstens zurückbekommt.">Max. Ergebnisse <input id="s_shop_max_results" type="number" placeholder="10"></label>
+            <label title="Maximale Laufzeit einer einzelnen Anfrage (Token-Abruf + Suche) in Sekunden.">Timeout (Sekunden) <input id="s_shop_timeout" type="number" placeholder="10"></label>
+            <label title="Wie oft eine Anfrage an diesen Shop (Token-Abruf oder Suche) nach einer 429- oder 5xx-Antwort höchstens erneut versucht wird, bevor aufgegeben wird. Gilt nur für diese Shop-Verbindung. Leer/0 = Standard (4).">Wiederholungen bei Fehlern <input id="s_shop_max_retries" type="number" min="0" step="1" placeholder="0 = Standard (4)"></label>
+            <label title="Zusätzliche Zugriffsbeschränkung (kommagetrennt, E-Mail oder Login-Name) — nur diese Benutzer dürfen die Shop-Werkzeuge nutzen. Leer = keine zusätzliche Einschränkung (Standard, unverändertes Verhalten).">Zusätzlich berechtigte Benutzer <input id="s_shop_access_users" placeholder="alice@rubix.com, bob@rubix.com"></label>
+            <label title="Zusätzliche Zugriffsbeschränkung (eine AD-Gruppen-DN je Zeile — ein Gruppen-DN enthält selbst Kommas, daher NICHT kommagetrennt) — Mitglieder einer hier gelisteten Gruppe dürfen die Shop-Werkzeuge ebenfalls nutzen. Leer = keine zusätzliche Einschränkung.">Zusätzlich berechtigte AD-Gruppen (eine je Zeile) <textarea id="s_shop_access_groups" class="prompt-editor" rows="2" placeholder="CN=Shop-Nutzer,OU=Gruppen,DC=rubix,DC=com"></textarea></label>
+            <button type="button" id="shopLoginTest" class="ghost-btn" title="Prüft NUR den Login (POST /rest-api/v1/tokens) mit den obigen (noch nicht gespeicherten) Werten und zeigt die rohe Server-Antwort an — nützlich, solange das genaue Token-Format noch nicht bestätigt ist, um zu sehen, woran ein Login genau scheitert.">Login testen</button>
+            <div id="shopLoginTestResult" class="result" role="status"></div>
+            <button type="button" id="shopTest" class="ghost-btn" title="Baut mit den obigen (noch nicht gespeicherten) Werten eine echte Verbindung auf und führt eine Testsuche aus — prüft damit Login und Artikelsuche zusammen in einem Schritt.">Verbindung + Suche testen</button>
+            <div id="shopTestResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.restConnectors">Generische REST-Connectoren</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Ein wiederverwendbarer Zugang zu einem beliebigen REST-System (z. B. dem SAP-se16-Gateway <code>https://logistic.rubix-intern.de</code>, einem internen Microservice oder einer Drittanbieter-API), auf den sich die HTTP-Abfrage-Vorlagen unten per <code>auth_source</code> (dem Namen) beziehen. Der Connector legt fest, <strong>wohin</strong> eine Vorlage überhaupt aufrufen darf (die <code>Basis-URL</code> pinnt den erlaubten Host — SSRF-Schutz) und <strong>wie</strong> authentifiziert wird (keine / Basic / Bearer / Header-API-Key), plus optionale statische Header. Zugangsdaten möglichst über eine Umgebungsvariable hinterlegen statt direkt. Selbst kein Import — nur ein Live-Zugang für die Vorlagen unten.</p>
+            <div id="s_rest_editor" class="qt-editor"></div>
+            <button type="button" id="s_rest_add" class="ghost-btn"><span data-i18n="settings.restConnectors.addButton">+ REST-Connector hinzufügen</span></button>
+            <p class="hint">Wird zusammen mit den übrigen Einstellungen über "Einstellungen speichern" unten gespeichert. Ein REST-Connector wird erst nutzbar, sobald ihn eine aktivierte HTTP-Abfrage-Vorlage unten über <code>auth_source</code> referenziert.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.httpTemplates">HTTP-Abfrage-Vorlagen (generische Live-Konnektoren)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Die REST-Entsprechung der SQL-Abfrage-Vorlagen oben: statt für jede weitere Live-Abfrage (Freshservice-Ticket-Status, Jira-Issue-Status, Confluence-Live-Suche, …) einen eigenen Code-Baustein zu schreiben, wird hier nur noch eine URL-Vorlage mit <code>{platzhalter}</code>-Parametern konfiguriert — die Zugangsdaten kommen von einer der eingebauten Quellen (<code>confluence</code>/<code>jira</code>/<code>freshservice</code>/<code>none</code>) oder von einem oben definierten <strong>generischen REST-Connector</strong> (per Name als <code>auth_source</code>) — so lassen sich z. B. SAP-se16-Endpunkte wie <code>https://logistic.rubix-intern.de/se16/ZITEC/mara/{matnr}</code> live anbinden. Jeder deklarierte Parameter muss in <code>url_template</code> als <code>{name}</code> vorkommen; die URL muss https nutzen und (außer bei <code>auth_source: "none"</code>) denselben Host haben wie die Basis-URL des referenzierten Konnektors — wird beim Speichern geprüft, eine ungültige Vorlage wird komplett abgelehnt. <code>response_json_path</code> ist optional (z. B. <code>"tickets"</code>) und kürzt die Antwort auf nur dieses Feld. Wie oben gilt: Beschreibung, Parameter-Beschreibung/-Beispiel und Rückgabe-Hinweis sieht das Modell wortwörtlich.</p>
+            <div id="httpTemplatesEditor" class="qt-editor"></div>
+            <button type="button" id="httpTemplateAdd" class="ghost-btn"><span data-i18n="settings.httpTemplates.addButton">+ HTTP-Vorlage hinzufügen</span></button>
+            <details class="qt-raw">
+              <summary>Als JSON bearbeiten (Fortgeschritten)</summary>
+              <textarea id="s_http_templates" class="prompt-editor" rows="10" placeholder='[]'></textarea>
+              <button type="button" id="httpTemplateFromJson" class="ghost-btn">JSON übernehmen → Formular</button>
+            </details>
+            <p class="hint">Wird zusammen mit den übrigen Einstellungen über den Button "Einstellungen speichern" unten gespeichert — kein eigener Speichern-Button, wie bei den SQL-Abfrage-Vorlagen oben. Jede aktivierte Vorlage wird als eigenes Werkzeug angeboten, gesteuert über die Werkzeug-Kategorie <code>http</code> in den Zugriffs-Presets unten.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.toolRouting">Werkzeug-Routing (Vorab-Entscheidung)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Zusätzlicher, optionaler Schritt vor jeder Chat-/Agent-/Mail-Antwort: ein eigener, schneller LLM-Aufruf entscheidet nur, ob eines der oben konfigurierten Live-Werkzeuge (MSSQL, Shop, HTTP-Vorlagen) gebraucht wird, führt es bei Bedarf sofort aus, und gibt das Ergebnis zusammen mit dem Wissensbasis-Kontext an die eigentliche Antwort weiter. Ergänzt die eigenständige Werkzeug-Entscheidung des Hauptmodells selbst, ersetzt sie nicht — wählt die Vorprüfung das falsche oder gar kein Werkzeug, kann das Hauptmodell in seiner eigenen Runde trotzdem noch selbst eines aufrufen. <strong>Kostet einen zusätzlichen LLM-Aufruf pro Anfrage</strong> — deshalb standardmäßig aus. In der Arbeitsschritte-Anzeige erscheint dieser Schritt als eigener, gekennzeichneter Eintrag ("Vorprüfung: …").</p>
+            <label class="check-label" title="Aktiviert die Vorab-Werkzeugentscheidung für Chat, Agent und Mail gleichermaßen. Ohne Häkchen ändert sich nichts am bisherigen Verhalten (das Hauptmodell entscheidet weiterhin selbst, ganz ohne diesen Vorab-Schritt)."><input id="s_tool_router_enabled" type="checkbox"> <span data-i18n="settings.toolRouting.enableLabel">Vorab-Werkzeugentscheidung aktivieren</span></label>
+            <label title="Welches Backend die Vorprüfung durchführt. Leer = dasselbe Backend wie die jeweilige Haupt-Antwort (Standard-Chat-Backend bzw. das für Agent/Mail konfigurierte) — ein eigenes, ggf. günstigeres/schnelleres Modell nur für diese Vorprüfung wählen, wenn gewünscht.">Modell für die Vorprüfung
+              <select id="s_tool_router_profile">
+                <option value="">Wie Hauptanfrage</option>
+                <option value="local">Lokal</option>
+                <option value="azure">Azure</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.agent">Agent</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Die Agent-Stufe im Chat darf — anders als Instant/Standard — Werkzeuge mehrfach und iterativ einsetzen (Wissensbasis-Suche, Quellen-Volltext, Quellenliste; bei aktivierten Antwortentwürfen zusätzlich Mail-Entwürfe, für Admins inkl. Ablage im Postfach-Entwürfe-Ordner; bei aktiviertem MSSQL auch die SQL-Werkzeuge). Jede Werkzeug-Ausführung wird protokolliert (unten).</p>
+            <label title="Wie viele Werkzeug-Runden eine einzelne Agent-Aufgabe höchstens verbrauchen darf, bevor die Antwort erzwungen wird — zugleich Kosten-/Laufzeit-Deckel. Leer/0 = Standard (6).">Max. Werkzeug-Runden je Aufgabe <input id="s_agent_max_rounds" type="number" min="1" step="1" placeholder="6"></label>
+            <label class="check-label" title="Bietet dem Agenten das run_code-Werkzeug an: kurze Berechnungs-Snippets in einer strikt isolierten Sandbox (kein Dateisystem, kein Netzwerk, enge Budgets). Wirkt zusätzlich nur, wenn dieser Server-Build überhaupt eine Sandbox enthält — aktuell ist keine eingebaut (geplant: nanoGo in einer wazero-WASM-Hülle, siehe docs/AGENT_PLAN.md); bis dahin ändert dieses Häkchen nichts."><input id="s_agent_allow_code" type="checkbox"> <span data-i18n="settings.agent.allowCode">Code-Ausführung erlauben (erfordert Sandbox-Build — aktuell nicht enthalten)</span></label>
+            <label class="check-label" title="Bietet dem Agenten das fetch_url-Werkzeug an: ruft eine einzelne öffentliche Web-Seite ab und liefert ihren Text nur in den Antwortkontext (nicht in die Wissensbasis) — z. B. für Preise, Normen oder Links aus einer Mail. Nutzt denselben SSRF-Schutz wie der Web-Import im Import-Tab (kein internes Netz, nur http/https). Seiteninhalte können Anweisungen enthalten, die der Agent ignorieren soll — trotzdem nur aktivieren, wenn das Risiko akzeptiert ist."><input id="s_agent_allow_web_fetch" type="checkbox"> <span data-i18n="settings.agent.allowWebFetch">Web-Zugriff erlauben (fetch_url, nur lesen)</span></label>
+            <label class="check-label" title="Bietet dem Agenten zusätzlich web_research an: ein fokussierter Unter-Agent, der ausgehend von einer Start-URL selbstständig weiterführenden Links folgt, bis er die gesuchte Information findet oder sein eigenes Zeit-/Rundenbudget aufgebraucht ist, und dann nur eine Zusammenfassung mit Quellen-URLs zurückgibt (keine Rohseiten). Erfordert 'Web-Zugriff erlauben' oben — deutlich mehr automatisierte Abrufe als ein einzelner fetch_url-Aufruf, daher separat aktivierbar."><input id="s_agent_allow_web_research" type="checkbox"> <span data-i18n="settings.agent.allowWebResearch">Web-Recherche erlauben (web_research, mehrseitig)</span></label>
+            <label title="Werkzeug-Runden-Budget je Web-Recherche-Aufruf. Leer/0 = Standard (6), Obergrenze 12.">Werkzeug-Runden je Web-Recherche <input id="s_agent_web_research_rounds" type="number" min="0" max="12" step="1" placeholder="6"></label>
+            <label title="Zeit-Budget in Sekunden je Web-Recherche-Aufruf — danach wird die bis dahin gefundene Zusammenfassung zurückgegeben, statt weiterzusuchen. Leer/0 = Standard (60), Obergrenze 180.">Zeit-Budget je Web-Recherche (Sek.) <input id="s_agent_web_research_timeout" type="number" min="0" max="180" step="1" placeholder="60"></label>
+            <label class="check-label" title="Bietet dem Agenten zusätzlich web_search an: eine Stichwort-Suche über eine externe Such-API (Tavily), die eine kurze Trefferliste (Titel, Kurzauszug, URL) zurückgibt — der Such-/Entdeckungsschritt, den fetch_url/web_research nicht haben (beide brauchen bereits eine bekannte URL). Anders als 'Web-Zugriff erlauben' oben ruft R3 dabei selbst keine beliebige URL ab (kein neues SSRF-Risiko auf diesem Server) — die Suche läuft komplett bei Tavily; erfordert einen unten hinterlegten Tavily-API-Key. Sendet die Suchanfrage des Agenten an Tavily als Drittanbieter."><input id="s_agent_allow_web_search" type="checkbox"> <span data-i18n="settings.agent.allowWebSearch">Web-Suche erlauben (web_search, über Tavily)</span></label>
+            <label title="Name der Umgebungsvariable mit dem Tavily-API-Key (tavily.com/home → API Keys) — empfohlen statt direkter Eingabe rechts, damit der Schlüssel nicht im Klartext in settings.json landet.">Tavily-API-Key (env-Variable) <input id="s_agent_web_search_api_key_env" placeholder="TAVILY_API_KEY"></label>
+            <label title="Der Tavily-API-Key im Klartext, nur zur schnellen lokalen Entwicklung gedacht. In einem geteilten Deployment stattdessen die env-Variable links nutzen.">Tavily-API-Key (direkt, nur Dev) <input id="s_agent_web_search_api_key" type="password" placeholder="optional, besser: env-Variable"></label>
+            <label title="Wie viele Treffer ein web_search-Aufruf höchstens zurückgibt. Leer/0 = Standard (5), Obergrenze 20 (Tavilys eigene Obergrenze pro Anfrage).">Max. Treffer je Web-Suche <input id="s_agent_web_search_max_results" type="number" min="0" max="20" step="1" placeholder="5"></label>
+            <label title="Zeit-Budget in Sekunden je web_search-Aufruf. Leer/0 = Standard (15), Obergrenze 60.">Zeit-Budget je Web-Suche (Sek.) <input id="s_agent_web_search_timeout" type="number" min="0" max="60" step="1" placeholder="15"></label>
+            <label class="check-label" title="Bietet dem Agenten zusätzlich azure_bing_search an: eine Frage wird direkt über Azure OpenAI's 'Grounding with Bing Search' (Responses API) beantwortet — anders als web_search liefert das KEINE Rohtreffer, sondern in einem Schritt eine fertige, mit Quellen-URLs belegte Antwort, da Azures eigene API keine Rohergebnisse herausgibt. Nutzt die unten unter 'LLM-Backend: Azure OpenAI' hinterlegten Zugangsdaten mit — kein separater Schlüssel nötig, aber ein dort konfiguriertes GPT-4-Klasse-Deployment erforderlich (wird sonst gar nicht erst angeboten). Sendet die Suchanfrage des Agenten an Azure/Bing als Drittanbieter."><input id="s_agent_allow_azure_bing_search" type="checkbox"> <span data-i18n="settings.agent.allowAzureBingSearch">Azure Bing-Suche erlauben (azure_bing_search, über Grounding with Bing Search)</span></label>
+            <label title="Zeit-Budget in Sekunden je azure_bing_search-Aufruf. Leer/0 = Standard (30), Obergrenze 120.">Zeit-Budget je Azure-Bing-Suche (Sek.) <input id="s_agent_azure_bing_search_timeout" type="number" min="0" max="120" step="1" placeholder="30"></label>
+            <label class="check-label" title="Standardmäßig AN: Der Agent darf eine breite Aufgabe in mehrere unabhängige Teilaufgaben zerlegen und diese von Unter-Agenten PARALLEL bearbeiten lassen (delegate_subtasks), dann zusammenführen — nur Lesezugriff über Werkzeuge, die er ohnehin hat, begrenzt auf max. 4 Teilaufgaben. Unter-Agenten können selbst keine weiteren starten. Häkchen setzen, um das abzuschalten und den Agenten auf eine einzige lineare Werkzeug-Schleife zu zwingen."><input id="s_agent_subagents_disabled" type="checkbox"> <span data-i18n="settings.agent.disableSubagents">Unter-Agenten (Parallel-Orchestrierung) deaktivieren</span></label>
+            <label title="Name eines der unten unter 'Zugriffs-Presets' definierten Presets, das die Agent-Stufe fest auf bestimmte Quelltypen/Werkzeuge einschränkt — anders als bei Instant/Standard gibt es bei der Agent-Stufe keine Auswahl durch die Nutzer:in (das Preset-Dropdown im Chat wird dann ignoriert), das Preset gilt für jede Agent-Aufgabe. Leer = kein Preset, nur die Zugriffskontrolle oben (Abteilungen) greift.">Zugriffs-Preset für den Agenten <input id="s_agent_default_preset" placeholder="z. B. intern"></label>
+            <label title="Wie viele Unter-Agenten ein delegate_subtasks-Aufruf höchstens parallel starten darf. Jeder Unter-Agent führt eigene Werkzeug-Runden aus (siehe Feld rechts) und kostet damit eigenes LLM-Budget/Zeit — höher beschleunigt eine breite, in unabhängige Teilaufgaben zerlegbare Recherche (z. B. mehrere Quellen parallel durchsuchen), treibt aber Kosten und Serverlast bei jeder Delegation gleichzeitig hoch. Leer/0 = Standard (4), Obergrenze 8.">Max. Teilaufgaben je Delegation <input id="s_agent_max_subtasks" type="number" min="0" max="8" step="1" placeholder="4"></label>
+            <label title="Werkzeug-Runden-Budget je Unter-Agent (analog zu 'Max. Werkzeug-Runden' für den Haupt-Agenten, aber separat einstellbar). Höher erlaubt einem Unter-Agenten eine gründlichere Bearbeitung seiner Teilaufgabe (mehrere Such-/Werkzeugaufrufe nacheinander), kostet aber pro Unter-Agent zusätzliche LLM-Aufrufe — multipliziert sich mit 'Max. Teilaufgaben je Delegation' links zur Gesamtkostenobergrenze einer einzelnen Delegation. Leer/0 = Standard (4), Obergrenze 8.">Werkzeug-Runden je Unter-Agent <input id="s_agent_subagent_rounds" type="number" min="0" max="8" step="1" placeholder="4"></label>
+            <label title="Wie viele Unter-Agenten gleichzeitig laufen dürfen — drosselt die parallele Last auf das Chat-Backend (analog zur Import-Drosselung). Leer/0 = Standard (4), Obergrenze 8.">Max. gleichzeitige Unter-Agenten <input id="s_agent_max_concurrency" type="number" min="0" max="8" step="1" placeholder="4"></label>
+            <label class="check-label" title="Standardmäßig AN: Bei einem langen, vielrundigen Agent-Lauf (insbesondere mit Unter-Agenten) werden Werkzeug-Ergebnisse aus bereits abgeschlossenen, länger zurückliegenden Runden auf einen kurzen Platzhalter gekürzt, sobald der angesammelte Umfang eine Schwelle überschreitet — die eigenen Werkzeugaufrufe des Modells bleiben dabei immer erhalten, nur die (bereits verarbeiteten) Roh-Ergebnisse älterer Runden werden verkürzt. Reine Größenbegrenzung, keine Zusammenfassung per Zusatz-LLM-Aufruf. Wichtiger Nebeneffekt: Das nachträgliche Kürzen verändert bereits gesendete Nachrichten — der KI-Anbieter muss deshalb die betroffene und jede folgende Runde einmal komplett neu verarbeiten statt (wie sonst üblich) nur die neuen Teile. Das macht genau diese eine Anfrage etwas langsamer und teurer als gewohnt; danach läuft es bis zur nächsten Kürzung wieder wie gewohnt schneller/günstiger. Bei starker Kosten-Empfindlichkeit: Schwelle unten hochsetzen oder hier ganz deaktivieren, wenn lange Läufe in der Praxis selten sind."><input id="s_agent_context_compaction_disabled" type="checkbox"> <span data-i18n="settings.agent.disableContextCompaction">Kontext-Kürzung bei langen Agent-Läufen deaktivieren</span></label>
+            <label title="Ab wie vielen angesammelten Zeichen (über alle noch nicht gekürzten Werkzeug-Antworten) die Kürzung einsetzt. Höher = Kürzung greift seltener (die oben beschriebene gelegentliche Verlangsamung/Mehrkosten treten seltener auf), dafür wächst der Kontext bei langen Läufen weiter ungebremst. Leer/0 = Standard (24000, ca. 6000 Token) — bewusst großzügig, damit normale 1-3-Runden-Antworten nie betroffen sind.">Kürzungs-Schwelle (Zeichen) <input id="s_agent_context_compaction_threshold" type="number" min="0" step="1" placeholder="24000"></label>
+            <label title="Wie viele der jüngsten Runden von der Kürzung immer ausgenommen bleiben, unabhängig von ihrer Größe — auch nach einer Kürzung bleiben zumindest diese letzten Runden von der oben beschriebenen zusätzlichen Verarbeitung verschont, bis zur nächsten Kürzung. Leer/0 = Standard (2).">Ausgenommene jüngste Runden <input id="s_agent_context_compaction_keep_rounds" type="number" min="0" step="1" placeholder="2"></label>
+            <label title="Wie viel Text ein einzelner search_knowledge_base-Treffer maximal an das Modell liefert. Höher = weniger Nachfrage-Suchen bei einem großkontextfähigen Modell nötig, kostet aber mehr Kontext/Tokens pro Suche; niedriger schont ein kleines/lokales Modell mit wenig Kontextfenster. Leer/0 = Standard (400 Zeichen).">Suchergebnis-Länge (Zeichen) <input id="s_agent_search_result_chars" type="number" min="0" step="1" placeholder="400"></label>
+            <label title="Wie viel Text get_source_content (voller Quellinhalt) maximal an das Modell liefert — bei aktiviertem run_code (Phase 4, aktuell ohne Sandbox nicht verfügbar) auch dessen Ausgabe-Obergrenze. Höher für großkontextfähige Modelle (spart Nachfrage-Aufrufe bei langen Dokumenten), niedriger für kleine/lokale Modelle. Leer/0 = Standard (8000 Zeichen).">Quellinhalt-Länge (Zeichen) <input id="s_agent_source_content_chars" type="number" min="0" step="1" placeholder="8000"></label>
+          </div>
+          <div class="settings-section span-2">
+            <h3>Letzte Agent-Werkzeug-Aufrufe</h3>
+            <p class="hint">Protokoll der letzten Werkzeug-Ausführungen des Agenten (wer, welcher Agent/Unter-Agent, welches Werkzeug, Dauer, Ergebnis-Vorschau) — nur im Arbeitsspeicher, geht bei einem Serverneustart verloren.</p>
+            <div class="modal-actions">
+              <button type="button" id="agentAuditReload" class="ghost-btn" title="Lädt die Liste unten neu."><span data-i18n="settings.agent.auditReloadButton">Aktualisieren</span></button>
+              <button type="button" id="agentAuditClear" class="ghost-btn" title="Leert das Protokoll — nützlich, um vor dem Beobachten eines bestimmten Laufs mit einer sauberen Liste zu starten."><span data-i18n="settings.agent.auditClearButton">Leeren</span></button>
+            </div>
+            <ul id="agentAuditList" class="pst-folder-list"></ul>
+          </div>
+          <div class="settings-section span-2">
+            <h3 data-i18n="settings.operations.title">Live-Betriebsübersicht</h3>
+            <p class="hint" data-i18n="settings.operations.hint">Zeigt aktuell angemeldete bzw. aktive LDAP-Nutzer:innen und laufende Agent-Aufgaben. Keine Fragen, Werkzeugargumente, Gruppenlisten oder Directory-IDs werden hier angezeigt.</p>
+            <div class="modal-actions">
+              <button type="button" id="operationsReload" class="ghost-btn" data-i18n="settings.operations.reload">Aktualisieren</button>
+            </div>
+            <div id="operationsSummary" class="operations-summary" aria-live="polite"></div>
+            <div class="operations-grid">
+              <section>
+                <h4 data-i18n="settings.operations.users">Angemeldete Nutzer:innen</h4>
+                <ul id="operationsUsers" class="operations-list"></ul>
+              </section>
+              <section>
+                <h4 data-i18n="settings.operations.agents">Aktive Agent-Prozesse</h4>
+                <ul id="operationsAgents" class="operations-list"></ul>
+              </section>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      </div>
+
+      <div class="settings-group" id="settings-group-access">
+      <h2 class="settings-group-title" data-i18n="settings.group.access">Zugriff &amp; Sicherheit</h2>
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.presets">Zugriffs-Presets (Einsatzzweck)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Eine zweite, von der Abteilungs-Zugriffskontrolle oben unabhängige Einschränkungs-Achse: nicht WER fragt, sondern WOFÜR — z. B. ein Preset "Kundenkommunikation", das nur Shop und Wissensbasis-Dateien erlaubt, aber keine internen PST-Postfächer. Ein Preset kann nie mehr zeigen, als die Abteilungs-Zugriffskontrolle ohnehin erlaubt — beide gelten gemeinsam als Schnittmenge. Im Chat wählt die fragende Person selbst ein Preset (Dropdown); Agent und Antwortentwürfe nutzen je ein fest hinterlegtes Preset (siehe die Felder in den jeweiligen Karten oben). Leere <code>kinds</code>/<code>tools</code> bzw. ein nicht existierendes/leeres Preset bedeuten „keine Einschränkung auf dieser Achse“. JSON-Array aus Objekten <code>{"name", "display_name", "kinds": [...], "tools": [...]}</code> — <code>name</code> ist die stabile ID (wird in den obigen Preset-Feldern und im Chat-Dropdown referenziert), <code>kinds</code> sind erlaubte <code>source_kind</code>-Werte (z. B. <code>file</code>, <code>pst_email</code>, <code>shop</code>), <code>tools</code> erlaubte Werkzeug-Kategorien (<code>mssql</code>, <code>shop</code>, <code>http</code>, <code>sharepoint_search</code>, <code>web_search</code>, <code>azure_bing_search</code>).</p>
+            <textarea id="s_presets" class="prompt-editor" rows="8" aria-label="Zugriffs-Presets als JSON-Array" title="JSON-Array der Zugriffs-Presets — siehe den Hinweistext oben für Feldbedeutung und Beispiel. Ungültiges JSON wird beim Speichern abgelehnt (Fehlermeldung erscheint unten bei den Speichern-Buttons), die zuletzt gespeicherte Fassung bleibt dabei unverändert aktiv." placeholder='[
+  {
+    "name": "intern",
+    "display_name": "Intern (alles)",
+    "kinds": [],
+    "tools": []
+  },
+  {
+    "name": "kunde",
+    "display_name": "Kundenkommunikation",
+    "kinds": ["file", "shop"],
+    "tools": ["shop"]
+  }
+]'></textarea>
+            <p class="hint">Wird zusammen mit den übrigen Einstellungen über den Button "Einstellungen speichern" unten gespeichert — kein eigener Speichern-Button, wie bei den SQL-Abfrage-Vorlagen oben.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.citationUrlMappings">Zitate (URL-Zuordnungen)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Ordnet Pfad-Präfixe Web-URLs zu, damit Citation-Chips direkt auf das Original verweisen (SharePoint, Intranet, Dateiserver). Eine Zuordnung pro Zeile im Format <code>Pfad-Präfix → URL-Präfix</code>.</p>
+            <textarea id="s_url_mappings" class="prompt-editor" rows="4"
+              aria-label="URL-Zuordnungen, ein Eintrag pro Zeile"
+              title="Jede Zeile ordnet einem lokalen Pfad-Präfix (wie er in der internen Quell-ID steht) ein Web-URL-Präfix zu. Der erste passende Präfix pro Quelle gewinnt, Reihenfolge der Zeilen ist also relevant. Ohne passende Zuordnung bleibt ein Zitat-Chip ohne Link, aber weiterhin per Klick über das Popup einsehbar. Trennzeichen ist ausdrücklich der Pfeil „→“ (nicht ein getipptes -&gt; oder =&gt;) — am einfachsten aus der Beispielzeile im Platzhalter kopieren. Zeilen mit einem anderen Trennzeichen werden beim Speichern ohne Fehlermeldung ignoriert."
+              placeholder="C:\Freigaben\Dokumente\ → https://intranet.rubix.com/docs/&#10;\\server\Projekte\ → https://sharepoint.rubix.com/sites/projekte/"></textarea>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.citationVisibility">Zitate (Sichtbarkeit je Quelltyp)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Legt je Quelltyp (<code>source_kind</code>) fest, ob dessen Treffer als anklickbare Quelle/Zitat in der Antwort angezeigt werden. Ein nicht aufgeführter Typ bleibt sichtbar (Standardverhalten). Auf <code>false</code> gesetzte Typen werden weiterhin zur Beantwortung herangezogen — nur die Quellenangabe selbst wird unterdrückt, z. B. für PST-Postfachimporte aus Datenschutzgründen. Ein Eintrag pro Zeile im Format <code>source_kind = true/false</code>.</p>
+            <textarea id="s_source_visibility" class="prompt-editor" rows="4"
+              aria-label="Zitat-Sichtbarkeit je Quelltyp, ein Eintrag pro Zeile"
+              title="Betrifft nur die Anzeige, nicht das Retrieval: ein auf false gesetzter Quelltyp grundiert Antworten weiterhin ganz normal, nur die Quellenangabe (Chip, Name, Link) wird nach der Antwortgenerierung unterdrückt. Für echte Zugriffskontrolle (Inhalte gar nicht erst verwenden) siehe den Abschnitt 'Zugriffskontrolle je Quelltyp' weiter unten."
+              placeholder="pst_email = false&#10;pst_attachment = false&#10;imap_email = true"></textarea>
+            <p class="hint">Bekannte Quelltypen: <code>file</code>, <code>pst_email</code>, <code>pst_attachment</code>, <code>imap_email</code>, <code>imap_attachment</code>, <code>outlook_email</code>, <code>outlook_attachment</code>, <code>sharepoint_file</code>, <code>sharepoint_page</code>, <code>sharepoint_link</code>, <code>onedrive_file</code>, <code>confluence_page</code>, <code>jira_issue</code>, <code>teams_message</code>, <code>web_page</code>, <code>freshservice_ticket</code>, <code>github_readme</code>, <code>github_issue</code>, <code>github_pull_request</code>, <code>sap_s4_record</code>.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.sourceAccessControl">Zugriffskontrolle je Quelltyp (Abteilungen)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Schränkt einen Quelltyp (<code>source_kind</code>) auf bestimmte Abteilungen ein — anders als die Sichtbarkeits-Einstellung oben verhindert das, dass die Inhalte überhaupt in eine Antwort einfließen (echte Zugriffskontrolle, nicht nur Zitat-Anzeige). Ein nicht aufgeführter Typ bleibt für alle durchsuchbar, auch für nicht angemeldete Besucher:innen. Die Abteilung wird beim LDAP-Login automatisch aus den AD-Attributen <code>department</code>/<code>title</code> klassifiziert (siehe <code>department.go</code>) — ohne LDAP-Login (siehe unten) hat diese Einstellung keine Wirkung für angemeldete Nutzer:innen, da niemand sich anmelden kann. Ein Eintrag pro Zeile im Format <code>source_kind = Abteilung1,Abteilung2</code>.</p>
+            <textarea id="s_source_access" class="prompt-editor" rows="4"
+              aria-label="Zugriffskontrolle je Quelltyp, ein Eintrag pro Zeile"
+              title="Ein hier restriktiv eingetragener Quelltyp wird für nicht berechtigte Anfragen bereits vor der Rangberechnung aus der Kandidatenliste entfernt und erreicht das Sprachmodell gar nicht erst. Anonyme (nicht angemeldete) Anfragen zählen immer als 'keine Abteilung' und sehen daher nur Typen, die hier gar nicht aufgeführt sind."
+              placeholder="imap_email = Vertrieb,Einkauf&#10;outlook_email = Vertrieb"></textarea>
+            <p class="hint">Bekannte Quelltypen: siehe Abschnitt „Zitate (Sichtbarkeit je Quelltyp)“ oben (inkl. <code>freshservice_ticket</code>). Bekannte Abteilungs-Codes: <code>GF, Zoll, FiBu, IT, QM, SAP, Team Prozesse, EBusiness, Einkauf, PDM, Marketing, Personal, Controlling, Empfang, Vertrieb, Logistik, Spezial, Fertigung, Fahrdienst, default</code> (<code>default</code> = angemeldet, aber Abteilung/Titel konnte keiner Regel zugeordnet werden). Diese Liste zeigt nur die eingebauten Standard-Regeln — falls unter Prompts → „Abteilungs-Regeln“ eine eigene department_rules.json aktiv ist, können die tatsächlich vergebenen Codes davon abweichen; dort nachsehen, bevor hier Codes eingetragen werden.</p>
+            <label class="check-label" title="Sendet bei jeder Frage einen kurzen Nutzerkontext-Block (Anzeigename, Abteilung, Titel, Standort, Unternehmen der angemeldeten Person) an das jeweils antwortende Chat-Backend mit — nur für Anrede/Tonfall gedacht, das Modell wird angewiesen, keine zusätzlichen Fakten daraus zu erfinden. Wichtig: Bei Backend 'Azure' verlassen diese AD-Attribute damit das lokale Netz. Ohne aktive Sitzung (nicht angemeldet) hat diese Einstellung keine Wirkung."><input id="s_personalize_answers" type="checkbox"> <span data-i18n="settings.access.personalizeAnswers">Antworten personalisieren (Name/Abteilung/Titel/Standort angemeldeter Nutzer:innen an das LLM übergeben)</span></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.ldap">LDAP / Active Directory</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Ersetzt das geteilte Admin-Passwort durch echte AD-Anmeldedaten (Benutzername + Passwort) mit echter serverseitiger Sitzungsprüfung — nicht nur eine UI-Anzeige wie beim bisherigen Passwort-Gate. Ohne Aktivierung ändert sich nichts am bisherigen Verhalten. Anmeldung ist jetzt für alle Mitarbeitenden gedacht, nicht nur für Admins: jeder erfolgreiche AD-Login erhält eine normale Sitzung (für Abteilungs-Zugriff/Personalisierung oben), unabhängig davon, ob die Gruppenbedingung unten erfüllt ist — die Gruppe entscheidet ausschließlich über Admin-Zugriff. R3 liest dabei nur Anzeigename, Konto-/UPN, Mail, Abteilung, Titel, Standort, Unternehmen, Gruppen und eine interne stabile Directory-ID; Personalnummern, Telefon, Manager und Anschrift werden weder abgefragt noch gespeichert.</p>
+            <label class="check-label" title="Aktiviert echte AD-Anmeldung mit serverseitiger Sitzungsprüfung. Ohne diese Option ändert sich nichts am bisherigen Verhalten (nur UI-Passwort-Gate für Admin-Tabs, keine echte Zugriffskontrolle, keine Abteilungs-Einschränkung/Personalisierung möglich)."><input id="s_ldap_enabled" type="checkbox"> <span data-i18n="settings.ldap.enableLabel">LDAP-Login aktivieren</span></label>
+            <label title="LDAP/LDAPS-Verbindungsstring des Active-Directory-Servers inklusive Port, z. B. ldaps://server:636. ldaps:// (TLS) ist gegenüber unverschlüsseltem ldap:// vorzuziehen, da Anmeldedaten sonst im Klartext über das Netz gehen.">LDAP-URL <input id="s_ldap_url" placeholder="ldaps://server:636"></label>
+            <label title="Such-Basis (Base DN), unter der nach erfolgreichem Bind nach Attributen/Gruppenmitgliedschaften gesucht wird, z. B. ou=Zitec,dc=zitec-intern,dc=de.">Base DN <input id="s_ldap_base_dn" placeholder="ou=Zitec,dc=zitec-intern,dc=de"></label>
+            <label title="Wird einem Benutzernamen ohne Backslash automatisch als 'DOMÄNE\Benutzer' vorangestellt, z. B. ZITEC — passend zur Anmeldekonvention des Ziel-AD.">Domänen-Präfix <input id="s_ldap_domain_prefix" placeholder="ZITEC"></label>
+            <label title="Voller Distinguished Name (DN) der AD-Gruppe, deren Mitglieder Admin-Zugriff erhalten. Leer = jeder erfolgreich authentifizierte AD-Account bekommt Admin-Zugriff (wird als Warnung geloggt), es sei denn die Admin-Liste unten ist gesetzt. Betrifft nur den Admin-Bereich — normale Anmeldung/Abteilungs-Zugriff funktioniert für alle unabhängig davon.">Erforderliche AD-Gruppe (DN) für Admin-Zugriff <input id="s_ldap_required_group_dn" placeholder="CN=R3-Admins,OU=Groups,DC=zitec-intern,DC=de"></label>
+            <label class="span-2" title="Feste Liste einzelner Accounts, die immer Admin-Zugriff bekommen — unabhängig von der AD-Gruppe oben (beides zusammen wirkt als ODER: Gruppe ODER diese Liste reicht). Ein Eintrag pro Zeile, z. B. eine E-Mail-Adresse (simon.waldherr@rubix.com), ein UPN oder ein Benutzername (waldherr) — wird beim Login case-insensitiv gegen Mail, CN, sAMAccountName, UPN und den tatsächlich eingegebenen Benutzernamen verglichen.">Admin-Zugriff für einzelne Nutzer (eine Zeile pro Nutzer)
+              <textarea id="s_ldap_admin_users" class="prompt-editor" rows="4" placeholder="simon.waldherr@rubix.com&#10;sebastian.zitzl@rubix.com"></textarea>
+            </label>
+            <p class="hint">Solange weder die Gruppe noch diese Liste gesetzt sind, erhält jeder erfolgreich authentifizierte AD-Account Admin-Zugriff (wird im Server-Log als Warnung vermerkt). Sobald eine der beiden gesetzt ist, erhalten Accounts, die weder in der Gruppe noch in der Liste sind, trotzdem eine normale (nicht-admin) Sitzung.</p>
+            <label title="Name der Umgebungsvariable mit dem geteilten Admin-Passwort — dient VOR Aktivierung von LDAP-Login als einfache UI-Zugangssperre für die Admin-Bereiche, NACH Aktivierung zusätzlich als 'Notfallzugang': dieses Passwort im Login-Formular meldet als Admin an, ganz ohne AD, falls AD/LDAP einmal nicht erreichbar oder falsch konfiguriert ist. Leer/nicht gesetzt = Notfallzugang existiert nicht (LDAP ist dann der einzige Weg hinein — bei einem kaputten LDAP kommt niemand mehr in den Admin-Bereich).">Admin-Passwort (env-Variable) <input id="s_admin_password_env" placeholder="R3_ADMIN_PASSWORD"></label>
+            <label title="Legt fest, was passiert, wenn ein nicht angemeldeter Gast im Chat trotzdem das Azure-Profil wählt (nur relevant, solange LDAP-Login oben aktiv ist — ohne LDAP gibt es diese Stufe nicht, siehe docs/UI_HARDENING_PLAN.md). 'Auf Standardprofil zurückfallen' beantwortet die Frage trotzdem, aber mit dem Standardprofil statt Azure. 'Ablehnen' gibt stattdessen einen Fehler zurück.">Gast + Azure-Profil (nur bei aktivem LDAP-Login)
+              <select id="s_ldap_guest_azure_policy">
+                <option value="fallback">Auf Standardprofil zurückfallen</option>
+                <option value="deny">Ablehnen (Fehler)</option>
+              </select>
+            </label>
+            <p class="hint">LDAP selbst hat keine eigenen Dienstkonto-Zugangsdaten zum Testen — der Test unten führt daher einen echten Bind-Versuch mit einem beliebigen AD-Testkonto durch, genau wie ein normaler Login.</p>
+            <label title="Ein AD-Konto nur für den Verbindungstest unten — wird nirgends gespeichert, nur für diesen einen Testversuch verwendet.">Testbenutzer (nur für Verbindungstest) <input id="s_ldap_test_username" autocomplete="off"></label>
+            <label title="Passwort zum Testbenutzer oben — wird nirgends gespeichert, nur für diesen einen Testversuch verwendet.">Testpasswort (nur für Verbindungstest) <input id="s_ldap_test_password" type="password" autocomplete="off"></label>
+            <button type="button" id="ldapTest" class="ghost-btn" title="Führt mit den obigen (noch nicht gespeicherten) LDAP-Werten und dem Testkonto einen echten Bind + Attribut-/Gruppen-Lookup durch — prüft damit URL, Base DN, Domänen-Präfix und die Admin-Gruppen-Bedingung in einem Schritt.">Anmeldung testen</button>
+            <div id="ldapTestResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.localAuth">Lokale Anmeldung (Benutzerkonten)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="settings.localAuth.hint">Individuell angelegte lokale Konten mit eigenem Passwort (bcrypt-gehasht) — eine Alternative und Ergänzung zur AD/LDAP-Anmeldung oben, z. B. für externe Partner oder Testkonten ohne AD-Konto. Die Konten selbst werden im Tab „Benutzer" verwaltet und im konfigurierten Speicher-Backend abgelegt (tinySQL oder SQLite, siehe „Speicher-Backend"), nicht in dieser Einstellungsdatei. Sobald lokale Anmeldung ODER LDAP aktiv ist, sind die Admin-Bereiche serverseitig wirklich geschützt (nicht mehr nur UI-versteckt).</p>
+            <label class="check-label" title="Aktiviert die Anmeldung mit lokalen Benutzerkonten. Beim Login wird zuerst gegen lokale Konten geprüft (nach Benutzername), dann — falls aktiviert — gegen LDAP. Ohne diese Option können lokale Konten zwar angelegt, aber nicht zum Anmelden verwendet werden."><input id="s_localauth_enabled" type="checkbox"> <span data-i18n="settings.localAuth.enableLabel">Lokale Anmeldung aktivieren</span></label>
+            <label title="Mindestlänge für Passwörter beim Anlegen/Ändern lokaler Konten. 0 = Standard (12 Zeichen)."><span data-i18n="settings.localAuth.minPasswordLength">Passwort-Mindestlänge</span> <input id="s_localauth_min_pw" type="number" min="0" step="1" placeholder="0 = Standard (12)"></label>
+            <label title="bcrypt-Kostenfaktor fürs Passwort-Hashing — höher ist langsamer zu berechnen und damit schwerer per Brute-Force zu knacken. 0 = Standard (12). Gültig: 4–31; Werte über 14 machen jeden Login spürbar langsam."><span data-i18n="settings.localAuth.bcryptCost">bcrypt-Kostenfaktor</span> <input id="s_localauth_cost" type="number" min="0" max="31" step="1" placeholder="0 = Standard (12)"></label>
+          </div>
+        </div>
+      </details>
+
+      </div>
+
+      <div class="settings-group" id="settings-group-external">
+      <h2 class="settings-group-title" data-i18n="settings.group.external">Externe Schnittstellen</h2>
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.apiAccess">API-Zugriff (externe JSON-API)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Erlaubt anderen Systemen, <code>/api/ask</code> und <code>/api/search</code> direkt anzusprechen (siehe <code>docs/API.md</code>), getrennt vom Browser-Login. Ohne Aktivierung ändert sich nichts — die Kästchen unten sind rein informativ, solange „API-Key erforderlich" aus ist. Interaktive Dokumentation mit Schema-Ansicht und „Ausprobieren"-Funktion: <a href="/api/docs" target="_blank" rel="noopener">/api/docs</a> (maschinenlesbar unter <a href="/api/openapi.json" target="_blank" rel="noopener">/api/openapi.json</a>, OpenAPI/Swagger-Format). Dieselben Keys unten funktionieren auch für die OpenAI-kompatible API weiter unten.</p>
+            <label class="check-label" title="Erzwingt einen gültigen API-Key (Header X-API-Key oder Authorization: Bearer) für jeden Aufruf von /api/ask und /api/search, auch für die eingebettete Browser-Oberfläche selbst. Ohne aktiviertem Schalter sind beide Endpunkte offen erreichbar für jeden, der den Server im Netz erreichen kann."><input id="s_api_require_key" type="checkbox"> API-Key für <code>/api/ask</code> und <code>/api/search</code> erforderlich</label>
+            <label title="Begrenzt, wie oft ein anonymer Aufrufer (keine gültige Anmeldung) pro Minute /api/ask aufrufen darf — schützt vor unkontrollierten LLM-Kosten durch Gäste. Eingeloggte Nutzer sind davon ausgenommen. 0 = kein Limit (Standard, ändert nichts an bestehenden Deployments).">Rate-Limit für Gäste (Anfragen/Minute an <code>/api/ask</code>) <input id="s_api_guest_rate_limit" type="number" min="0" step="1" placeholder="0 = kein Limit"></label>
+            <label title="Wie 'Rate-Limit für Gäste' links, aber für /api/voice/transcribe — eine Sprachaufnahme startet einen externen ffmpeg-/Whisper-Prozess und ist damit teurer als ein einzelner /api/ask-Aufruf, ein unbegrenzter anonymer Zugriff könnte den Host schneller belasten. Eingeloggte Nutzer sind davon ausgenommen. 0 = kein Limit (Standard).">Rate-Limit für Gäste (Anfragen/Minute an <code>/api/voice/transcribe</code>) <input id="s_api_guest_voice_rate_limit" type="number" min="0" step="1" placeholder="0 = kein Limit"></label>
+          </div>
+          <div class="settings-section span-2">
+            <form id="apiKeyCreateForm">
+              <label title="Frei wählbarer Name/Zweck nur zur eigenen Orientierung in der Tabelle unten (z. B. welches System den Key nutzt) — hat keine technische Funktion und schränkt den Key nicht ein.">Name/Zweck des neuen Keys <input id="apiKeyName" placeholder="z. B. „CRM-Integration“"></label>
+              <button type="submit"><span data-i18n="settings.apiAccess.createKeyButton">Neuen Key erstellen</span></button>
+            </form>
+            <div id="apiKeyCreateResult" class="result" role="status"></div>
+            <table class="api-key-table" id="apiKeyTable">
+              <thead>
+                <tr><th>Name</th><th>Präfix</th><th>Erstellt</th><th>Zuletzt genutzt</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody id="apiKeyTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="settings.section.openaiApi">OpenAI-kompatible API (für andere Tools)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Stellt R3 auf einem eigenen, gemeinsamen Port als einen oder mehrere OpenAI-kompatible Chat-Completions-Server bereit — jeder unten definierte <strong>Endpoint</strong> bekommt seinen eigenen URL-Pfad (<code>/&lt;name&gt;/v1/chat/completions</code>, leerer Name = unpräfigiert <code>/v1/chat/completions</code>) und entscheidet unabhängig, welche R3-Fähigkeiten er nutzt: nur das konfigurierte Standard-LLM (z. B. Azure, ganz ohne Wissensbasis/Werkzeuge), zusätzlich die Wissensbasis-Suche (RAG), zusätzlich Werkzeuge (Shop, MSSQL, HTTP-Vorlagen) — oder beides zusammen. So kann ein Partner-Werkzeug genau die Fähigkeiten bekommen, die es braucht, ein anderes einen reinen LLM-Zugang — z. B. Chat-Oberflächen wie Open WebUI, KI-Erweiterungen in Programmier-Editoren, oder andere Programme, die eigentlich für ChatGPT/OpenAI gebaut wurden: die lassen sich damit stattdessen auf R3 umleiten, ohne eigene Anpassung an dem Partner-Werkzeug. <a href="/openai-api" target="_blank" rel="noopener">Einrichtung, Beispiele und Hintergrund öffnen</a>. Erfordert immer einen gültigen API-Key (siehe oben) für jeden Endpoint — anders als bei <code>/api/ask</code> gibt es hier keine Option, die Schlüsselpflicht abzuschalten. Änderungen wirken sofort nach „Einstellungen speichern" (der Server wird bei Bedarf neu aufgesetzt), ohne Prozess-Neustart.</p>
+            <label class="check-label" title="Startet den OpenAI-kompatiblen Server auf dem Port rechts, für alle unten aktivierten Endpoints gemeinsam. Wirkt nur zusammen mit einem gesetzten Port &gt; 0 und mindestens einem aktivierten Endpoint — eine bewusste dreifache Absicherung gegen ein versehentliches Offenlegen, ähnlich wie bei der Agent-Code-Ausführung."><input id="s_openai_api_enabled" type="checkbox"> <span data-i18n="settings.openaiApi.enableLabel">OpenAI-kompatible API aktivieren</span></label>
+            <label title="Gemeinsamer TCP-Port für alle Endpoints unten, getrennt vom Haupt-Port der Weboberfläche — z. B. damit eine Firewall-Regel nur diesen Port für Partner-Werkzeuge freigibt, ohne Import/Einstellungen/Admin-Routen mit freizugeben. 0 = deaktiviert, selbst wenn das Kästchen links aktiv ist.">Port <input id="s_openai_api_port" type="number" min="0" max="65535" placeholder="0 = deaktiviert"></label>
+            <div id="openaiEndpointsEditor" class="qt-editor"></div>
+            <button type="button" id="openaiEndpointAdd" class="ghost-btn"><span data-i18n="settings.openaiApi.addEndpointButton">+ Endpoint hinzufügen</span></button>
+          </div>
+        </div>
+      </details>
+      </div>
+
+      <div class="settings-group" id="settings-group-log">
+      <h2 class="settings-group-title" data-i18n="settings.group.log">Protokoll</h2>
+      <details class="settings-accordion" id="settingsHistoryCard">
+        <summary><h2 data-i18n="settings.section.changeHistory">Änderungshistorie</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Wer hat wann welche Einstellung geändert — Feld für Feld, mit altem und neuem Wert. Passwörter/API-Keys erscheinen nie mit Wert, nur als „(geändert)“. Gespeichert serverseitig in <code>r3-settings-history.jsonl</code> neben der Settings-Datei; hier werden die letzten 200 Speichervorgänge angezeigt.</p>
+            <button type="button" id="settingsHistoryReload" class="ghost-btn" title="Lädt die Änderungshistorie (neueste zuerst) neu vom Server."><span data-i18n="settings.changeHistory.reloadButton">Historie laden</span></button>
+            <ul id="settingsHistoryList" class="pst-folder-list settings-history-list"></ul>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" id="tokenUsageCard">
+        <summary><h2 data-i18n="settings.section.tokenUsage">Token-Nutzung</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint">Wie viele Ein-/Ausgabe-Tokens verbraucht wurden, je LLM-Backend und je Nutzer:in — aus Chat, Agent, Mail-Entwürfen und der OpenAI-kompatiblen API. Gespeichert serverseitig (Speicherort siehe Feld unten). Zählungen sind exakt, wo das Backend sie mitliefert (Azure/OpenAI/OpenRouter im Nicht-Streaming-Fall, Claude, Gemini); nur im Streaming-Modus ohne diese Rückmeldung wird die Zahl grob geschätzt und mit „≈“ gekennzeichnet.</p>
+            <label title="Datei, in der die Token-Nutzungsstatistik unten gespeichert wird.">Speicherort (Datei) <input id="s_token_usage_path" placeholder="r3-tokenusage.db"></label>
+            <label title="Zeitraum, über den die Chart/Tabelle unten aggregiert.">Zeitraum
+              <select id="tokenUsageRange">
+                <option value="7">Letzte 7 Tage</option>
+                <option value="30" selected>Letzte 30 Tage</option>
+                <option value="90">Letzte 90 Tage</option>
+                <option value="0">Gesamt</option>
+              </select>
+            </label>
+            <button type="button" id="tokenUsageReload" class="ghost-btn" title="Lädt die Token-Nutzung für den gewählten Zeitraum neu vom Server."><span data-i18n="settings.tokenUsage.reloadButton">Aktualisieren</span></button>
+            <div id="tokenUsageChart" class="tokusage-chart"></div>
+            <div class="tokusage-legend">
+              <span class="tokusage-legend-item"><span class="tokusage-swatch tokusage-swatch-prompt"></span>Prompt (Eingabe)</span>
+              <span class="tokusage-legend-item"><span class="tokusage-swatch tokusage-swatch-completion"></span>Completion (Ausgabe)</span>
+            </div>
+            <div class="table-wrap">
+              <table class="tokusage-table">
+                <thead><tr><th>Nutzer:in</th><th>Service</th><th>Prompt</th><th>Completion</th><th>Aufrufe</th></tr></thead>
+                <tbody id="tokenUsageTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+      </div>
+
+      <div class="settings-save-bar">
+        <button id="saveSettings" data-i18n="settings.save.label">Einstellungen speichern</button>
+        <span id="settingsSaveState" class="settings-save-state" aria-live="polite"></span>
+        <button type="button" id="exportSettings" class="ghost-btn" title="Lädt alle Einstellungen als JSON-Datei herunter. Zugangsdaten/Passwörter/API-Keys/Client-Secrets sind darin vollständig entfernt (leer), nicht nur maskiert — die Datei enthält keine Geheimnisse und kann z. B. zur Sicherung oder zur Übertragung auf eine andere R3-Instanz verwendet werden."><span data-i18n="settings.exportButton">Export Settings</span></button>
+        <button type="button" id="importSettingsBtn" class="ghost-btn" title="Spielt eine zuvor exportierte JSON-Datei wieder ein. Leere Zugangsdaten/Passwörter in der Datei überschreiben die bereits gespeicherten NICHT — nur tatsächlich befüllte Felder werden übernommen. Die Änderung erscheint wie jeder Speichervorgang in der Änderungshistorie oben, markiert als Import."><span data-i18n="settings.importButton">Import Settings</span></button>
+        <input type="file" id="importSettingsFile" accept="application/json,.json" hidden>
+        <div id="settingsResult" class="result" role="status"></div>
+      </div>
+    </section>
+{{end}}

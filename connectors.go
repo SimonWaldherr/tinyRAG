@@ -4,7 +4,8 @@ package main
 // Connector System
 //
 // Provides a minimal but extensible connector framework for tinyRAG.
-// Supported connector types: http, sql (read-only, parameterised).
+// Supported connector types: http, rpc (JSON-RPC 2.0), sql (read-only,
+// parameterised).
 // Each connector exposes one or more Capabilities (tool / resource / ingest).
 // The system can generate an LLM-compatible function-calling array and an
 // MCP-compatible tool list from the registered connectors.
@@ -38,6 +39,7 @@ type ConnectorType string
 
 const (
 	ConnectorTypeHTTP ConnectorType = "http"
+	ConnectorTypeRPC  ConnectorType = "rpc"
 	ConnectorTypeSQL  ConnectorType = "sql"
 )
 
@@ -106,6 +108,15 @@ type Capability struct {
 	// BodyTemplate is a JSON string template for the request body.
 	// Named parameters use {param_name} syntax and are JSON-escaped.
 	BodyTemplate string `json:"body_template,omitempty"`
+
+	// ── JSON-RPC-specific ───────────────────────────────────────────────────
+	// RPCMethod is the JSON-RPC 2.0 method name. The validated input object is
+	// passed as `params` without string templating.
+	RPCMethod string `json:"rpc_method,omitempty"`
+	// ReadOnly is an explicit operator assertion used only for autonomous
+	// execution policy. JSON-RPC is POST-based, so it is never inferred from
+	// the transport method.
+	ReadOnly bool `json:"read_only,omitempty"`
 
 	// ── SQL-specific ───────────────────────────────────────────────────────
 	// Query is a SELECT-only SQL template. Named parameters use {param_name}
@@ -293,8 +304,18 @@ func (s *connectorStore) upsert(c Connector) (Connector, error) {
 	if strings.TrimSpace(c.Name) == "" {
 		return Connector{}, fmt.Errorf("connector name required")
 	}
-	if c.Type != ConnectorTypeHTTP && c.Type != ConnectorTypeSQL {
-		return Connector{}, fmt.Errorf("connector type must be %q or %q", ConnectorTypeHTTP, ConnectorTypeSQL)
+	if c.Type != ConnectorTypeHTTP && c.Type != ConnectorTypeRPC && c.Type != ConnectorTypeSQL {
+		return Connector{}, fmt.Errorf("connector type must be %q, %q, or %q", ConnectorTypeHTTP, ConnectorTypeRPC, ConnectorTypeSQL)
+	}
+	if c.Type == ConnectorTypeRPC {
+		if strings.TrimSpace(c.BaseURL) == "" {
+			return Connector{}, fmt.Errorf("rpc connector base_url required")
+		}
+		for _, cap := range c.Capabilities {
+			if strings.TrimSpace(cap.RPCMethod) == "" {
+				return Connector{}, fmt.Errorf("rpc capability %q requires rpc_method", cap.Name)
+			}
+		}
 	}
 	if c.Config == nil {
 		c.Config = map[string]string{}
@@ -353,6 +374,19 @@ func (s *connectorStore) registry() map[string]connectorRegistryEntry {
 		}
 	}
 	return out
+}
+
+// registryEntry resolves a capability name case-insensitively. XML tool calls
+// are canonicalized before execution, while persisted connector definitions
+// retain the operator's original spelling.
+func (s *connectorStore) registryEntry(name string) (connectorRegistryEntry, bool) {
+	needle := strings.TrimSpace(name)
+	for registeredName, entry := range s.registry() {
+		if strings.EqualFold(registeredName, needle) {
+			return entry, true
+		}
+	}
+	return connectorRegistryEntry{}, false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,10 +461,12 @@ func (s *connectorStore) enabledToolDefs() []toolDef {
 			if len(cap.InputSchema.Required) == 1 {
 				paramHint = fmt.Sprintf("Either plain text or JSON with required field %q", cap.InputSchema.Required[0])
 			}
+			schema := cap.InputSchema
 			out = append(out, toolDef{
 				Name:        cap.Name,
 				Description: fmt.Sprintf("%s (connector: %s)", cap.Description, c.Name),
 				ParamHint:   paramHint,
+				InputSchema: &schema,
 			})
 		}
 	}
@@ -534,8 +570,16 @@ func newTraceID() string {
 	return hex.EncodeToString(b)
 }
 
-// Execute finds the requested capability and runs it.
+// Execute finds the requested capability and runs it. It is the compatibility
+// entry point for manually triggered connector calls.
 func (e *connectorExecutor) Execute(req ConnectorExecRequest) (ConnectorExecResult, error) {
+	return e.ExecuteContext(context.Background(), req)
+}
+
+// ExecuteContext runs a capability under the caller's cancellation boundary.
+// The connector-specific timeout remains an upper bound, while a cancelled
+// HTTP request or agent request stops sooner.
+func (e *connectorExecutor) ExecuteContext(parent context.Context, req ConnectorExecRequest) (ConnectorExecResult, error) {
 	traceID := newTraceID()
 	start := time.Now()
 	log.Printf("[connector] trace=%s connector=%s capability=%s — starting", traceID, req.ConnectorID, req.Capability)
@@ -564,7 +608,10 @@ func (e *connectorExecutor) Execute(req ConnectorExecRequest) (ConnectorExecResu
 		return ConnectorExecResult{}, fmt.Errorf("input validation failed: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), conn.timeout())
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, conn.timeout())
 	defer cancel()
 
 	var (
@@ -577,6 +624,8 @@ func (e *connectorExecutor) Execute(req ConnectorExecRequest) (ConnectorExecResu
 	switch conn.Type {
 	case ConnectorTypeHTTP:
 		raw, output, source, execErr = executeHTTPCapability(ctx, conn, *cap, req.Input)
+	case ConnectorTypeRPC:
+		raw, output, source, execErr = executeRPCCapability(ctx, conn, *cap, req.Input)
 	case ConnectorTypeSQL:
 		raw, output, source, execErr = executeSQLCapability(ctx, conn, *cap, req.Input)
 	default:
@@ -837,7 +886,7 @@ func executeHTTPCapability(
 		req.Header.Set(k, resolveSecret(v))
 	}
 
-	client := &http.Client{Timeout: conn.timeout()}
+	client := newExternalHTTPClient(conn.timeout())
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, source, fmt.Errorf("http: do request: %w", err)
@@ -858,6 +907,97 @@ func executeHTTPCapability(
 	output, err = applyOutputMap(raw, cap.OutputMap)
 	if err != nil {
 		return raw, nil, source, fmt.Errorf("http: output mapping: %w", err)
+	}
+	return raw, output, source, nil
+}
+
+// buildJSONRPCRequest creates a JSON-RPC 2.0 request from a capability and
+// its already schema-validated input. Keeping params structured avoids the
+// quoting and injection hazards of string templates.
+func buildJSONRPCRequest(cap Capability, input map[string]any) ([]byte, error) {
+	method := strings.TrimSpace(cap.RPCMethod)
+	if method == "" {
+		return nil, fmt.Errorf("rpc: rpc_method is required for capability %q", cap.Name)
+	}
+	return json.Marshal(struct {
+		JSONRPC string         `json:"jsonrpc"`
+		ID      string         `json:"id"`
+		Method  string         `json:"method"`
+		Params  map[string]any `json:"params"`
+	}{
+		JSONRPC: "2.0",
+		ID:      cap.Name,
+		Method:  method,
+		Params:  input,
+	})
+}
+
+// executeRPCCapability invokes a JSON-RPC 2.0 endpoint. The response's
+// `result` is the tool output; protocol errors are returned as regular tool
+// errors and never presented as evidence.
+func executeRPCCapability(
+	ctx context.Context,
+	conn Connector,
+	cap Capability,
+	input map[string]any,
+) (raw string, output map[string]any, source string, err error) {
+	endpoint := strings.TrimSpace(resolveSecret(conn.BaseURL))
+	if err := isSafeFetchURL(endpoint); err != nil {
+		return "", nil, "rpc:" + endpoint, err
+	}
+	payload, err := buildJSONRPCRequest(cap, input)
+	if err != nil {
+		return "", nil, "rpc:" + endpoint, err
+	}
+	source = "rpc:" + endpoint + "#" + strings.TrimSpace(cap.RPCMethod)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", nil, source, fmt.Errorf("rpc: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	for key, value := range conn.Headers {
+		req.Header.Set(key, resolveSecret(value))
+	}
+
+	resp, err := newExternalHTTPClient(conn.timeout()).Do(req)
+	if err != nil {
+		return "", nil, source, fmt.Errorf("rpc: do request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, conn.maxBody()))
+	if err != nil {
+		return "", nil, source, fmt.Errorf("rpc: read response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", nil, source, fmt.Errorf("rpc: unexpected status %d", resp.StatusCode)
+	}
+
+	var envelope struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Result  json.RawMessage `json:"result"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", nil, source, fmt.Errorf("rpc: invalid JSON-RPC response: %w", err)
+	}
+	if envelope.JSONRPC != "2.0" {
+		return "", nil, source, fmt.Errorf("rpc: response is not JSON-RPC 2.0")
+	}
+	if envelope.Error != nil {
+		return "", nil, source, fmt.Errorf("rpc: remote error %d: %s", envelope.Error.Code, strings.TrimSpace(envelope.Error.Message))
+	}
+	if len(envelope.Result) == 0 {
+		return "", nil, source, fmt.Errorf("rpc: response has no result")
+	}
+	raw = string(envelope.Result)
+	output, err = applyOutputMap(raw, cap.OutputMap)
+	if err != nil {
+		return raw, nil, source, fmt.Errorf("rpc: output mapping: %w", err)
 	}
 	return raw, output, source, nil
 }
@@ -1073,7 +1213,7 @@ type ConnectorTestResult struct {
 }
 
 // TestConnector performs a basic connectivity check on the connector:
-//   - HTTP: issues a HEAD request (or GET if HEAD is not supported) to BaseURL.
+//   - HTTP/RPC: issues a HEAD request (or GET if HEAD is not supported) to BaseURL.
 //   - SQL:  verifies that the CLI binary is in PATH and the db path is accessible.
 func (e *connectorExecutor) TestConnector(id string) ConnectorTestResult {
 	traceID := newTraceID()
@@ -1089,7 +1229,7 @@ func (e *connectorExecutor) TestConnector(id string) ConnectorTestResult {
 
 	var msg string
 	switch conn.Type {
-	case ConnectorTypeHTTP:
+	case ConnectorTypeHTTP, ConnectorTypeRPC:
 		msg = testHTTPConnector(ctx, conn)
 	case ConnectorTypeSQL:
 		msg = testSQLConnector(ctx, conn)
@@ -1118,7 +1258,10 @@ func testHTTPConnector(ctx context.Context, conn Connector) string {
 	if baseURL == "" {
 		return "base_url is empty"
 	}
-	client := &http.Client{}
+	if err := isSafeFetchURL(baseURL); err != nil {
+		return err.Error()
+	}
+	client := newExternalHTTPClient(conn.timeout())
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, baseURL, nil)
 	if err != nil {
 		return fmt.Sprintf("build request: %v", err)

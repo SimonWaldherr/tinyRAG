@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -26,7 +27,7 @@ func fetchWikipedia(article, lang string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1 (https://github.com/SimonWaldherr/tinyRAG)")
-	client := newHTTPClient(30 * time.Second)
+	client := newExternalHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -117,15 +118,25 @@ var multiSpaceRe = regexp.MustCompile(`\s{3,}`)
 // fetchURL retrieves and heuristically strips HTML from a URL,
 // returning plain text suitable for chunking and embedding.
 func fetchURL(rawURL string) (string, error) {
+	return fetchURLCtx(context.Background(), rawURL)
+}
+
+// fetchURLCtx is the cancellable variant used by agent tool runs. Keeping the
+// legacy wrapper preserves existing callers that do not carry a request
+// context, while streamed requests stop the HTTP operation on cancellation.
+func fetchURLCtx(ctx context.Context, rawURL string) (string, error) {
 	if err := isSafeFetchURL(rawURL); err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest("GET", rawURL, nil)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "tinyRAG/1.1")
-	client := newHTTPClient(30 * time.Second)
+	client := newExternalHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

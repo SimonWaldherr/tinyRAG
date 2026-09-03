@@ -230,8 +230,11 @@ func TestEngine_ValidXMLBlockedToolStillCounted(t *testing.T) {
 	if tel.XMLBlocksEmitted != 1 {
 		t.Fatalf("expected 1 emitted XML block, got %d", tel.XMLBlocksEmitted)
 	}
-	if len(tel.ToolInvocations) != 0 {
-		t.Fatalf("expected blocked tool not to execute, got %d invocations", len(tel.ToolInvocations))
+	if len(tel.ToolInvocations) != 1 {
+		t.Fatalf("expected one blocked-tool trace, got %d invocations", len(tel.ToolInvocations))
+	}
+	if got := tel.ToolInvocations[0].PolicyDecision; !strings.Contains(got, "auto_search_disabled") {
+		t.Fatalf("expected policy decision for blocked tool, got %q", got)
 	}
 }
 

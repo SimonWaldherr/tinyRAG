@@ -10,23 +10,29 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OpenAI-compatible client (LM Studio, Ollama, …)
+// Protocol-aware inference client (OpenAI-compatible, Ollama-native, …)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// lmClient is a small OpenAI-compatible client used for embeddings
-// and chat completions against local or remote LLM endpoints.
+// lmClient is a small protocol-aware client used for embeddings and chat
+// completions against local or remote inference endpoints.
 type lmClient struct {
 	base       string
 	embedModel string
 	chatModel  string
 	apiKey     string
 	http       *http.Client
+	// apiStyle is the configured wire protocol.  "auto" keeps the
+	// deployment portable and lets discovery remember the first protocol
+	// that answered successfully for this client.
+	apiStyle      string
+	detectedStyle string
+	styleMu       sync.RWMutex
 }
 
 func newHTTPClient(timeout time.Duration) *http.Client {
@@ -81,34 +87,35 @@ func (c *compositeLM) chatStreamVision(ctx context.Context, system string, msgs 
 // newLMClient constructs an `lmClient` configured for the given
 // base URL and model names.
 func newLMClient(base, embedModel, chatModel, apiKey string) *lmClient {
+	return newLMClientWithAPI(base, embedModel, chatModel, apiKey, inferenceAPIAuto)
+}
+
+// newLMClientWithAPI constructs a client with an explicit protocol profile.
+// The default constructor intentionally remains auto-detecting for backwards
+// compatibility with existing settings and callers.
+func newLMClientWithAPI(base, embedModel, chatModel, apiKey, apiStyle string) *lmClient {
+	style := normalizeInferenceAPI(apiStyle)
+	detected := ""
+	if style == inferenceAPIAuto {
+		// Infer before normalizeBaseURL strips a user-supplied /v1 suffix.
+		detected = inferInferenceAPIFromBase(base)
+	}
 	return &lmClient{
-		base:       normalizeBaseURL(base),
-		embedModel: embedModel,
-		chatModel:  chatModel,
-		apiKey:     apiKey,
-		http:       newHTTPClient(120 * time.Second),
+		base:          normalizeBaseURL(base),
+		embedModel:    embedModel,
+		chatModel:     chatModel,
+		apiKey:        apiKey,
+		http:          newHTTPClient(120 * time.Second),
+		apiStyle:      style,
+		detectedStyle: detected,
 	}
 }
 
 // ping checks the LLM endpoint for reachability by requesting
 // the list of available models.
 func (c *lmClient) ping() error {
-	req, err := http.NewRequest("GET", c.base+"/v1/models", nil)
-	if err != nil {
-		return err
-	}
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("LLM endpoint returned %d", resp.StatusCode)
-	}
-	return nil
+	_, err := c.listModels("")
+	return err
 }
 
 // modelsResp is a helper for parsing the /v1/models response.
@@ -120,44 +127,6 @@ type modelsResp struct {
 
 // listModels queries the LLM endpoint for available model IDs,
 // optionally overriding the client's base URL.
-func (c *lmClient) listModels(baseOverride string) ([]string, error) {
-	base := c.base
-	if strings.TrimSpace(baseOverride) != "" {
-		base = normalizeBaseURL(baseOverride)
-	}
-	req, err := http.NewRequest("GET", base+"/v1/models", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create models request: %w", err)
-	}
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := newHTTPClient(10 * time.Second).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return nil, fmt.Errorf("failed to read models response: %w", readErr)
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("models HTTP %d: %s", resp.StatusCode, string(raw))
-	}
-	var mr modelsResp
-	if err := json.Unmarshal(raw, &mr); err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, d := range mr.Data {
-		if d.ID != "" {
-			out = append(out, d.ID)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
 // embReq represents an embeddings request payload.
 type embReq struct {
 	Model string   `json:"model"`
@@ -173,42 +142,6 @@ type embResp struct {
 
 // embed sends multiple `texts` to the embedding endpoint and returns
 // their vector embeddings.
-func (c *lmClient) embed(texts []string) ([][]float64, error) {
-	body, err := json.Marshal(embReq{Model: c.embedModel, Input: texts})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
-	}
-	req, err := http.NewRequest("POST", c.base+"/v1/embeddings", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return nil, fmt.Errorf("failed to read embeddings response: %w", readErr)
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("embed %d: %s", resp.StatusCode, string(raw))
-	}
-	var er embResp
-	if err := json.Unmarshal(raw, &er); err != nil {
-		return nil, err
-	}
-	vecs := make([][]float64, len(er.Data))
-	for i, d := range er.Data {
-		vecs[i] = d.Embedding
-	}
-	return vecs, nil
-}
-
 // embedSingle returns the embedding vector for a single text input.
 func (c *lmClient) embedSingle(text string) ([]float64, error) {
 	vecs, err := c.embed([]string{text})
@@ -363,7 +296,7 @@ type visionReq struct {
 
 // chatStreamVision sends a vision request to the LLM and streams the
 // response tokens to w (thinking tokens to thinkW if non-nil).
-func (c *lmClient) chatStreamVision(ctx context.Context, system string, msgs []visionMsg, w io.Writer, thinkW io.Writer) error {
+func (c *lmClient) chatStreamVisionOpenAI(ctx context.Context, system string, msgs []visionMsg, w io.Writer, thinkW io.Writer) error {
 	all := make([]visionMsg, 0, len(msgs)+1)
 	// Prepend system message as plain text visionMsg.
 	all = append(all, visionMsg{
@@ -392,34 +325,36 @@ func (c *lmClient) chatStreamVision(ctx context.Context, system string, msgs []v
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("vision HTTP %d: %s", resp.StatusCode, string(raw))
+		return &inferenceHTTPError{operation: "vision", status: resp.StatusCode, body: string(raw)}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	var pending string
 	inThink := false
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := line
+		if strings.HasPrefix(data, "data:") {
+			data = strings.TrimSpace(strings.TrimPrefix(data, "data:"))
+		}
 		if data == "[DONE]" {
 			break
 		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-			} `json:"choices"`
+		tok, thinking, ok := parseOpenAIStreamChunk([]byte(data))
+		if !ok {
+			continue
 		}
-		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
-			tok := chunk.Choices[0].Delta.Content
-			if tok != "" {
-				if err := streamSplitThinkingChunk(tok, &pending, &inThink, w, thinkW); err != nil {
-					return err
-				}
+		if thinking != "" {
+			if err := writeStreamChunk(thinkW, thinking); err != nil {
+				return err
+			}
+		}
+		if tok != "" {
+			if err := streamSplitThinkingChunk(tok, &pending, &inThink, w, thinkW); err != nil {
+				return err
 			}
 		}
 	}
@@ -538,7 +473,7 @@ func (c *lmClient) chatStream(ctx context.Context, system string, msgs []chatMsg
 	return c.chatStreamDetailed(ctx, system, msgs, w, nil)
 }
 
-func (c *lmClient) chatStreamDetailed(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error {
+func (c *lmClient) chatStreamOpenAI(ctx context.Context, system string, msgs []chatMsg, w io.Writer, thinkW io.Writer) error {
 	all := make([]chatMsg, 0, len(msgs)+1)
 	all = append(all, chatMsg{Role: "system", Content: system})
 	all = append(all, msgs...)
@@ -565,7 +500,7 @@ func (c *lmClient) chatStreamDetailed(ctx context.Context, system string, msgs [
 		if readErr != nil {
 			return fmt.Errorf("chat HTTP %d (failed to read body: %v)", resp.StatusCode, readErr)
 		}
-		return fmt.Errorf("chat HTTP %d: %s", resp.StatusCode, string(raw))
+		return &inferenceHTTPError{operation: "chat", status: resp.StatusCode, body: string(raw)}
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -574,27 +509,29 @@ func (c *lmClient) chatStreamDetailed(ctx context.Context, system string, msgs [
 	inThink := false
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := line
+		if strings.HasPrefix(data, "data:") {
+			data = strings.TrimSpace(strings.TrimPrefix(data, "data:"))
+		}
 		if data == "[DONE]" {
 			break
 		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-			} `json:"choices"`
+		tok, thinking, ok := parseOpenAIStreamChunk([]byte(data))
+		if !ok {
+			continue
 		}
-		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
-			tok := chunk.Choices[0].Delta.Content
-			if tok != "" {
-				if err := streamSplitThinkingChunk(tok, &pending, &inThink, w, thinkW); err != nil {
-					return err
-				}
+		if thinking != "" {
+			if err := writeStreamChunk(thinkW, thinking); err != nil {
+				return err
+			}
+		}
+		if tok != "" {
+			if err := streamSplitThinkingChunk(tok, &pending, &inThink, w, thinkW); err != nil {
+				return err
 			}
 		}
 	}

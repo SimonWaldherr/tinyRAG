@@ -60,7 +60,7 @@ func configureTinySQLOptionalFeatures(rag *ragSystem, s appSettings, dbPath stri
 }
 
 func configureTinySQLVectorCache(s appSettings) {
-	// v0.19.1 caches deterministic result IDs only; its key includes the table
+	// v0.49.0 caches deterministic result IDs only; its key includes the table
 	// version. Analytics retains query shape and timing, never raw vectors.
 	cfg := tinysql.DefaultVectorCacheConfig()
 	cfg.ResultCacheEntries = s.TinySQLVectorCacheEntries

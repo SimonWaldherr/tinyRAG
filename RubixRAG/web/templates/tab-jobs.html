@@ -1,0 +1,56 @@
+{{define "tab-jobs"}}
+    <section id="tab-jobs" class="panel" role="tabpanel" aria-labelledby="navtab-jobs">
+      <header class="page-head">
+        <h1 data-i18n="page.jobs.title">Jobs</h1>
+        <p class="hint" data-i18n="page.jobs.hint">Hintergrund-Scheduler: wann welcher Job zuletzt lief, mit welchem Ergebnis, und wann der nächste ansteht.</p>
+        <div class="page-head-actions">
+          <button type="button" id="jobsReload" class="ghost-btn" title="Lädt Tabelle und Verlauf unten neu." data-i18n="jobs.reload">Aktualisieren</button>
+        </div>
+      </header>
+
+      <div class="card scheduler-alert-card">
+        <h2>⚠ Betriebswarnungen</h2>
+        <p class="hint">Dauerhafte Warnungen für fehlgeschlagene Scheduler-Läufe. Sie bleiben nach einem Neustart sichtbar, bis der betreffende Job wieder erfolgreich läuft; „Zur Kenntnis genommen“ dokumentiert nur die Sichtung.</p>
+        <div id="schedulerAlerts" class="scheduler-alerts" role="status" aria-live="polite"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="jobs.active.title">Aktive Jobs</h2>
+        <p class="hint" data-i18n="jobs.active.hint">Eine Zeile je aktivierter Verbindung aller Import-Connectoren (Einstellungen → SharePoint/Exchange/IMAP/Teams/Confluence/Jira/Freshservice/Server-Ordner) — auch ohne konfiguriertes Intervall (dann nur ad-hoc startbar). „Jetzt ausführen“ startet den vollständigen Sync dieser Verbindung sofort, unabhängig von Intervall und Pause; „Abbrechen“ stoppt einen gerade laufenden Job (greift zwischen zwei Elementen, nicht mitten in einem Request); „Pausieren“ setzt nur den automatischen Rhythmus aus, ohne das konfigurierte Intervall zu vergessen — manuelle Imports bleiben möglich. Aktualisiert sich automatisch, solange dieser Tab geöffnet ist.</p>
+        <div id="schedStatusTable" class="table-wrap"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="jobs.history.title">Verlauf</h2>
+        <p class="hint" data-i18n="jobs.history.hint">Die letzten Läufe aller Scheduler-Jobs, automatisch wie manuell gestartete (nicht die Imports im Import-Tab). Der Verlauf bleibt über Serverneustarts erhalten.</p>
+        <label class="sr-only" for="schedHistoryJobFilter" data-i18n="jobs.history.filterLabel">Nach Job filtern</label>
+        <select id="schedHistoryJobFilter" title="Verlauf auf einen einzelnen Job eingrenzen." data-i18n-title="jobs.history.filterTitle">
+          <option value="" data-i18n="jobs.history.filterAll">Alle Jobs</option>
+        </select>
+        <ul id="schedHistoryList" class="pst-folder-list"></ul>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="jobs.feedback.title">Feedback-Auswertung</h2>
+        <p class="hint" data-i18n="jobs.feedback.hint">Auswertung der 👍/👎-Bewertungen unter Chat-Antworten: Gesamtquote, Quellen, die beim Zitieren auffällig oft ein 👎 bekommen (Kandidaten für erneuten Import, Nachbearbeitung oder Ausschluss), und die jüngsten 👎-Fragen als Rohmaterial für eine eigene Testfragen-Sammlung. Wird zusammen mit dem Rest dieser Seite über „Aktualisieren" oben neu geladen.</p>
+        <form id="feedbackStatsFilterForm" class="chunk-filters">
+          <label class="sr-only" for="fb_from" data-i18n="jobs.feedback.filter.fromLabel">Von</label>
+          <input type="date" id="fb_from" title="Nur Bewertungen ab diesem Datum berücksichtigen. Leer = kein Anfang." data-i18n-title="jobs.feedback.filter.fromTitle">
+          <label class="sr-only" for="fb_to" data-i18n="jobs.feedback.filter.toLabel">Bis</label>
+          <input type="date" id="fb_to" title="Nur Bewertungen bis zu diesem Datum berücksichtigen. Leer = kein Ende." data-i18n-title="jobs.feedback.filter.toTitle">
+          <label class="sr-only" for="fb_user" data-i18n="jobs.feedback.filter.userLabel">Nutzer:in</label>
+          <input type="text" id="fb_user" placeholder="Nutzer:in (E-Mail/Login, exakt)…" data-i18n-placeholder="jobs.feedback.filter.userLabel" title="Nur Bewertungen dieser einen Person (exakte E-Mail/Login-Kennung, wie in der Fragestellung angemeldet) berücksichtigen. Leer = alle." data-i18n-title="jobs.feedback.filter.userTitle">
+          <button type="submit" data-i18n="jobs.feedback.filter.applyButton">Filtern</button>
+          <button type="button" id="feedbackStatsFilterReset" class="ghost-btn" data-i18n="jobs.feedback.filter.resetButton">Zurücksetzen</button>
+        </form>
+        <h3 data-i18n="jobs.feedback.summaryHeading">Übersicht</h3>
+        <div id="feedbackStatsSummary" class="hint"></div>
+        <h3 data-i18n="jobs.feedback.worstSources.heading">Problematische Quellen</h3>
+        <p class="hint" data-i18n="jobs.feedback.worstSources.hint">Quellen, die beim Zitieren am häufigsten ein 👎 bekommen haben — ein Klick auf eine Quelle springt zu ihren Chunks. Kandidaten für erneuten Import, Nachbearbeitung oder Ausschluss.</p>
+        <div id="feedbackStatsWorstSources" class="table-wrap"></div>
+        <h3 data-i18n="jobs.feedback.recentDownvotes.heading">Jüngste negative Bewertungen</h3>
+        <p class="hint" data-i18n="jobs.feedback.recentDownvotes.hint">Die letzten 👎-Antworten im Wortlaut — Rohmaterial für eine eigene Testfragen-/Eval-Sammlung.</p>
+        <ul id="feedbackStatsRecentDownvotes" class="pst-folder-list"></ul>
+      </div>
+    </section>
+{{end}}

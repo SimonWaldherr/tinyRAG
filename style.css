@@ -422,6 +422,8 @@ small.warn { color: var(--warn) }
 }
 .icon-btn:hover { background: var(--tab-active-bg); color: var(--text) }
 .icon-btn.danger:hover { color: var(--danger) }
+.icon-btn.feedback-btn.selected { background: var(--accent-subtle); color: var(--accent) }
+.icon-btn.feedback-btn:disabled { cursor: default; opacity: .72 }
 
 /* ─── Main layout ───────────────────────────────────────────────────── */
 
@@ -2124,7 +2126,8 @@ button { font-family: var(--font); cursor: pointer }
   animation: spin 1s linear infinite;
 }
 .xml-tool-card[data-status="done"] .tool-status-badge,
-.xml-tool-card[data-status="error"] .tool-status-badge {
+.xml-tool-card[data-status="error"] .tool-status-badge,
+.xml-tool-card[data-status="skipped"] .tool-status-badge {
   animation: none;
 }
 .xml-tool-card.tool-done {
@@ -2133,9 +2136,14 @@ button { font-family: var(--font); cursor: pointer }
   color: #16a34a;
 }
 .xml-tool-card.tool-error {
-  background: #fef2f2;
-  border-color: #ef4444;
-  color: #dc2626;
+	background: #fef2f2;
+	border-color: #ef4444;
+	color: #dc2626;
+}
+.xml-tool-card.tool-skipped {
+	background: var(--panel2, #f3f4f6);
+	border-color: var(--muted, #6b7280);
+	color: var(--muted, #6b7280);
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 

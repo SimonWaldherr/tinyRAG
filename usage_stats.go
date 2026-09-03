@@ -112,9 +112,10 @@ func (us *usageStore) recordFromTelemetry(tel *RequestTelemetry, role string) {
 	}
 	tools := make([]string, 0, len(tel.ToolInvocations))
 	for _, ti := range tel.ToolInvocations {
-		if !ti.Deduplicated {
-			tools = append(tools, ti.Tool)
+		if ti.Deduplicated || (ti.PolicyDecision != "" && ti.PolicyDecision != "allow") {
+			continue
 		}
+		tools = append(tools, ti.Tool)
 	}
 	us.record(usageRecord{
 		Time:           tel.StartTime,

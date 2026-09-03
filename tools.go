@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,9 +16,10 @@ import (
 )
 
 type toolDef struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	ParamHint   string `json:"param_hint"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	ParamHint   string      `json:"param_hint"`
+	InputSchema *JSONSchema `json:"input_schema,omitempty"`
 }
 
 // builtinTools defines the available built-in tools for the LLM assistant.
@@ -30,7 +32,14 @@ var builtinTools = []toolDef{
 	{
 		Name:        "url_fetch",
 		Description: "Lädt eine URL und gibt deren Plaintext zurück. Verwende dies, wenn der Nutzer eine spezifische URL erwähnt oder eine Webseite direkt ausgelesen werden soll.",
-		ParamHint:   "Vollständige URL (https://...)",
+		ParamHint:   "Vollständige URL (https://...) oder arguments: {\"url\":\"https://...\"}",
+		InputSchema: &JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchemaProperty{
+				"url": {Type: "string", Description: "Öffentliche http(s)-URL"},
+			},
+			Required: []string{"url"},
+		},
 	},
 	{
 		Name:        "wikipedia",
@@ -83,6 +92,46 @@ var builtinTools = []toolDef{
 		ParamHint:   "Expression (z.B. '3*2+(2^3)')",
 	},
 	{
+		Name:        "json_query",
+		Description: "Liest lokal einen Wert aus einem JSON-Dokument über einen Punktpfad. Gut für API-Antworten, Konfigurationen und strukturierte Tool-Ergebnisse.",
+		ParamHint:   "arguments: {\"json\":\"{...}\", \"path\":\"items.0.name\"}",
+		InputSchema: &JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchemaProperty{
+				"json": {Type: "string", Description: "JSON-Dokument als Text"},
+				"path": {Type: "string", Description: "Optionaler Punktpfad, z.B. items.0.name"},
+			},
+			Required: []string{"json"},
+		},
+	},
+	{
+		Name:        "text_diff",
+		Description: "Vergleicht zwei lokale Texte zeilenweise und gibt nur Hinzufügungen sowie Entfernungen zurück.",
+		ParamHint:   "arguments: {\"before\":\"alter Text\", \"after\":\"neuer Text\"}",
+		InputSchema: &JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchemaProperty{
+				"before": {Type: "string", Description: "Ausgangstext"},
+				"after":  {Type: "string", Description: "Vergleichstext"},
+			},
+			Required: []string{"before", "after"},
+		},
+	},
+	{
+		Name:        "regex_extract",
+		Description: "Extrahiert Treffer und optionale Capture-Gruppen eines regulären Ausdrucks aus lokalem Text.",
+		ParamHint:   "arguments: {\"pattern\":\"ID-(\\\\d+)\", \"text\":\"...\", \"limit\":10}",
+		InputSchema: &JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchemaProperty{
+				"pattern": {Type: "string", Description: "Regulärer Ausdruck (RE2)"},
+				"text":    {Type: "string", Description: "Zu untersuchender Text"},
+				"limit":   {Type: "integer", Description: "Optionale maximale Trefferzahl (1 bis 50)"},
+			},
+			Required: []string{"pattern", "text"},
+		},
+	},
+	{
 		Name:        "shell",
 		Description: "Führt häufig verwendete Shell-Befehle auf dem Server aus (z.B. 'ls', 'cat', 'curl'). Muss explizit in den Einstellungen aktiviert werden. WARNUNG: Sicherheitsrisiko!",
 		ParamHint:   "Shell-Befehl (z.B. 'ls -la')",
@@ -104,8 +153,15 @@ var builtinTools = []toolDef{
 	},
 	{
 		Name:        "datetime",
-		Description: "Gibt das aktuelle System-Datum und die Uhrzeit zurück. Gut für zeitliche Einordnungen.",
-		ParamHint:   "Leer lassen oder 'now'",
+		Description: "Gibt das aktuelle Datum und die Uhrzeit zurück, optional für eine IANA-Zeitzone und ein festes Ausgabeformat.",
+		ParamHint:   "'now' oder arguments: {\"timezone\":\"Europe/Berlin\", \"format\":\"rfc3339|date|time|human\"}",
+		InputSchema: &JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchemaProperty{
+				"timezone": {Type: "string", Description: "Optionale IANA-Zeitzone, z.B. Europe/Berlin"},
+				"format":   {Type: "string", Description: "Optional: rfc3339, date, time oder human", Enum: []string{"rfc3339", "date", "time", "human"}},
+			},
+		},
 	},
 	{
 		Name:        "tinygo",
@@ -125,8 +181,9 @@ type persona struct {
 // toolRequest is the structured marker the assistant can emit to
 // request that the frontend run a specific tool with a query.
 type toolRequest struct {
-	Tool  string `json:"tool"`
-	Query string `json:"query"`
+	Tool      string         `json:"tool"`
+	Query     string         `json:"query,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
 func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool {
@@ -140,7 +197,7 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 		}
 	}
 	switch tr.Tool {
-	case "calculate", "local_search", "rag_knowledge", "datetime", "vector_query", "sql_query":
+	case "calculate", "json_query", "text_diff", "regex_extract", "local_search", "rag_knowledge", "datetime", "vector_query", "sql_query":
 		return true
 	case "url_fetch":
 		return autoSearch
@@ -160,7 +217,147 @@ func shouldAutoExecuteTool(s appSettings, tr toolRequest, autoSearch bool) bool 
 	}
 }
 
+const (
+	maxLocalToolInputRunes  = 6000
+	maxLocalToolOutputRunes = 6000
+	maxLocalDiffLines       = 200
+	maxLocalRegexPattern    = 512
+	maxLocalRegexMatches    = 50
+)
+
+// localToolStringArgument reads a string from a structured local-tool call.
+// Text-diff inputs may intentionally be empty, whereas JSON and patterns may
+// not. The legacy scalar query is retained only for json_query.
+func localToolStringArgument(tr toolRequest, field string, maxRunes int, allowEmpty bool) (string, error) {
+	var text string
+	if value, ok := tr.Arguments[field]; ok {
+		var isString bool
+		text, isString = value.(string)
+		if !isString {
+			return "", fmt.Errorf("%s: argument %q must be a string", tr.Tool, field)
+		}
+	} else if field == "json" && len(tr.Arguments) == 0 {
+		text = tr.Query
+	} else {
+		return "", fmt.Errorf("%s: missing argument %q", tr.Tool, field)
+	}
+	if !allowEmpty && strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("%s: argument %q must not be empty", tr.Tool, field)
+	}
+	if len([]rune(text)) > maxRunes {
+		return "", fmt.Errorf("%s: argument %q exceeds %d characters", tr.Tool, field, maxRunes)
+	}
+	return text, nil
+}
+
+func localToolOptionalStringArgument(tr toolRequest, field string, maxRunes int) (string, error) {
+	value, ok := tr.Arguments[field]
+	if !ok {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: argument %q must be a string", tr.Tool, field)
+	}
+	if len([]rune(text)) > maxRunes {
+		return "", fmt.Errorf("%s: argument %q exceeds %d characters", tr.Tool, field, maxRunes)
+	}
+	return text, nil
+}
+
+func localToolLimitArgument(tr toolRequest, fallback, maximum int) (int, error) {
+	value, ok := tr.Arguments["limit"]
+	if !ok {
+		return fallback, nil
+	}
+	var limit int
+	switch n := value.(type) {
+	case float64:
+		if n != float64(int(n)) {
+			return 0, fmt.Errorf("%s: argument \"limit\" must be an integer", tr.Tool)
+		}
+		limit = int(n)
+	case int:
+		limit = n
+	case int64:
+		limit = int(n)
+	default:
+		return 0, fmt.Errorf("%s: argument \"limit\" must be an integer", tr.Tool)
+	}
+	if limit < 1 || limit > maximum {
+		return 0, fmt.Errorf("%s: argument \"limit\" must be between 1 and %d", tr.Tool, maximum)
+	}
+	return limit, nil
+}
+
+func localToolLines(text string) ([]string, bool) {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if len(lines) <= maxLocalDiffLines {
+		return lines, false
+	}
+	return lines[:maxLocalDiffLines], true
+}
+
+// localTextDiff computes a bounded line-oriented LCS diff. It intentionally
+// emits only changes, keeping the result concise enough for an agent prompt.
+func localTextDiff(before, after string) string {
+	left, leftTruncated := localToolLines(before)
+	right, rightTruncated := localToolLines(after)
+	dp := make([][]int, len(left)+1)
+	for i := range dp {
+		dp[i] = make([]int, len(right)+1)
+	}
+	for i := len(left) - 1; i >= 0; i-- {
+		for j := len(right) - 1; j >= 0; j-- {
+			if left[i] == right[j] {
+				dp[i][j] = dp[i+1][j+1] + 1
+			} else if dp[i+1][j] >= dp[i][j+1] {
+				dp[i][j] = dp[i+1][j]
+			} else {
+				dp[i][j] = dp[i][j+1]
+			}
+		}
+	}
+
+	var out strings.Builder
+	out.WriteString("Zeilen-Diff:\n")
+	changes := 0
+	for i, j := 0, 0; i < len(left) || j < len(right); {
+		switch {
+		case i < len(left) && j < len(right) && left[i] == right[j]:
+			i++
+			j++
+		case i < len(left) && (j == len(right) || dp[i+1][j] >= dp[i][j+1]):
+			out.WriteString("- ")
+			out.WriteString(left[i])
+			out.WriteByte('\n')
+			i++
+			changes++
+		case j < len(right):
+			out.WriteString("+ ")
+			out.WriteString(right[j])
+			out.WriteByte('\n')
+			j++
+			changes++
+		}
+	}
+	if changes == 0 {
+		return "Keine Unterschiede."
+	}
+	if leftTruncated || rightTruncated {
+		out.WriteString("[Vergleich auf die ersten 200 Zeilen je Text begrenzt]\n")
+	}
+	return truncate(strings.TrimSpace(out.String()), maxLocalToolOutputRunes)
+}
+
+// executeToolRequest is retained for explicitly initiated, non-streaming
+// workflows. Agent runs use executeToolRequestCtx so cancellable dependencies
+// receive the request context.
 func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore, connectors *connectorStore, connectorExec *connectorExecutor) (string, string, error) {
+	return executeToolRequestWithContext(context.Background(), tr, s, rag, customAPIs, modules, connectors, connectorExec)
+}
+
+func executeToolRequestWithContext(ctx context.Context, tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore, connectors *connectorStore, connectorExec *connectorExecutor) (string, string, error) {
 	var text string
 	var source string
 	var fetchErr error
@@ -168,7 +365,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	switch tr.Tool {
 	case "rag_knowledge":
 		// New canonical name for internal RAG search
-		hits, err := rag.searchJSON(tr.Query, s.K)
+		hits, err := rag.searchJSONContext(ctx, tr.Query, s.K)
 		if err != nil {
 			fetchErr = err
 		} else if len(hits) == 0 {
@@ -186,10 +383,19 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		// Fetch a URL and return plain text (model sees content, not the raw HTTP)
 		rawURL := strings.TrimSpace(tr.Query)
 		if rawURL == "" {
+			var err error
+			rawURL, err = localToolStringArgument(tr, "url", maxLocalToolInputRunes, false)
+			if err != nil {
+				fetchErr = err
+				break
+			}
+			rawURL = strings.TrimSpace(rawURL)
+		}
+		if rawURL == "" {
 			fetchErr = fmt.Errorf("url_fetch: empty URL")
 			break
 		}
-		fetched, err := fetchURL(rawURL)
+		fetched, err := fetchURLCtx(ctx, rawURL)
 		if err != nil {
 			fetchErr = fmt.Errorf("url_fetch: %w", err)
 		} else {
@@ -202,7 +408,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			source = "url_fetch:" + rawURL
 		}
 	case "local_search":
-		hits, err := rag.searchJSON(tr.Query, s.K)
+		hits, err := rag.searchJSONContext(ctx, tr.Query, s.K)
 		if err != nil {
 			fetchErr = err
 		} else if len(hits) == 0 {
@@ -247,7 +453,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		if rawQ == "" {
 			rawQ = tr.Query
 		}
-		hits, err := rag.searchJSON(rawQ, k)
+		hits, err := rag.searchJSONContext(ctx, rawQ, k)
 		if err != nil {
 			fetchErr = err
 		} else {
@@ -307,13 +513,8 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		if fetchErr != nil {
 			break
 		}
-		stmt, err := tinysql.ParseSQL(trimmed)
-		if err != nil {
-			fetchErr = fmt.Errorf("sql_query parse: %w", err)
-			break
-		}
 		rag.dbMu.Lock()
-		rs, err := tinysql.Execute(context.Background(), rag.db, "default", stmt)
+		rs, err := tinysql.ExecSQL(tinysql.WithAuditText(ctx, trimmed), rag.db, "default", trimmed)
 		rag.dbMu.Unlock()
 		if err != nil {
 			fetchErr = fmt.Errorf("sql_query exec: %w", err)
@@ -337,8 +538,48 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		text = sb.String()
 		source = "sql_query"
 	case "datetime":
-		text = fmt.Sprintf("Aktuelles System-Datum und Uhrzeit: %s", time.Now().Format("2006-01-02 15:04:05 MST"))
-		source = "system:datetime"
+		zone := ""
+		if len(tr.Arguments) > 0 {
+			var err error
+			zone, err = localToolOptionalStringArgument(tr, "timezone", 128)
+			if err != nil {
+				fetchErr = err
+				break
+			}
+		}
+		if strings.TrimSpace(zone) == "" {
+			legacy := strings.TrimSpace(tr.Query)
+			if legacy != "" && !strings.EqualFold(legacy, "now") {
+				zone = legacy
+			}
+		}
+		format, err := localToolOptionalStringArgument(tr, "format", 32)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		location := time.Local
+		if strings.TrimSpace(zone) != "" {
+			location, err = time.LoadLocation(strings.TrimSpace(zone))
+			if err != nil {
+				fetchErr = fmt.Errorf("datetime: invalid timezone %q: %w", zone, err)
+				break
+			}
+		}
+		now := time.Now().In(location)
+		switch strings.ToLower(strings.TrimSpace(format)) {
+		case "", "human":
+			text = fmt.Sprintf("Aktuelles Datum und Uhrzeit (%s): %s", location, now.Format("2006-01-02 15:04:05 MST"))
+		case "rfc3339":
+			text = now.Format(time.RFC3339)
+		case "date":
+			text = now.Format("2006-01-02")
+		case "time":
+			text = now.Format("15:04:05 MST")
+		default:
+			fetchErr = fmt.Errorf("datetime: unsupported format %q", format)
+		}
+		source = "system:datetime:" + location.String()
 	case "wikipedia":
 		source = "wiki:" + tr.Query
 		text, fetchErr = fetchWikipedia(tr.Query, s.Lang)
@@ -366,7 +607,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	case "llm":
 		var buf bytes.Buffer
 		msgs := []chatMsg{{Role: "user", Content: tr.Query}}
-		if err := rag.getLM().chatStream(context.Background(), "", msgs, &buf); err != nil {
+		if err := rag.getLM().chatStream(ctx, "", msgs, &buf); err != nil {
 			return "", "", fmt.Errorf("LLM error: %w", err)
 		}
 		text = buf.String()
@@ -379,6 +620,86 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 			text = out
 			source = "calc:" + tr.Query
 		}
+	case "json_query":
+		rawJSON, err := localToolStringArgument(tr, "json", maxLocalToolInputRunes, false)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		path, err := localToolOptionalStringArgument(tr, "path", maxLocalRegexPattern)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		path = strings.TrimSpace(path)
+		var document any
+		if err := json.Unmarshal([]byte(rawJSON), &document); err != nil {
+			fetchErr = fmt.Errorf("json_query: invalid JSON: %w", err)
+			break
+		}
+		value := dotGet(document, path)
+		if value == nil && path != "" {
+			text = fmt.Sprintf("JSON-Pfad nicht gefunden: %s", path)
+		} else if encoded, err := json.MarshalIndent(value, "", "  "); err != nil {
+			fetchErr = fmt.Errorf("json_query: encode result: %w", err)
+		} else {
+			text = truncate(string(encoded), maxLocalToolOutputRunes)
+		}
+		source = "json_query:local"
+	case "text_diff":
+		before, err := localToolStringArgument(tr, "before", maxLocalToolInputRunes, true)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		after, err := localToolStringArgument(tr, "after", maxLocalToolInputRunes, true)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		text = localTextDiff(before, after)
+		source = "text_diff:local"
+	case "regex_extract":
+		pattern, err := localToolStringArgument(tr, "pattern", maxLocalRegexPattern, false)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		input, err := localToolStringArgument(tr, "text", maxLocalToolInputRunes, true)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		limit, err := localToolLimitArgument(tr, 20, maxLocalRegexMatches)
+		if err != nil {
+			fetchErr = err
+			break
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			fetchErr = fmt.Errorf("regex_extract: invalid pattern: %w", err)
+			break
+		}
+		type regexMatch struct {
+			Match  string   `json:"match"`
+			Groups []string `json:"groups,omitempty"`
+		}
+		rawMatches := re.FindAllStringSubmatch(input, limit)
+		matches := make([]regexMatch, 0, len(rawMatches))
+		for _, match := range rawMatches {
+			if len(match) == 0 {
+				continue
+			}
+			matches = append(matches, regexMatch{Match: match[0], Groups: match[1:]})
+		}
+		if len(matches) == 0 {
+			text = "Keine Treffer."
+		} else if encoded, err := json.MarshalIndent(matches, "", "  "); err != nil {
+			fetchErr = fmt.Errorf("regex_extract: encode result: %w", err)
+		} else {
+			text = truncate(string(encoded), maxLocalToolOutputRunes)
+		}
+		source = "regex_extract:local"
 	case "nanogo", "exec_code":
 		timeout := 5 * time.Second
 		out, err := RunSafe(tr.Query, timeout)
@@ -413,51 +734,48 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	default:
 		// Connector capability execution path (schema-validated).
 		if connectors != nil && connectorExec != nil {
-			if reg := connectors.registry(); reg != nil {
-				if entry, ok := reg[tr.Tool]; ok {
-					input := map[string]any{}
-					rawQuery := strings.TrimSpace(tr.Query)
-					if rawQuery != "" {
-						if err := json.Unmarshal([]byte(rawQuery), &input); err != nil {
-							// Fallback: map scalar query into the first required field.
-							if len(entry.Capability.InputSchema.Required) == 1 {
-								input[entry.Capability.InputSchema.Required[0]] = rawQuery
-							} else {
-								fetchErr = fmt.Errorf("connector tool %s requires JSON input matching schema", tr.Tool)
-								break
-							}
+			if entry, ok := connectors.registryEntry(tr.Tool); ok {
+				input := make(map[string]any, len(tr.Arguments))
+				for key, value := range tr.Arguments {
+					input[key] = value
+				}
+				rawQuery := strings.TrimSpace(tr.Query)
+				if len(input) == 0 && rawQuery != "" {
+					if err := json.Unmarshal([]byte(rawQuery), &input); err != nil {
+						// Fallback: map scalar query into the first required field.
+						if len(entry.Capability.InputSchema.Required) == 1 {
+							input[entry.Capability.InputSchema.Required[0]] = rawQuery
+						} else {
+							fetchErr = fmt.Errorf("connector tool %s requires JSON input matching schema", tr.Tool)
+							break
 						}
 					}
-					execRes, err := connectorExec.Execute(ConnectorExecRequest{
-						ConnectorID: entry.Connector.ID,
-						Capability:  tr.Tool,
-						Input:       input,
-					})
-					if err != nil {
-						fetchErr = err
-						break
-					}
-					source = execRes.Source
-					if source == "" {
-						source = "connector:" + entry.Connector.ID + ":" + tr.Tool
-					}
-					var out strings.Builder
-					if len(execRes.Output) > 0 {
-						out.WriteString("Connector output:\n")
-						j, _ := json.MarshalIndent(execRes.Output, "", "  ")
-						out.Write(j)
-						out.WriteString("\n")
-					}
-					if strings.TrimSpace(execRes.Raw) != "" {
-						out.WriteString("\nRaw:\n")
-						out.WriteString(execRes.Raw)
-					}
-					text = strings.TrimSpace(out.String())
-					if text == "" {
-						text = "connector call completed with empty output"
-					}
+				}
+				execRes, err := connectorExec.ExecuteContext(ctx, ConnectorExecRequest{
+					ConnectorID: entry.Connector.ID,
+					Capability:  entry.Capability.Name,
+					Input:       input,
+				})
+				if err != nil {
+					fetchErr = err
 					break
 				}
+				source = execRes.Source
+				if source == "" {
+					source = "connector:" + entry.Connector.ID + ":" + tr.Tool
+				}
+				var out strings.Builder
+				if len(execRes.Output) > 0 {
+					out.WriteString("Connector output:\n")
+					j, _ := json.MarshalIndent(execRes.Output, "", "  ")
+					out.Write(j)
+					out.WriteString("\n")
+				}
+				text = strings.TrimSpace(out.String())
+				if text == "" {
+					text = "connector call completed with no mapped output"
+				}
+				break
 			}
 		}
 		if strings.HasPrefix(tr.Tool, "module:") && modules != nil {
@@ -496,7 +814,7 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 		if api, ok := customAPIs.get(tr.Tool); ok {
 			finalURL := strings.ReplaceAll(api.Template, "$q", url.QueryEscape(tr.Query))
 			source = "api:" + api.Name + ":" + tr.Query
-			text, fetchErr = fetchURL(finalURL)
+			text, fetchErr = fetchURLCtx(ctx, finalURL)
 		} else {
 			fetchErr = fmt.Errorf("unknown tool: %s", tr.Tool)
 		}
@@ -505,14 +823,14 @@ func executeToolRequest(tr toolRequest, s appSettings, rag *ragSystem, customAPI
 	return text, source, fetchErr
 }
 
-// executeToolRequestCtx is a context-aware wrapper around executeToolRequest.
-// It checks context cancellation before and after the tool call so that
-// the configured ToolTimeout in the StreamingEngine is honoured.
+// executeToolRequestCtx passes cancellation to context-aware executors and
+// checks it before and after every call. This bounds the agent-visible result
+// even for legacy helpers that do not yet accept a context directly.
 func executeToolRequestCtx(ctx context.Context, tr toolRequest, s appSettings, rag *ragSystem, customAPIs *apiStore, modules *moduleStore, connectors *connectorStore, connectorExec *connectorExecutor) (string, string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", fmt.Errorf("tool %s: %w", tr.Tool, err)
 	}
-	text, source, err := executeToolRequest(tr, s, rag, customAPIs, modules, connectors, connectorExec)
+	text, source, err := executeToolRequestWithContext(ctx, tr, s, rag, customAPIs, modules, connectors, connectorExec)
 	if err != nil {
 		return text, source, err
 	}
@@ -863,7 +1181,7 @@ func extractToolRequest(text string) (toolRequest, bool) {
 	if err := json.Unmarshal([]byte(body), &tr); err != nil {
 		return toolRequest{}, false
 	}
-	if strings.TrimSpace(tr.Tool) == "" || strings.TrimSpace(tr.Query) == "" {
+	if strings.TrimSpace(tr.Tool) == "" || (strings.TrimSpace(tr.Query) == "" && len(tr.Arguments) == 0) {
 		return toolRequest{}, false
 	}
 	tr.Tool = strings.TrimSpace(tr.Tool)

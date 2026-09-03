@@ -1,0 +1,89 @@
+{{define "tab-prompts"}}
+    <section id="tab-prompts" class="panel" role="tabpanel" aria-labelledby="navtab-prompts">
+      <header class="page-head">
+        <h1 data-i18n="page.prompts.title">Prompts</h1>
+        <p class="hint" data-i18n="page.prompts.hint">System-Prompt und themenspezifische Skills verwalten.</p>
+      </header>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="prompts.systemPrompt.title">System-Prompt (index.md)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="prompts.systemPrompt.hint">Gilt für jede Anfrage. Änderungen wirken sofort, ohne Neustart.</p>
+            <p id="promptsIndexDefaultBadge" class="hint prompts-default-badge" hidden data-i18n="prompts.usingBuiltinDefault">ℹ️ Es wurde noch keine eigene Datei gespeichert — der unten gezeigte Text ist der eingebaute Standard-Prompt. Speichern übernimmt ihn unverändert als Ausgangspunkt zum Anpassen.</p>
+            <textarea id="promptsIndex" class="prompt-editor" rows="10" aria-label="System-Prompt Inhalt" data-i18n-aria-label="prompts.systemPrompt.ariaLabel"></textarea>
+            <button id="savePromptsIndex" data-i18n="prompts.systemPrompt.saveButton">System-Prompt speichern</button>
+            <div id="promptsIndexResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="prompts.draftPrompt.title">Antwortentwurf-Prompt (draft.md)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="prompts.draftPrompt.hint">System-Prompt für Antwortentwürfe — verwendet vom "Antwortentwurf erstellen"-Button in der Quellenansicht UND vom öffentlichen "Mail"-Tab. Ohne eigene Datei gilt ein eingebauter Standard-Prompt.</p>
+            <p id="promptsDraftDefaultBadge" class="hint prompts-default-badge" hidden data-i18n="prompts.usingBuiltinDefault">ℹ️ Es wurde noch keine eigene Datei gespeichert — der unten gezeigte Text ist der eingebaute Standard-Prompt. Speichern übernimmt ihn unverändert als Ausgangspunkt zum Anpassen.</p>
+            <textarea id="promptsDraft" class="prompt-editor" rows="8" aria-label="Antwortentwurf-Prompt Inhalt" data-i18n-aria-label="prompts.draftPrompt.ariaLabel"></textarea>
+            <button id="savePromptsDraft" data-i18n="prompts.draftPrompt.saveButton">Antwortentwurf-Prompt speichern</button>
+            <div id="promptsDraftResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="prompts.agentPrompt.title">Agent-Prompt (agent.md)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="prompts.agentPrompt.hint">System-Prompt für die Agent-Stufe im Chat — aufgabenorientiert statt reiner Wissensbasis-Q&amp;A, darf verfügbare Tools nutzen. Ohne eigene Datei gilt ein eingebauter Standard-Prompt.</p>
+            <p id="promptsAgentDefaultBadge" class="hint prompts-default-badge" hidden data-i18n="prompts.usingBuiltinDefault">ℹ️ Es wurde noch keine eigene Datei gespeichert — der unten gezeigte Text ist der eingebaute Standard-Prompt. Speichern übernimmt ihn unverändert als Ausgangspunkt zum Anpassen.</p>
+            <textarea id="promptsAgent" class="prompt-editor" rows="8" aria-label="Agent-Prompt Inhalt" data-i18n-aria-label="prompts.agentPrompt.ariaLabel"></textarea>
+            <button id="savePromptsAgent" data-i18n="prompts.agentPrompt.saveButton">Agent-Prompt speichern</button>
+            <div id="promptsAgentResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="prompts.skills.title">Skills</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n="prompts.skills.hint">Jeder Skill wird nur dann in den Prompt eingefügt, wenn eines seiner Tags in der Frage vorkommt. Deaktivierte Skills werden nie verwendet.</p>
+            <p class="hint" data-i18n="prompts.skills.concatHint">Passt mehr als ein Skill, werden alle passenden nacheinander an den System-Prompt (index.md bzw. agent.md) angehängt, relevantester zuerst — es wird nie nur einer ausgewählt. Ein Tag muss nicht exakt im Wortlaut der Frage stehen: eine einfache Pluralerkennung berücksichtigt auch naheliegende Formen (z.&nbsp;B. Tag "handschuh" passt auch auf "Handschuhe").</p>
+            <details class="prompts-skill-guidance">
+              <summary data-i18n="prompts.skills.guidance.summary">💡 Hinweise zum Verfassen guter Skills</summary>
+              <ul>
+                <li data-i18n="prompts.skills.guidance.li1">Tags als Grundform (Singular) wählen — "Handschuhe" im Fragetext passt automatisch auch auf den Tag "handschuh". Trotzdem hilft es, gängige Synonyme zusätzlich als eigene Tags aufzunehmen (z.&nbsp;B. sowohl "reklamation" als auch "beschwerde").</li>
+                <li data-i18n="prompts.skills.guidance.li2">Wenige, spezifische Tags schlagen viele, generische — ein Tag wie "frage" oder "produkt" würde bei fast jeder Anfrage feuern und den Prompt unnötig aufblähen.</li>
+                <li data-i18n="prompts.skills.guidance.li3">Der Skill-Inhalt sollte knapp und faktenorientiert sein (Tabellen, Listen, konkrete Regeln) — er wird bei jeder passenden Frage komplett mitgeschickt und kostet entsprechend Kontext/Tokens.</li>
+                <li data-i18n="prompts.skills.guidance.li4">Mit der Testfrage unten vor dem Speichern prüfen, ob die gewählten Tags tatsächlich wie erwartet greifen.</li>
+              </ul>
+            </details>
+            <div id="skillsList"></div>
+            <button id="addSkill" data-i18n="prompts.skills.addButton">+ Neuen Skill anlegen</button>
+            <div id="promptsSkillResult" class="result" role="status"></div>
+            <div class="prompts-skill-tester">
+              <label class="sr-only" for="skillTestQuestion" data-i18n="prompts.skills.tester.label">Testfrage</label>
+              <input type="text" id="skillTestQuestion" placeholder="Testfrage eingeben, um zu sehen, welche gespeicherten Skills greifen würden…" data-i18n-placeholder="prompts.skills.tester.placeholder" title="Prüft anhand einer Beispielfrage, welche der oben gespeicherten, aktivierten Skills tatsächlich ausgewählt würden — ruft keine KI auf, sondern wertet nur die Tag-Übereinstimmung aus (dieselbe Logik wie zur Laufzeit)." data-i18n-title="prompts.skills.tester.title">
+              <button type="button" id="skillTestButton" data-i18n="prompts.skills.tester.button">Testen</button>
+              <div id="skillTestResult" class="result" role="status"></div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="prompts.departmentRules.title">Abteilungs-Regeln (department_rules.json)</h2></summary>
+        <div class="settings-grid">
+          <div class="settings-section span-2">
+            <p class="hint" data-i18n-html="prompts.departmentRules.hintHtml">Ordnet die AD-Attribute <code>department</code>/<code>title</code> beim Login auf Abteilungs-Codes zu (siehe Einstellungen -> "Zugriffskontrolle je Quelltyp"). JSON-Array aus Objekten <code>{"regex": "...", "code": "..."}</code>, ausgewertet in Reihenfolge — die erste passende Regel gewinnt. Ohne eigene Datei gelten eingebaute Standard-Regeln (siehe <code>department.go</code>). Änderungen wirken erst beim nächsten Login der jeweiligen Person, nicht rückwirkend für bereits angemeldete Sitzungen.</p>
+            <p id="departmentRulesSource" class="hint"></p>
+            <textarea id="departmentRules" class="prompt-editor" rows="12" aria-label="Abteilungs-Regeln JSON" data-i18n-aria-label="prompts.departmentRules.ariaLabel"></textarea>
+            <button id="saveDepartmentRules" data-i18n="prompts.departmentRules.saveButton">Speichern</button>
+            <button id="resetDepartmentRules" class="ghost-btn" data-i18n="prompts.departmentRules.resetButton">Auf Standard zurücksetzen</button>
+            <div id="departmentRulesResult" class="result" role="status"></div>
+          </div>
+        </div>
+      </details>
+    </section>
+{{end}}

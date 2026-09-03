@@ -1,0 +1,26 @@
+{{define "modal-history"}}
+<div id="historyModal" class="modal-overlay history-drawer-overlay" hidden>
+  <div class="modal-box history-drawer" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+    <div class="modal-head">
+      <h2 id="historyModalTitle" data-i18n="history.title">Verlauf</h2>
+      <button type="button" id="historyModalClose" class="ghost-btn" data-i18n-aria-label="modal.close">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M5 5l10 10M15 5L5 15"/>
+        </svg>
+      </button>
+    </div>
+    <button type="button" id="historyNewChat" class="history-new-chat-btn" data-i18n-title="sidebar.newChat.title" data-i18n-aria-label="sidebar.newChat.title" title="Neues Gespräch beginnen">
+      <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+        <path d="M10 4v12M4 10h12"/>
+      </svg>
+      <span data-i18n="sidebar.newChat">Neues Gespräch</span>
+    </button>
+    <p class="hint" data-i18n="history.hint">Nur in diesem Browser gespeichert — nicht auf dem Server, nicht für andere sichtbar.</p>
+    <ul id="historyList" class="pst-folder-list history-list" hidden></ul>
+    <p id="historyEmpty" class="hint" data-i18n="history.empty" hidden>Noch keine gespeicherten Gespräche.</p>
+    <div class="modal-actions">
+      <button type="button" id="historyClearAll" class="ghost-btn" data-i18n="history.clearAll">Gesamten Verlauf löschen</button>
+    </div>
+  </div>
+</div>
+{{end}}

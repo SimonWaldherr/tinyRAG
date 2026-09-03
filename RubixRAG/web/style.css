@@ -1,0 +1,3083 @@
+/* ============================================================
+   R3 – Stylesheet mit Theme-Unterstützung
+   Themes: dark (Standard), light, ocean, rubix, solarized, win2k, auto (System)
+   Theme wird via data-theme an <html> gesetzt
+   Schriftgröße wird via data-font-size an <html> gesetzt (skaliert den
+   rem-Basiswert, da fast alle Größen im Stylesheet in rem angegeben sind)
+   ============================================================ */
+html[data-font-size="small"] { font-size: 87.5%; }
+html[data-font-size="large"] { font-size: 112.5%; }
+html[data-font-size="larger"] { font-size: 125%; }
+html[data-font-size="huge"] { font-size: 150%; }
+
+/* ---- Theme-Tokens ----------------------------------------- */
+:root,
+[data-theme="dark"] {
+  --bg:          #0f1115;
+  --bg2:         #0d0f13;
+  --panel:       #171a21;
+  --panel2:      #1d2130;
+  --border:      #272b36;
+  --text:        #e6e8ec;
+  --muted:       #8a91a0;
+  --accent:      #4f8cff;
+  --accent-dim:  #1b2d4f;
+  --accent-h:    #6ba3ff;
+  --accent-fg:   #ffffff;
+  --danger:      #e05050;
+  --success:     #3ecf8e;
+  --warn:        #e0a030;
+  /* Token-usage chart series (tab-settings.html's Token-Nutzung card) —
+     validated via the dataviz skill's validate_palette.js against this
+     theme's own --bg (CVD ΔE 97.3, contrast >=3:1 both). Deliberately not
+     --accent/--danger/--success/--warn: those are semantic UI/status
+     roles, and the dataviz skill's own rule is that status colors are
+     never repurposed as chart series colors. */
+  --tok-prompt:     #3987e5;
+  --tok-completion: #d95926;
+  --sb-bg:       #11141c;
+  --sb-border:   #1e2230;
+  --sb-text:     #8a91a0;
+  --sb-hover:    rgba(255,255,255,0.05);
+  --sb-active:   #1b2d4f;
+  --shadow:      0 2px 12px rgba(0,0,0,0.4);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,0.45);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg:          #f0f2f6;
+  --bg2:         #ffffff;
+  --panel:       #ffffff;
+  --panel2:      #f5f7fa;
+  --border:      #d0d5de;
+  --text:        #1a1d27;
+  /* #646a76, not the original #6b7280: that measured ~4.31:1 against
+     --bg, just under WCAG AA's 4.5:1 for normal text (.hint is
+     0.83rem). */
+  --muted:       #646a76;
+  --accent:      #2563eb;
+  --accent-dim:  #dbeafe;
+  --accent-h:    #1d4ed8;
+  --accent-fg:   #ffffff;
+  --danger:      #dc2626;
+  --success:     #059669;
+  --warn:        #d97706;
+  /* Token-usage chart series (tab-settings.html's Token-Nutzung card) —
+     validated via the dataviz skill's validate_palette.js against this
+     theme's own --bg. #b8460e, not the other themes' shared #d95926:
+     that measured ~2.86:1 against this theme's brighter --bg, under the
+     validator's 3:1 floor; this darker orange clears 4.78:1. Deliberately
+     not --accent/--danger/--success/--warn: those are semantic UI/status
+     roles, never repurposed as chart series colors. */
+  --tok-prompt:     #2a78d6;
+  --tok-completion: #b8460e;
+  /* Unlike every other theme, light's sidebar is actually light — the
+     --sb-* tokens below used to be a straight copy of the dark theme's
+     dark-navy values (only --sb-bg differed, and only slightly), which
+     read as a stray dark-blue sidebar bolted onto an otherwise light
+     page. #565d6e against #e8ecf5 measures ~5.6:1 (WCAG AA for
+     .nav-item's 0.88rem text); --sb-active's #eef4ff against --accent
+     text measures ~4.7:1 — both intentionally tuned, not just "looks
+     light enough". --sb-hover also moves from a white-on-white overlay
+     (invisible on any light surface) to a black-tinted one, since it's
+     reused well beyond the sidebar (Settings accordions, PST/Skills
+     rows, Discover tree — anywhere on a light panel). */
+  --sb-bg:       #e8ecf5;
+  --sb-border:   #c9cfdc;
+  --sb-text:     #565d6e;
+  --sb-hover:    rgba(0,0,0,0.05);
+  --sb-active:   #eef4ff;
+  --shadow:      0 2px 12px rgba(0,0,0,0.1);
+  --shadow-lg:   0 8px 32px rgba(0,0,0,0.14);
+  color-scheme: light;
+}
+
+[data-theme="ocean"] {
+  --bg:          #0b1829;
+  --bg2:         #081220;
+  --panel:       #0e2040;
+  --panel2:      #112548;
+  --border:      #1b3d68;
+  --text:        #c8e4ff;
+  --muted:       #5a8ab0;
+  --accent:      #00c9f5;
+  --accent-dim:  #082538;
+  --accent-h:    #33d9ff;
+  --accent-fg:   #04202c;
+  --danger:      #ff5370;
+  --success:     #00e676;
+  --warn:        #ffb454;
+  /* Token-usage chart series — see dark theme's identical comment. */
+  --tok-prompt:     #3987e5;
+  --tok-completion: #d95926;
+  --sb-bg:       #060f1c;
+  --sb-border:   #14324f;
+  /* #5487af, not the original #4e7fa8: that measured ~4.51:1 against
+     --sb-bg — technically over WCAG AA's 4.5:1 for normal text, but by a
+     margin thin enough that ordinary rendering/gamma variance could tip
+     it under. Brightened for headroom (~5.0:1); see the two rubix fixes
+     below for a case that actually failed. */
+  --sb-text:     #5487af;
+  --sb-hover:    rgba(0,201,245,0.07);
+  --sb-active:   #082538;
+  --shadow:      0 2px 16px rgba(0,0,0,0.6);
+  --shadow-lg:   0 10px 40px rgba(0,0,0,0.65);
+  color-scheme: dark;
+}
+
+[data-theme="rubix"] {
+  --bg:          #0d1e52;
+  --bg2:         #091540;
+  --panel:       #122270;
+  --panel2:      #0f1c60;
+  --border:      #1d3292;
+  --text:        #eef2ff;
+  /* #8492d0, not the original #6878c0: that measured ~3.8:1 against
+     --bg and ~3.4:1 against --panel (where .hint text actually sits
+     most, e.g. every Settings card) — both fail WCAG AA's 4.5:1 for
+     normal-size text (.hint is 0.83rem). This value clears 4.5:1
+     against both. */
+  --muted:       #8492d0;
+  --accent:      #f5c400;
+  --accent-dim:  rgba(245,196,0,.14);
+  --accent-h:    #ffd633;
+  --accent-fg:   #14204e;
+  --danger:      #ff6060;
+  --success:     #4ade80;
+  --warn:        #f5c400;
+  /* Token-usage chart series — see dark theme's identical comment. */
+  --tok-prompt:     #3987e5;
+  --tok-completion: #d95926;
+  --sb-bg:       #091540;
+  --sb-border:   #172c80;
+  /* #6e8cd2, not the original #4a68b8: that measured ~3.3:1 against
+     --sb-bg, well under WCAG AA's 4.5:1 for normal text (.nav-item is
+     0.88rem) — the sidebar nav labels in R3's own brand theme were the
+     least legible text in the whole app. */
+  --sb-text:     #6e8cd2;
+  --sb-hover:    rgba(245,196,0,.09);
+  --sb-active:   rgba(245,196,0,.16);
+  --shadow:      0 2px 18px rgba(0,0,0,.6);
+  --shadow-lg:   0 10px 44px rgba(0,0,0,.55);
+  color-scheme: dark;
+}
+
+/* Solarized (dark) — Ethan Schoonover's well-known muted, warm-toned
+   palette, popular for long screen sessions. Every token below is
+   re-tuned from the canonical Solarized values where needed to actually
+   clear WCAG AA against R3's own surfaces: the canonical palette was
+   designed for print-like ambient contrast, not guaranteed 4.5:1 body
+   text — e.g. canonical base01 "muted" (#586e75) measures only ~2.8:1
+   against canonical base03 (#002b36), the same failure class the other
+   themes' comments above already document and fix. */
+[data-theme="solarized"] {
+  --bg:          #002b36;
+  --bg2:         #001f28;
+  --panel:       #073642;
+  --panel2:      #0b4353;
+  --border:      #0f4a5c;
+  /* Canonical base1, not base0: base0 measures ~4.75:1 against --bg,
+     technically over AA but with less headroom than every other theme
+     here keeps (see e.g. ocean's --sb-text comment); base1 clears 5.6:1
+     against --bg and 4.9:1 against --panel. */
+  --text:        #93a1a1;
+  /* #8aa3ac, not canonical base01 (see doc comment above) — clears 5.7:1
+     against --bg and 4.9:1 against --panel. */
+  --muted:       #8aa3ac;
+  /* Canonical Solarized blue (#268bd2) measures only ~4.1:1 against
+     --bg — brightened to clear 5.9:1, matching the other themes' accent
+     headroom. */
+  --accent:      #4dabea;
+  --accent-dim:  #0a3f52;
+  --accent-h:    #7cc4f0;
+  --accent-fg:   #00232c;
+  /* Canonical Solarized red/green/yellow (#dc322f/#859900/#b58900)
+     measure only ~3.2-4.7:1 against --bg — brightened to clear >=5.9:1,
+     same reasoning as --accent above. */
+  --danger:      #ff7a70;
+  --success:     #8fbc3f;
+  --warn:        #d8ab00;
+  /* Token-usage chart series — see dark theme's identical comment; this
+     shared pair also clears the 3:1 chart floor against this theme's own
+     --bg (4.1:1 / 3.9:1). */
+  --tok-prompt:     #3987e5;
+  --tok-completion: #d95926;
+  --sb-bg:       #001a21;
+  --sb-border:   #0a3a48;
+  --sb-text:     #8aa3ac;
+  --sb-hover:    rgba(77,171,234,.08);
+  --sb-active:   #0a3f52;
+  --shadow:      0 2px 16px rgba(0,0,0,.5);
+  --shadow-lg:   0 10px 40px rgba(0,0,0,.55);
+  color-scheme: dark;
+}
+
+/* Windows 2000 "Classic" — heavy grays, navy accent, hard flat shadows
+   (no blur) instead of soft ones, and — uniquely among the themes here —
+   a global border-radius reset below, since none of the other themes
+   needs to touch anything beyond these color tokens. */
+[data-theme="win2k"] {
+  --bg:          #a8a8a4;
+  --bg2:         #949490;
+  --panel:       #ece9d8;
+  --panel2:      #d4d0c8;
+  --border:      #808080;
+  --text:        #000000;
+  /* #2b2b2b, not #4d4d4d: that measured only ~3.5:1 against --bg — under
+     WCAG AA's 4.5:1 for normal text (.hint is 0.83rem), same failure
+     class as the other themes' documented fixes above. This clears
+     5.9:1 against --bg and 9.2:1 against --panel2. */
+  --muted:       #2b2b2b;
+  --accent:      #000080;
+  --accent-dim:  #c0c0e8;
+  --accent-h:    #10199a;
+  --accent-fg:   #ffffff;
+  --danger:      #800000;
+  /* #003d15, not #006400: that measured only ~3.1:1 against --bg, under
+     AA's 4.5:1. This clears 5.2:1. */
+  --success:     #003d15;
+  /* #5c4c00, not #808000: that measured a barely-there ~1.8:1 against
+     --bg — effectively invisible on the mid-gray backdrop. Still short
+     of the ordinary 4.5:1 text bar even after darkening (the olive hue
+     has little headroom left against a mid-gray page background before
+     it stops reading as "yellow" at all), but --warn's only current use
+     (novapop.js toast icon/border, tab-settings.html's Token-Nutzung
+     legend) composites against --panel/--panel2, where this clears
+     ~5.5-6.9:1 — a real fix, not just a smaller failure. */
+  --warn:        #5c4c00;
+  /* Token-usage chart series — validated via the dataviz skill's
+     validate_palette.js against this theme's own (mid-gray, neither
+     clearly light nor dark) --bg: CVD separation passes cleanly (ΔE
+     116.6), but contrast lands in the validator's documented "relief"
+     band (~2.8:1/~2.3:1, below the 3:1 floor) — legal only paired with
+     visible direct labels/a table view, which the Token-Nutzung card
+     always shows regardless of theme, so that requirement is already
+     met. A genuinely gray backdrop makes clearing 3:1 for two
+     simultaneously CVD-safe, in-band hues impractical; win2k is this
+     app's decorative/retro theme, not its primary surface. */
+  --tok-prompt:     #1d4ed8;
+  --tok-completion: #b8460e;
+  --sb-bg:       #c0c0c0;
+  --sb-border:   #808080;
+  --sb-text:     #000000;
+  --sb-hover:    rgba(0,0,128,.10);
+  --sb-active:   #b6c6f0;
+  --shadow:      1px 1px 0 #404040;
+  --shadow-lg:   2px 2px 0 #404040;
+  color-scheme: light;
+}
+[data-theme="win2k"] * { border-radius: 0 !important; }
+
+/* ---- win2k: 3D chrome (raised/sunken bevels), classic font & scrollbar ---
+   The token block above only reset colors — every control still rendered
+   with the app's normal flat border / soft drop-shadow chrome. These rules
+   add the actual Windows 95/98/2000 "chiseled" look: two-tone outset
+   bevels on buttons and panels, inset (sunken) bevels on text fields, a
+   classic navy titlebar for modal dialogs, and a hard-edged silver
+   scrollbar — all scoped under [data-theme="win2k"] so no other theme is
+   touched. */
+[data-theme="win2k"] body {
+  font-family: Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
+}
+[data-theme="win2k"] ::selection { background: #000080; color: #fff; }
+
+/* Raised bevel: light top/left, dark bottom/right — the classic Win95
+   button face. The pressed state is the same four layers with light/dark
+   swapped, plus a 1px nudge instead of the app's usual brightness filter. */
+[data-theme="win2k"] button {
+  background: var(--panel2);
+  color: var(--text);
+  box-shadow:
+    inset 1px 1px 0 #fff,
+    inset -1px -1px 0 #404040,
+    inset 2px 2px 0 #dfdfdf,
+    inset -2px -2px 0 #808080;
+}
+[data-theme="win2k"] button:hover { filter: none; }
+[data-theme="win2k"] button:active:not(:disabled) {
+  box-shadow:
+    inset 1px 1px 0 #404040,
+    inset -1px -1px 0 #fff,
+    inset 2px 2px 0 #808080,
+    inset -2px -2px 0 #dfdfdf;
+  transform: translate(1px, 1px);
+  filter: none;
+}
+[data-theme="win2k"] button:disabled { color: #808080; opacity: 1; text-shadow: 1px 1px 0 #fff; }
+
+/* Icon/chrome buttons (nav items, ghost/secondary actions, size switcher,
+   ...) stay flat like a Win95 toolbar button — no bevel until hovered,
+   sunken while pressed — rather than the gray 3D button face above. The
+   theme swatches and inline citation chips are left alone entirely (their
+   own background/shape carries the meaning, not a button bevel). */
+[data-theme="win2k"] .ghost-btn,
+[data-theme="win2k"] .nav-item,
+[data-theme="win2k"] .font-size-btn,
+[data-theme="win2k"] .login-toggle-btn,
+[data-theme="win2k"] .copy-btn,
+[data-theme="win2k"] .small-btn,
+[data-theme="win2k"] .ask-secondary-btn,
+[data-theme="win2k"] .link-btn,
+[data-theme="win2k"] button.citation,
+[data-theme="win2k"] .chunk-filters button[type=button] {
+  background: transparent;
+  box-shadow: none;
+}
+[data-theme="win2k"] .ghost-btn:hover,
+[data-theme="win2k"] .login-toggle-btn:hover,
+[data-theme="win2k"] .font-size-btn:hover,
+[data-theme="win2k"] .copy-btn:hover,
+[data-theme="win2k"] .small-btn:hover,
+[data-theme="win2k"] .ask-secondary-btn:hover,
+[data-theme="win2k"] .chunk-filters button[type=button]:hover {
+  background: var(--panel2);
+  box-shadow:
+    inset 1px 1px 0 #fff,
+    inset -1px -1px 0 #404040,
+    inset 2px 2px 0 #dfdfdf,
+    inset -2px -2px 0 #808080;
+}
+[data-theme="win2k"] .ghost-btn:active,
+[data-theme="win2k"] .login-toggle-btn:active,
+[data-theme="win2k"] .font-size-btn:active,
+[data-theme="win2k"] .copy-btn:active,
+[data-theme="win2k"] .small-btn:active,
+[data-theme="win2k"] .ask-secondary-btn:active,
+[data-theme="win2k"] .chunk-filters button[type=button]:active {
+  background: var(--panel2);
+  box-shadow:
+    inset 1px 1px 0 #404040,
+    inset -1px -1px 0 #fff,
+    inset 2px 2px 0 #808080,
+    inset -2px -2px 0 #dfdfdf;
+}
+
+/* .send-btn keeps its accent color (it's the primary action, not chrome)
+   but gets its own bevel shaded from --accent instead of gray, plus a
+   thin black rectangle — the classic "this is the default button" cue. */
+[data-theme="win2k"] .send-btn {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow:
+    inset 1px 1px 0 color-mix(in srgb, var(--accent) 60%, #fff),
+    inset -1px -1px 0 color-mix(in srgb, var(--accent) 60%, #000),
+    inset 2px 2px 0 color-mix(in srgb, var(--accent) 30%, #fff),
+    inset -2px -2px 0 color-mix(in srgb, var(--accent) 30%, #000);
+  outline: 1px solid #000;
+  outline-offset: -3px;
+}
+[data-theme="win2k"] .send-btn:active {
+  box-shadow:
+    inset 1px 1px 0 color-mix(in srgb, var(--accent) 30%, #000),
+    inset -1px -1px 0 color-mix(in srgb, var(--accent) 60%, #fff),
+    inset 2px 2px 0 color-mix(in srgb, var(--accent) 30%, #000),
+    inset -2px -2px 0 color-mix(in srgb, var(--accent) 60%, #fff);
+}
+
+/* Sunken (recessed) fields — the mirror image of the button bevel, white
+   face like a classic Windows text box/list view instead of the app's
+   usual --bg2 tint. */
+[data-theme="win2k"] select,
+[data-theme="win2k"] textarea,
+[data-theme="win2k"] input[type=text],
+[data-theme="win2k"] input[type=number],
+[data-theme="win2k"] input[type=password],
+[data-theme="win2k"] input:not([type]),
+[data-theme="win2k"] .modal-content,
+[data-theme="win2k"] .dropzone {
+  background: #fff;
+  border: none;
+  box-shadow:
+    inset 1px 1px 0 #404040,
+    inset -1px -1px 0 #fff,
+    inset 2px 2px 0 #808080,
+    inset -2px -2px 0 #dfdfdf;
+}
+[data-theme="win2k"] select:focus,
+[data-theme="win2k"] textarea:focus,
+[data-theme="win2k"] input[type=text]:focus,
+[data-theme="win2k"] input[type=number]:focus,
+[data-theme="win2k"] input[type=password]:focus,
+[data-theme="win2k"] input:not([type]):focus {
+  border: none;
+  outline: 1px dotted var(--accent);
+  outline-offset: -3px;
+}
+[data-theme="win2k"] .dropzone:hover,
+[data-theme="win2k"] .dropzone.dragover { background: var(--accent-dim); }
+[data-theme="win2k"] input[type=file]::file-selector-button { border-radius: 0; }
+
+/* Raised panels: cards and dialogs get the classic outset "window" bevel
+   instead of the app's usual flat border + soft blurred drop shadow. */
+[data-theme="win2k"] .card,
+[data-theme="win2k"] .modal-box,
+[data-theme="win2k"] .admin-login {
+  border: none;
+  box-shadow:
+    inset 1px 1px 0 #fff,
+    inset -1px -1px 0 #404040,
+    inset 2px 2px 0 #dfdfdf,
+    inset -2px -2px 0 #808080;
+}
+
+/* modal-head becomes a classic navy titlebar, bleeding to the dialog's
+   outer edge (modal-box's own 18px/20px padding is negated here to match). */
+[data-theme="win2k"] .modal-head {
+  margin: -18px -20px 14px;
+  padding: 5px 8px;
+  background: linear-gradient(90deg, #000080, #1084d0);
+  color: #fff;
+}
+[data-theme="win2k"] .modal-head h2 { color: #fff; }
+[data-theme="win2k"] .modal-head .ghost-btn {
+  color: #fff;
+  border: 1px solid #fff;
+  min-width: 20px;
+  height: 18px;
+}
+[data-theme="win2k"] .modal-head .ghost-btn:hover,
+[data-theme="win2k"] .modal-head .ghost-btn:active { background: var(--danger); box-shadow: none; }
+
+/* Hard-edged silver scrollbar with a beveled thumb, closer to the classic
+   Win95/98 scrollbar than the app's default thin rounded one. */
+[data-theme="win2k"] ::-webkit-scrollbar { width: 16px; height: 16px; }
+[data-theme="win2k"] ::-webkit-scrollbar-track { background: var(--sb-bg); }
+[data-theme="win2k"] ::-webkit-scrollbar-thumb {
+  background: var(--panel2);
+  box-shadow:
+    inset 1px 1px 0 #fff,
+    inset -1px -1px 0 #404040,
+    inset 2px 2px 0 #dfdfdf,
+    inset -2px -2px 0 #808080;
+}
+[data-theme="win2k"] ::-webkit-scrollbar-corner { background: var(--sb-bg); }
+
+/* ---- Reset & Basis ---------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Author display-Regeln (flex/grid) dürfen das hidden-Attribut nie aushebeln */
+[hidden] { display: none !important; }
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+html, body { height: 100%; }
+
+/* No transition on background/color here (there used to be one): applyTheme
+   (app.js) swaps data-theme on <html>, which changes what --bg/--text
+   resolve to on this element — observed, reproducibly, leaving body's
+   background stuck on the *previous* theme's color after a switch as long
+   as a transition was declared for it, applying only on the next actual
+   style change (e.g. hover elsewhere) rather than the theme swap itself.
+   Snapping instantly avoids that class of bug entirely instead of chasing
+   why the transition misbehaves for a var()-driven value. */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  overflow: hidden;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ---- App Shell -------------------------------------------- */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ---- Sidebar ---------------------------------------------- */
+.sidebar {
+  flex: none;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  background: var(--sb-bg);
+  border-right: 1px solid var(--sb-border);
+  padding: 0;
+  /* transform/width stay transitioned for the collapse toggle below —
+   * background/border-color deliberately aren't, see body's own comment
+   * above for why (the same var()-driven-value-stuck-mid-theme-switch bug;
+   * light theme's --sb-bg is light like the rest of that theme now, so
+   * this one is no longer just a subtle case of it). */
+  transition: transform 0.25s ease, width 0.25s ease;
+  z-index: 30;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  text-decoration: none;
+  color: inherit;
+}
+.brand-logo {
+  flex: none;
+  width: 168px;
+  height: auto;
+  color: var(--accent);
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 35%, transparent));
+}
+/* display:contents so wrapping the logo in a link doesn't add its own
+   flex-layout box (which would otherwise break the surrounding .brand's
+   flex alignment with the collapse button next to it) — the anchor
+   participates in click handling only, .brand-logo's own layout rules
+   above are untouched. */
+.brand-logo-link {
+  display: contents;
+  text-decoration: none;
+  color: inherit;
+}
+
+/* Collapse toggle: a quiet chrome button beside the logo. Hidden on
+   mobile (see the 860px block below) where the sidebar is off-canvas
+   and collapsing makes no sense. */
+.sidebar-collapse-btn {
+  margin-left: auto;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--sb-text);
+  cursor: pointer;
+}
+.sidebar-collapse-btn:hover { color: var(--text); border-color: var(--sb-border); background: var(--sb-hover); filter: none; }
+.sidebar-collapse-btn svg { width: 15px; height: 15px; transition: transform 0.25s ease; }
+body.sidebar-collapsed .sidebar-collapse-btn svg { transform: rotate(180deg); }
+
+/* Collapsed (icon-only) sidebar — desktop only: labels, logo, stats and
+   the appearance switchers disappear, icons stay clickable (each
+   nav-item carries its label as a title tooltip, set in app.js). Scoped
+   to min-width so the ≤860px off-canvas drawer always opens at full
+   width regardless of the persisted collapsed state. */
+@media (min-width: 861px) {
+  body.sidebar-collapsed .sidebar { width: 64px; }
+  body.sidebar-collapsed .brand { padding: 16px 0; justify-content: center; }
+  body.sidebar-collapsed .sidebar-collapse-btn { margin-left: 0; }
+  body.sidebar-collapsed .brand-logo,
+  body.sidebar-collapsed .nav-item span,
+  body.sidebar-collapsed .nav-divider span,
+  body.sidebar-collapsed .kb-stats,
+  body.sidebar-collapsed .theme-menu,
+  body.sidebar-collapsed .font-size-switcher,
+  body.sidebar-collapsed #adminToggleLabel,
+  body.sidebar-collapsed #adminLoginBox { display: none; }
+  body.sidebar-collapsed .nav-item { justify-content: center; padding: 11px 0; }
+  /* The label-less divider keeps separating the admin section as a line. */
+  body.sidebar-collapsed .nav-divider { margin: 8px 12px 4px; padding-top: 8px; }
+  body.sidebar-collapsed .login-toggle-btn { justify-content: center; padding: 9px 0; }
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--sb-text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.88rem;
+  text-align: left;
+  width: 100%;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.nav-item .nav-icon { width: 17px; height: 17px; flex: none; display: block; }
+.nav-item:hover { background: var(--sb-hover); color: var(--text); filter: none; }
+.nav-item.active { color: var(--accent); background: var(--sb-active); }
+/* A slim accent bar on the active tab's leading edge — a second, more
+   modern read of "current page" alongside the background tint, and the
+   one that still reads clearly in the low-contrast win2k theme where
+   --sb-active is a flat pale fill easy to miss at a glance. */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -8px; /* bleeds into nav's own padding, flush with the sidebar edge */
+  top: 18%;
+  bottom: 18%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+/* "Neues Gespräch" (chatimages.go's sibling on the frontend side, so to
+   speak) is an action, not a destination — a dashed accent outline sets
+   it apart from the plain nav tabs below it at rest, filling in on
+   hover/focus the same way a primary button would elsewhere in the app. */
+.nav-item.nav-primary {
+  margin-bottom: 6px;
+  border: 1px dashed var(--sb-border);
+  color: var(--accent);
+  font-weight: 600;
+}
+.nav-item.nav-primary:hover,
+.nav-item.nav-primary:focus-visible {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  border-style: solid;
+  color: var(--accent);
+}
+
+/* Separates the always-visible Chat tab from the admin-only tabs below it
+   — same .admin-only gate as the tabs, so it appears/disappears with them. */
+.nav-divider {
+  display: flex;
+  align-items: center;
+  margin: 10px 4px 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sb-border);
+  font-size: 0.66rem;
+  color: var(--sb-text);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* ---- Sidebar Footer --------------------------------------- */
+.sidebar-footer {
+  padding: 10px 10px 14px;
+  border-top: 1px solid var(--sb-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kb-stats {
+  font-size: 0.72rem;
+  color: var(--sb-text);
+  padding: 6px 10px;
+  line-height: 1.4;
+  min-height: 1em;
+  background: var(--sb-hover);
+  border: 1px solid var(--sb-border);
+  border-radius: 8px;
+  text-align: center;
+}
+.kb-stats:empty { display: none; } /* nothing to show before loadStats() resolves — no empty chip flash */
+.kb-stats strong { color: var(--accent); font-weight: 700; }
+
+/* ---- Theme menu -----------------------------------------------
+   Replaces the old flat row of single-color dot buttons with a single
+   trigger that opens a popover of preview tiles. Each tile is a tiny
+   live mockup, not a hardcoded color swatch: the swatch element itself
+   carries data-theme="X", so it picks up that theme's real --bg/--sb-bg/
+   --accent custom properties (see the Theme-Tokens block up top) via
+   plain CSS inheritance — a swatch for "light" renders in light's actual
+   colors even while the whole page is in "dark", with zero duplicated
+   hex codes to keep in sync if a theme's palette ever changes. */
+.theme-menu { position: relative; padding: 2px 0; }
+
+.theme-menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--sb-border);
+  background: transparent;
+  color: var(--sb-text);
+  cursor: pointer;
+  text-align: left;
+}
+.theme-menu-toggle:hover { background: var(--sb-hover); color: var(--text); filter: none; }
+.theme-menu-toggle-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.25; }
+.theme-menu-toggle-label {
+  font-size: 0.64rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+#themeMenuCurrentName { font-size: 0.82rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-menu-chevron { width: 13px; height: 13px; flex: none; transition: transform 0.15s; }
+.theme-menu-toggle[aria-expanded="true"] .theme-menu-chevron { transform: rotate(180deg); }
+
+.theme-menu-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 30;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.theme-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85rem;
+}
+.theme-menu-option:hover { background: var(--sb-hover); filter: none; }
+.theme-menu-option.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+
+.theme-swatch {
+  position: relative;
+  width: 30px;
+  height: 22px;
+  flex: none;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+}
+.theme-swatch .ts-bar { position: absolute; inset: 0 auto 0 0; width: 38%; background: var(--sb-bg); }
+.theme-swatch .ts-accent {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+/* "auto" has no [data-theme="auto"] token block of its own (JS resolves
+   it to dark/light at runtime) — its preview is a literal half-dark/
+   half-light split instead, built from the same real tokens. */
+.theme-swatch-auto { display: flex; padding: 0; }
+.theme-swatch-auto .ts-half { flex: 1; height: 100%; background: var(--bg); }
+
+.font-size-switcher { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px; align-items: center; margin-top: 2px; }
+.font-size-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--sb-text);
+  cursor: pointer;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0;
+}
+.font-size-btn:nth-child(2) { font-size: 0.7rem; }
+.font-size-btn:nth-child(3) { font-size: 0.85rem; }
+.font-size-btn:nth-child(4) { font-size: 1rem; }
+.font-size-btn:nth-child(5) { font-size: 1.15rem; }
+.font-size-btn:nth-child(6) { font-size: 1.3rem; }
+.font-size-btn:hover { filter: none; border-color: var(--sb-border); }
+.font-size-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* Language switcher — same chrome as .font-size-btn above, minus its
+   nth-child escalating font-size rule (that's specific to the "A A A"
+   small/normal/large visual cue; DE/EN/FR should all render the same
+   size). */
+.lang-switcher { display: flex; gap: 6px; padding: 2px 4px; align-items: center; margin-top: 2px; }
+.lang-btn {
+  flex: none;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--sb-text);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 0 4px;
+}
+.lang-btn:hover { filter: none; border-color: var(--sb-border); }
+.lang-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* Login area */
+.login-area { position: relative; }
+.login-toggle-btn {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--sb-border);
+  color: var(--sb-text);
+  font-size: 0.82rem;
+  padding: 7px 12px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.login-toggle-btn:hover { color: var(--text); border-color: var(--accent); filter: none; background: transparent; }
+.login-toggle-btn.is-admin { color: var(--accent); border-color: var(--accent); }
+.login-toggle-btn .lbtn-icon { flex: none; width: 16px; height: 16px; }
+.lbtn-locked  { display: block; }
+.lbtn-unlocked { display: none; }
+.login-toggle-btn.is-admin .lbtn-locked  { display: none; }
+.login-toggle-btn.is-admin .lbtn-unlocked { display: block; }
+
+.admin-login {
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+.admin-login input { width: 100%; margin: 0; }
+.admin-login button { width: 100%; }
+.admin-login .result { margin: 0; padding: 0; }
+
+/* ---- Mobile menu ------------------------------------------ */
+.menu-toggle {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 40;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.menu-toggle svg { width: 18px; height: 18px; }
+.menu-toggle:hover { filter: none; border-color: var(--accent); }
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 25;
+  backdrop-filter: blur(2px);
+}
+
+/* ---- Main content ----------------------------------------- */
+main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---- Panels (Tabs) --------------------------------------- */
+.panel { display: none; }
+.panel.active {
+  display: block;
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 36px 40px;
+  scroll-behavior: smooth;
+}
+.panel.active > * { max-width: 980px; margin-left: auto; margin-right: auto; }
+
+.page-head { position: relative; margin-bottom: 22px; }
+.page-head h1 {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+.page-head .hint { margin: 0; }
+.page-head .ghost-btn { position: absolute; right: 0; top: 2px; }
+
+h2 {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 6px;
+  letter-spacing: -0.2px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px 22px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.card .result:empty { display: none; }
+.card > .result { margin-bottom: 0; }
+
+.scheduler-alerts { display: grid; gap: .65rem; }
+.scheduler-alert { display: grid; grid-template-columns: 1fr auto; gap: .35rem .8rem; padding: .75rem .9rem; border: 1px solid var(--danger); border-left-width: 4px; border-radius: .5rem; background: color-mix(in srgb, var(--danger) 10%, var(--panel)); }
+.scheduler-alert p { grid-column: 1 / -1; margin: 0; white-space: pre-wrap; }
+.scheduler-alert-ack { border-color: var(--warn); opacity: .82; }
+.scheduler-alert-card h2 { display: flex; align-items: center; gap: .4rem; }
+
+.ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 7px 14px;
+  border-radius: 8px;
+}
+.ghost-btn svg { width: 14px; height: 14px; }
+.ghost-btn:hover { color: var(--text); border-color: var(--accent); filter: none; }
+
+/* ---- Chat ------------------------------------------------- */
+.panel.chat-panel.active {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.panel.chat-panel.active > * { max-width: none; margin-left: 0; margin-right: 0; }
+
+.chat-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 24px 12px;
+  scroll-behavior: smooth;
+}
+.chat-log > .msg, .chat-log > .chat-empty { max-width: 820px; margin-left: auto; margin-right: auto; }
+
+/* Empty state / hero */
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 100%;
+  padding: 24px 12px;
+  animation: r3-fade .4s ease;
+}
+.chat-empty-mark {
+  width: 64px;
+  height: 64px;
+  color: var(--accent);
+  margin-bottom: 18px;
+  filter: drop-shadow(0 0 24px color-mix(in srgb, var(--accent) 40%, transparent));
+}
+.chat-empty h1 {
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+.chat-empty-stats {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 26px;
+  line-height: 1.5;
+}
+.chat-empty-stats strong { color: var(--accent); font-weight: 700; }
+
+/* Agent tab's empty-state demo button(s) — admin-configurable (settings.go's
+   agentConfig.Demos), 0..N buttons rendered by app.js's
+   renderAgentDemoButtons; wraps to a second row rather than overflowing
+   once an admin configures more than one or two. */
+.agent-demo-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 560px; }
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 560px;
+}
+.suggestion {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.83rem;
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s, transform .15s;
+}
+.suggestion:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  transform: translateY(-1px);
+  filter: none;
+}
+
+/* Messages */
+@keyframes r3-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Own messages hug the right edge (avatar on the outside), the assistant's
+   sit on the left — the ChatGPT/Claude convention, so alignment alone
+   signals who's speaking without needing a visible "Du"/"R3" label (kept
+   for screen readers via .sr-only instead, see addMessage/addAgentMessage
+   in app.js). */
+.msg {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 22px;
+  animation: r3-fade .25s ease;
+}
+.msg.user { flex-direction: row-reverse; }
+.msg:last-child { margin-bottom: 8px; }
+
+.msg .avatar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: .03em;
+  margin-top: 2px;
+}
+.msg.user .avatar {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.msg.assistant .avatar {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.msg.assistant .avatar svg { width: 16px; height: 16px; }
+
+.msg .msg-body { flex: 1; min-width: 0; }
+/* Doesn't grow to the row's full width (that would defeat the right-hugging
+   bubble look) — sized to its own content instead, up to a cap so a long
+   message still wraps rather than spanning the whole column. */
+.msg.user .msg-body {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 78%;
+}
+
+/* Action row (copy/save/regenerate/feedback/send-to-self) moved below the
+   bubble and rendered icon-only (see app.js) — visible but deliberately
+   quiet, not competing with the answer itself for attention. */
+.msg-actions { display: flex; align-items: center; gap: 2px; margin-top: 5px; }
+.msg.user .msg-actions { justify-content: flex-end; }
+
+.msg .content { white-space: pre-wrap; line-height: 1.6; font-size: 0.93rem; }
+.msg.user .content {
+  background: var(--accent-dim);
+  border-radius: 12px;
+  border-top-right-radius: 4px;
+  padding: 10px 14px;
+  color: var(--text);
+  white-space: pre-wrap;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  width: fit-content;
+  max-width: 100%;
+}
+/* Thumbnails for images attached to a sent user message (addMsgImages,
+   app.js) — the composer's own .attach-chip preview is gone once sent, so
+   this is the only remaining visual record of what was attached. */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.msg-images a {
+  display: block;
+  width: 96px;
+  height: 96px;
+  flex: none;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.msg-images img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Not display:block like the img rule above — .attach-doc-icon's own base
+   rule (near .attach-chip above) already sets display:flex to center the
+   glyph, which this must not clobber. */
+.msg-images .attach-doc-icon { width: 100%; height: 100%; font-size: 2rem; border: none; }
+
+/* The assistant's answer is typeset directly on the page — no bubble, no
+   card: the 2025 ChatGPT/Claude convention (bubbles stay reserved for the
+   user's own compact turns above, whose alignment+tint already signal the
+   speaker). Nested rich content (code/tables/diagrams below) keeps its
+   --panel2 surface, which reads fine on plain --bg in every theme. The
+   slight top padding aligns the first text line with the avatar glyph
+   that used to be handled by the card's own padding. */
+.msg.assistant .content {
+  white-space: normal;
+  padding: 4px 0 0;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+.msg.assistant .content p { margin: 0 0 0.6em; }
+.msg.assistant .content p:last-child { margin-bottom: 0; }
+.msg.assistant .content ul, .msg.assistant .content ol { margin: 0 0 0.6em 1.2em; padding: 0; }
+.msg.assistant .content code {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.85em;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.msg.assistant .content pre {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0 0 0.6em;
+}
+.msg.assistant .content pre code { border: none; padding: 0; }
+.msg.assistant .content a { color: var(--accent); }
+
+/* Typing indicator (before first token) */
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 2px;
+}
+.typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: r3-bounce 1.2s infinite ease-in-out;
+}
+.typing span:nth-child(2) { animation-delay: .15s; }
+.typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes r3-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .45; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* Streaming cursor */
+.stream-cursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: r3-blink 1s step-start infinite;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+}
+@keyframes r3-blink { 50% { opacity: 0; } }
+
+/* Message action row (copy/save/regenerate/feedback/send-to-self) —
+   icon-only pictograms, borderless and muted by default so they read as a
+   quiet utility row under the answer rather than competing with it; the
+   hover state is what actually reveals they're interactive. */
+.copy-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s, background 0.12s;
+}
+.copy-btn:hover { color: var(--text); background: var(--panel2); border-color: transparent; filter: none; }
+.copy-btn svg { width: 15px; height: 15px; display: block; }
+/* Transient ok/error state after a click (setActionIconState, app.js) —
+   the icon swaps to check/alert and the color says which. */
+.copy-btn.action-ok { color: var(--success); }
+.copy-btn.action-err { color: var(--danger); }
+/* Active text-to-speech playback (addSpeakButton, app.js) — same accent
+   treatment as an active feedback vote, so "currently doing something"
+   reads consistently across message-action buttons. */
+.speak-btn.speaking { color: var(--accent); background: var(--accent-dim); }
+
+.feedback-buttons { display: inline-flex; gap: 2px; }
+.feedback-btn-active { color: var(--accent); background: var(--accent-dim); }
+.feedback-btn:disabled { cursor: default; opacity: 0.85; }
+
+/* Agent clarifying-question option buttons */
+.clarify-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.clarify-option-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.clarify-option-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.clarify-option-btn:disabled { cursor: default; opacity: 0.6; }
+
+/* Citations */
+.citations { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.citation {
+  font-size: 0.73rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 11px;
+  background: var(--panel2);
+  transition: border-color 0.12s;
+}
+.citation:hover { border-color: var(--accent); color: var(--text); }
+a.citation { text-decoration: none; cursor: pointer; }
+
+/* Debug-Modus (Chat/Agent/Mail) — only ever rendered when the server
+   actually sent a "debug" field (see app.js's renderDebugPanel), so this
+   styling never appears for anyone but the one recognized session. */
+.debug-panel {
+  margin-top: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  background: var(--panel2);
+}
+.debug-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+  user-select: none;
+}
+.debug-panel summary:hover { color: var(--text); }
+.debug-panel h4 { font-size: 0.78rem; margin: 12px 0 4px; color: var(--text); }
+.debug-panel h4:first-of-type { margin-top: 10px; }
+.debug-panel ol { margin: 0; padding-left: 18px; }
+.debug-panel li { margin-bottom: 8px; }
+.debug-panel li:last-child { margin-bottom: 0; }
+/* debug-tool-group-agent: sub-agent attribution header inside "Genutzte
+   Werkzeuge" — a lighter-weight sibling of h4 above (h4 is the section
+   title itself, this labels one sub-agent's slice of tool calls within
+   that section). */
+.debug-tool-group-agent {
+  font-size: 0.74rem;
+  margin: 10px 0 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--accent);
+}
+.debug-tool-groups > .debug-tool-group-agent:first-child { border-top: none; padding-top: 0; }
+.debug-pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* Error message */
+.msg .content.error-text { color: var(--danger); }
+
+/* ---- Composer --------------------------------------------- */
+.ask-form {
+  flex: none;
+  padding: 8px 24px 18px;
+  position: relative; /* anchor for .scroll-bottom-btn below */
+}
+
+/* Floating "Nach unten" pill: appears above the composer once the reader
+   scrolls away from the log's end during/after streaming (see app.js's
+   chat auto-scroll block); clicking re-pins to the newest content. */
+.scroll-bottom-btn {
+  position: absolute;
+  top: -44px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  z-index: 5;
+  /* Opacity-only fade — r3-fade animates transform too, which would
+     briefly clobber this button's own translateX(-50%) centering. */
+  animation: r3-fade-opacity .15s ease;
+}
+@keyframes r3-fade-opacity { from { opacity: 0; } to { opacity: 1; } }
+.scroll-bottom-btn:hover { color: var(--text); border-color: var(--accent); background: var(--panel2); filter: none; }
+.scroll-bottom-btn svg { width: 16px; height: 16px; }
+.composer {
+  max-width: 820px;
+  margin: 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  padding: 10px 12px 8px;
+  transition: border-color .15s;
+}
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.composer textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  resize: none;
+  min-height: 26px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px 4px;
+}
+.composer textarea:focus { outline: none; }
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+}
+.composer-bar .inline-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0;
+  max-width: none;
+  flex-direction: row;
+}
+.composer-bar select {
+  padding: 5px 9px;
+  font-size: 0.8rem;
+  border-radius: 7px;
+}
+.composer-hint {
+  font-size: 0.7rem;
+  color: var(--muted);
+  opacity: .7;
+  user-select: none;
+}
+
+.ask-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+}
+.ask-secondary-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+  box-shadow: none;
+}
+.ask-secondary-btn svg { width: 16px; height: 16px; }
+.ask-secondary-btn:hover { background: transparent; color: var(--text); border-color: var(--accent); box-shadow: none; filter: none; }
+/* Voice-input recording state: widens to fit the "⏹ mm:ss" timer label
+   (chat.voice.idle's plain emoji fits the fixed 34px circle; the timer
+   text doesn't) and uses --danger for the universal "recording" red cue. */
+.ask-secondary-btn.recording {
+  width: auto;
+  min-width: 34px;
+  padding: 0 .55rem;
+  gap: .3rem;
+  color: var(--danger);
+  border-color: var(--danger);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Chat/Agent/Mail file attachments (chatimages.go/mail.go) -------- */
+/* Length/Format selectors above the "Entwurf erstellen" button. */
+.mail-options { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 10px; }
+.mail-options label { font-size: .85rem; }
+.mail-options select { margin-top: 2px; }
+
+/* Per-connection sub-block (Exchange auto-draft controls). */
+.conn-subsection {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel2);
+}
+.conn-subsection h4 { margin: 0 0 4px; font-size: .92rem; }
+.autodraft-rules { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.autodraft-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.autodraft-rule .qt-remove { margin-left: auto; }
+
+.mail-attach-row { margin: 4px 0 8px; }
+.attach-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg2);
+  max-width: 220px;
+}
+.attach-chip img,
+.attach-chip .attach-doc-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+/* Document attachment (PDF/Office/text) placeholder — a plain <img> would
+   just be a broken-image icon, since these have no image data to preview.
+   Shared by the composer's attach-chip (here) and a sent message's
+   thumbnail row (.msg-images below); each context sizes/positions it via
+   the shared width/height rule next to it, this just centers the glyph. */
+.attach-doc-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+}
+.attach-chip-name {
+  font-size: 0.78rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  flex: none;
+}
+.attach-chip-remove:hover { color: var(--danger); filter: none; }
+
+.send-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.send-btn svg { width: 17px; height: 17px; }
+.send-btn .icon-stop { display: none; }
+.send-btn.streaming .icon-send { display: none; }
+.send-btn.streaming .icon-stop { display: block; }
+.send-btn.streaming { background: var(--danger); color: #fff; }
+.send-btn:disabled { opacity: 0.4; }
+
+/* .stop-mode: a plain-text button (no icon spans, unlike .send-btn above)
+   temporarily acting as "Cancel" while an in-flight request it started can
+   be aborted — e.g. the Mail tab's draft-generation button. Same danger-red
+   treatment as .send-btn.streaming, without hiding the label text. */
+button.stop-mode { background: var(--danger); color: #fff; }
+
+/* ---- Form elements ---------------------------------------- */
+select,
+textarea,
+input[type=text],
+input[type=number],
+input[type=password],
+input[type=search],
+input:not([type]) {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 11px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+select:focus,
+textarea:focus,
+input[type=text]:focus,
+input[type=number]:focus,
+input[type=password]:focus,
+input[type=search]:focus,
+input:not([type]):focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+/* Safari/Chrome draw their own search-field decorations (a native clear
+   "x" and sometimes extra inset padding) on top of the shared styling
+   above unless explicitly reset — without this an input[type=search]
+   quietly reverts to the OS-chrome look the moment it's non-empty. */
+input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; }
+input[type=search]::-webkit-search-decoration { -webkit-appearance: none; }
+textarea { flex: 1; resize: vertical; }
+
+input[type=file] {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+input[type=file]::file-selector-button {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 14px;
+  margin-right: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.83rem;
+  transition: border-color .15s;
+}
+input[type=file]::file-selector-button:hover { border-color: var(--accent); }
+
+/* ---- Dropzone --------------------------------------------- */
+.dropzone {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 16px;
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg2);
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); }
+.dropzone.dragover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.dropzone svg { width: 26px; height: 26px; color: var(--accent); }
+.dropzone .dz-title { font-weight: 600; font-size: 0.88rem; color: var(--text); }
+.dropzone .dz-files { font-size: 0.78rem; }
+.dropzone input[type=file] { display: none; }
+
+/* ---- Buttons ---------------------------------------------- */
+button {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-weight: 600;
+  font-family: inherit;
+  font-size: 0.88rem;
+  transition: filter 0.12s, opacity 0.12s;
+}
+button:hover { filter: brightness(1.12); }
+button:active { filter: brightness(0.95); }
+button:disabled { opacity: 0.45; cursor: default; filter: none; }
+
+button.busy { position: relative; color: transparent; }
+button.busy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 15px;
+  height: 15px;
+  border: 2px solid color-mix(in srgb, var(--accent-fg) 35%, transparent);
+  border-top-color: var(--accent-fg);
+  border-radius: 50%;
+  animation: r3-spin .7s linear infinite;
+}
+@keyframes r3-spin { to { transform: rotate(360deg); } }
+
+/* ---- Hint / result text ----------------------------------- */
+.hint { color: var(--muted); font-size: 0.83rem; max-width: 660px; line-height: 1.5; }
+.hint a { color: var(--accent); }
+
+.result {
+  font-size: 0.83rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  margin-bottom: 20px;
+  padding: 6px 0;
+  line-height: 1.5;
+}
+/* Errors get an icon, not just a color change (WCAG 1.4.1 — a colorblind
+   or low-vision user shouldn't have to distinguish success from failure
+   by hue alone). The message text itself is still what role="status"
+   announces to screen readers regardless of this icon. */
+.result.error { color: var(--danger); }
+.result.error::before { content: "⚠ "; }
+.result-error-item { color: var(--danger); }
+
+/* ---- Labels / Fieldsets ----------------------------------- */
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.83rem;
+  color: var(--muted);
+  margin-bottom: 12px;
+  max-width: 440px;
+}
+label input[type=checkbox] { flex: none; width: 16px; height: 16px; align-self: flex-start; accent-color: var(--accent); }
+.check-label { flex-direction: row; align-items: center; gap: 9px; }
+.check-label input[type=checkbox] { align-self: center; }
+
+form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+#uploadForm { flex-direction: column; align-items: stretch; }
+#uploadForm > button { align-self: flex-start; }
+
+/* ---- Inline citation markers [Q1] ------------------------- */
+.inline-cite {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .68rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 5px 2px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  vertical-align: baseline;
+  position: relative;
+  top: -1px;
+  cursor: default;
+  text-decoration: none;
+  transition: background .12s, border-color .12s;
+  white-space: nowrap;
+}
+a.inline-cite { cursor: pointer; text-decoration: none; }
+a.inline-cite:hover {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--accent);
+  color: var(--accent-h);
+}
+
+/* ---- Markdown tables inside chat -------------------------- */
+.msg.assistant .content table {
+  width: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: .83rem;
+  margin: .6em 0;
+  background: var(--panel2);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.msg.assistant .content th,
+.msg.assistant .content td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.msg.assistant .content th {
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel2));
+  font-weight: 600;
+  font-size: .76rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+.msg.assistant .content tr:last-child td { border-bottom: none; }
+
+/* ---- Rich assistant output (renderMarkdown / enhanceRenderedContent) ----
+   Headings, blockquotes, rules, strikethrough, task lists, language-labeled
+   code blocks with a copy button, JSON/XML syntax highlighting, Mermaid
+   diagrams and sandboxed d3 charts. All theme-aware via the CSS variables. */
+.msg.assistant .content :is(h1,h2,h3,h4,h5,h6).md-h { line-height: 1.25; margin: .85em 0 .35em; font-weight: 600; }
+.msg.assistant .content :is(h1,h2,h3,h4,h5,h6).md-h:first-child { margin-top: 0; }
+.msg.assistant .content h1.md-h { font-size: 1.3rem; }
+.msg.assistant .content h2.md-h { font-size: 1.15rem; }
+.msg.assistant .content h3.md-h { font-size: 1.03rem; }
+.msg.assistant .content h4.md-h,
+.msg.assistant .content h5.md-h,
+.msg.assistant .content h6.md-h { font-size: .95rem; color: var(--muted); }
+.msg.assistant .content blockquote {
+  margin: 0 0 .6em;
+  padding: .35em .9em;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--muted);
+  border-radius: 0 6px 6px 0;
+}
+.msg.assistant .content hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+.msg.assistant .content del { opacity: .65; }
+.msg.assistant .content ul.md-task-list { list-style: none; margin-left: .2em; }
+.msg.assistant .content li.md-task { list-style: none; }
+.msg.assistant .content li.md-task input { margin-right: .45em; vertical-align: middle; }
+
+/* Horizontally scroll wide tables instead of overflowing the message. */
+.msg.assistant .content .r3-table-wrap { overflow-x: auto; max-width: 100%; margin: .6em 0; }
+.msg.assistant .content .r3-table-wrap table { margin: 0; }
+
+/* Fenced code block with header (language label + copy button). */
+.msg.assistant .content .r3-code-wrap {
+  margin: 0 0 .6em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel2);
+}
+.msg.assistant .content .r3-code-wrap pre.r3-code {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.r3-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel2));
+  border-bottom: 1px solid var(--border);
+}
+.r3-code-lang { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; color: var(--muted); }
+.r3-code-copy {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 5px;
+  padding: 1px 8px;
+  font-size: .7rem;
+  cursor: pointer;
+}
+.r3-code-copy:hover { color: var(--text); border-color: var(--accent); }
+.r3-code-note { padding: 5px 10px; border-top: 1px solid var(--border); font-size: .8rem; }
+
+/* Syntax-highlight token colors (JSON/XML). Dark defaults + light override;
+   other themes inherit the dark palette, which reads on their darker code
+   backgrounds. */
+:root {
+  --tok-key: var(--accent);
+  --tok-str: #7ec699;
+  --tok-num: #d19a66;
+  --tok-kw:  #c678dd;
+  --tok-tag: var(--accent);
+  --tok-attr:#d19a66;
+}
+:root[data-theme="light"] {
+  --tok-str: #22863a;
+  --tok-num: #b76b01;
+  --tok-kw:  #a626a4;
+  --tok-attr:#b76b01;
+}
+.msg.assistant .content pre.r3-code .tok-key { color: var(--tok-key); }
+.msg.assistant .content pre.r3-code .tok-str { color: var(--tok-str); }
+.msg.assistant .content pre.r3-code .tok-num { color: var(--tok-num); }
+.msg.assistant .content pre.r3-code .tok-kw  { color: var(--tok-kw); }
+.msg.assistant .content pre.r3-code .tok-comment { color: var(--muted); font-style: italic; }
+.msg.assistant .content pre.r3-code .tok-tag { color: var(--tok-tag); }
+.msg.assistant .content pre.r3-code .tok-attr { color: var(--tok-attr); }
+
+/* Rendered Mermaid diagram and sandboxed d3 chart. */
+.msg.assistant .content .r3-mermaid {
+  margin: 0 0 .6em;
+  padding: 10px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  text-align: center;
+}
+.msg.assistant .content .r3-mermaid svg { max-width: 100%; height: auto; }
+.msg.assistant .content iframe.r3-d3 {
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+  margin: 0 0 .6em;
+  display: block;
+}
+
+/* ---- Tables ----------------------------------------------- */
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: auto;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  margin-top: 12px;
+}
+.table-wrap table { border: none; margin: 0; border-radius: 0; box-shadow: none; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+  background: var(--panel);
+}
+thead { background: var(--panel2); position: sticky; top: 0; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+td.name { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.name a { color: var(--accent); text-decoration: none; }
+td.name a:hover { text-decoration: underline; }
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.link-btn:hover { text-decoration: underline; }
+
+/* Jobs tab's recent-downvotes list (feedback.go's Answer text) — clamp to
+   3 lines so one long bad answer doesn't dominate the list; the full text
+   is still in the title="" tooltip. */
+.feedback-answer-preview {
+  margin: 2px 0 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Small danger button */
+.small-btn {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+.small-btn:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); filter: none; }
+
+/* ---- PST folder picker -------------------------------------- */
+.pst-folder-picker { margin-top: 10px; }
+.pst-folder-filter { width: min(100%, 420px); margin: 2px 0 0; }
+.pst-folder-toolbar { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.pst-folder-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.pst-folder-list li { display: flex; align-items: center; padding: 5px 8px; font-size: 0.83rem; border-radius: 6px; }
+.pst-folder-list li:hover { background: var(--sb-hover); }
+.pst-folder-list label { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; min-width: 0; }
+.pst-folder-list .pst-folder-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pst-folder-list .pst-folder-count { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+
+/* Native mailbox list (Mail tab's "Mein Postfach" panel, mail_graph.go) —
+   reuses .pst-folder-list's <ul> chrome; each row is a full-width button so
+   the whole row is clickable, not just the subject text. */
+.mail-graph-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  min-width: 0;
+}
+.mail-graph-item-date { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.mail-graph-item-from { flex: none; font-weight: 600; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-graph-item-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-graph-body {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+  margin: 6px 0 12px;
+}
+.pst-phase-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: .8rem;
+}
+.pst-phase-status::before { content: "1"; display: grid; place-items: center; width: 1.35rem; height: 1.35rem; border-radius: 50%; background: var(--accent-dim); color: var(--accent-h); font-weight: 700; }
+.pst-phase-status[data-phase="ingest"]::before { content: "2"; }
+
+/* ---- Chat history list (reuses .pst-folder-list's box/scroll chrome) */
+.history-list li { gap: 8px; }
+.history-item-open {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+.history-item-delete { flex: none; padding: 2px 8px; }
+
+/* ---- Sources: import batches --------------------------------- */
+.import-batches { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.import-batch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 0.83rem;
+}
+.import-batch-row .batch-label { font-weight: 600; }
+.import-batch-row .batch-meta { color: var(--muted); flex: 1; }
+
+/* ---- Source content popup ------------------------------------ */
+/* button.citation needs an explicit font reset — <button> doesn't inherit
+   font-family/size from its container the way <span>/<a> do */
+button.citation { font: inherit; cursor: pointer; }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 20px;
+}
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  width: min(680px, 100%);
+  max-height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px;
+}
+.modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.modal-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  word-break: break-word;
+  /* A long email subject (esp. a PST attachment's "Subject — Anhang:
+     filename" text, see pst.go) can otherwise grow the titlebar to
+     several lines; clamp to 2 and let the title="" tooltip (app.js)
+     carry the rest. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.modal-head .ghost-btn { padding: 6px; flex: none; }
+#sourceModalMeta { margin: 4px 0 10px; word-break: break-word; }
+.modal-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.modal-actions .ghost-btn { width: auto; }
+
+/* ---- History drawer: a left-anchored side panel, not a centered dialog
+   ---------------------------------------------------------------------
+   Only overrides positioning/sizing on top of the shared .modal-overlay/
+   .modal-box (still used, centered, by every other modal in this app —
+   #sourceModal, #accountModal, ...) via these two added classes, so
+   nothing else changes. Shown/hidden the same instant way as any other
+   modal (the [hidden] attribute) rather than a slide animation — a true
+   two-phase open/close transition would need reworking how
+   openHistoryModal/closeHistoryModal toggle visibility, not just this
+   CSS, and isn't worth that risk for what's fundamentally a positioning
+   change. */
+.history-drawer-overlay {
+  justify-content: flex-start;
+  align-items: stretch;
+  padding: 0;
+}
+.history-drawer {
+  width: min(360px, 88vw);
+  max-height: none;
+  height: 100%;
+  border-radius: 0 14px 14px 0;
+  box-shadow: var(--shadow-lg);
+}
+.history-new-chat-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  flex: none;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel2);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.history-new-chat-btn:hover { border-color: var(--accent); color: var(--accent); }
+.history-new-chat-btn .nav-icon { width: 16px; height: 16px; flex: none; }
+
+.history-item-mode { margin-left: 0; margin-right: 8px; }
+.history-item-mode-agent { background: var(--accent-dim); color: var(--accent); }
+
+/* .history-list's shared .pst-folder-list base caps at 260px (right for
+   the PST/SharePoint/Teams pickers it's also used for), but the drawer
+   has a full column of height to give it instead of leaving it empty
+   below a short fixed-height list. */
+.history-drawer .history-list { max-height: none; flex: 1; min-height: 0; }
+
+.account-fields { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 12px 0; }
+.account-fields dt { color: var(--muted); font-size: 0.85em; }
+.account-fields dd { margin: 0; }
+
+/* "Mein Konto" personal-context form (Phase 4) — a plain stacked-label
+   form, one field per row, matching the settings tab's own label/input
+   rhythm rather than a bespoke grid; .account-personal-fields just adds
+   the vertical gap between rows. */
+.account-section-title { margin: 18px 0 4px; font-size: 0.95rem; }
+.account-personal-fields { display: flex; flex-direction: column; gap: 10px; margin: 8px 0; }
+.account-personal-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+.account-personal-fields input, .account-personal-fields textarea { font-size: 0.92rem; color: var(--text); }
+
+.draft-section { display: flex; flex-direction: column; min-height: 0; flex: 1; margin-top: 12px; gap: 8px; }
+.draft-banner {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.draft-section .modal-content { flex: 1; }
+#sourceModalDraftCitations.citations { margin-top: 0; }
+
+/* ---- Prompts tab: default-prompt badge / skill guidance / tester ------ */
+.prompts-default-badge {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.prompts-skill-guidance { margin: 8px 0; }
+.prompts-skill-guidance summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+.prompts-skill-guidance ul { margin: 8px 0 0; padding-left: 20px; font-size: 0.85rem; color: var(--muted); }
+.prompts-skill-tester {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.prompts-skill-tester input[type=text] { flex: 1; min-width: 220px; }
+.prompts-skill-tester .result { flex-basis: 100%; margin: 0; }
+
+/* ---- Chunk Viewer ----------------------------------------- */
+.chunk-filters { align-items: stretch; gap: 6px; }
+.chunk-filters input[type=text] { min-width: 150px; flex: 1; }
+.chunk-filters select { flex: none; }
+.chunk-filters button[type=button] {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+}
+.chunk-filters button[type=button]:hover { border-color: var(--accent); color: var(--text); filter: none; }
+
+#chunksTable tbody tr.chunk-row { cursor: pointer; }
+#chunksTable td.name { max-width: 260px; white-space: nowrap; }
+
+.freshness-bar {
+  display: inline-block;
+  width: 54px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 5px;
+}
+.freshness-bar > span { display: block; height: 100%; background: var(--accent); }
+.freshness-val { font-size: 0.73rem; color: var(--muted); }
+
+.chunk-detail td { background: var(--bg2); padding: 14px 16px; }
+.chunk-detail .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 0.73rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.chunk-detail .content-box {
+  white-space: pre-wrap;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel);
+}
+.chunk-detail-actions { display: flex; gap: 14px; margin-bottom: 8px; }
+.chunk-detail-result:empty { display: none; }
+
+.chunks-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+.chunks-pager button { padding: 5px 14px; }
+
+/* ---- Prompts / Skills ------------------------------------- */
+.prompt-editor {
+  width: 100%;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.83rem;
+  resize: vertical;
+  margin-bottom: 8px;
+  min-height: 180px;
+}
+#s_url_mappings { min-height: 90px; }
+
+/* ── Skill-Tabelle (Accordion-Layout) ────────────────────────── */
+.skill-table {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.skill-table-hdr {
+  display: grid;
+  grid-template-columns: 14px 1.5fr 1.5fr 1fr 22px;
+  gap: 10px;
+  padding: 7px 14px;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--border);
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  user-select: none;
+}
+.skill-row-wrap { border-bottom: 1px solid var(--border); }
+.skill-row-wrap:last-child { border-bottom: none; }
+
+.skill-row-head {
+  display: grid;
+  grid-template-columns: 14px 1.5fr 1.5fr 1fr 22px;
+  gap: 10px;
+  padding: 10px 14px;
+  align-items: center;
+  cursor: pointer;
+  transition: background .1s;
+  user-select: none;
+  outline: none;
+  /* Now a native <button> (see app.js's buildSkillRow) so Enter/Space/
+     focus semantics come for free instead of being hand-rolled — reset
+     the browser's default button chrome back to how the plain <div> it
+     replaced looked. */
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.skill-row-head:hover,
+.skill-row-head:focus-visible { background: var(--sb-hover); }
+.skill-row-head.sk-open { background: var(--sb-active); }
+
+.sk-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  justify-self: center;
+  flex: none;
+}
+.sk-status-dot.enabled { background: var(--success); }
+
+.sk-row-name { font-weight: 600; font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sk-row-tags { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; overflow: hidden; }
+.sk-tag {
+  font-size: .68rem;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.sk-tag-more { font-size: .7rem; color: var(--muted); padding: 0 2px; }
+.sk-row-file {
+  font-size: .72rem;
+  color: var(--muted);
+  font-family: ui-monospace, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sk-chevron {
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  text-align: center;
+  transition: transform .15s;
+}
+.sk-open .sk-chevron { transform: rotate(90deg); }
+
+.skill-editor-panel {
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.skill-editor-inner {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.skill-meta-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.skill-meta-row .sk-display-name { flex: 1; min-width: 140px; }
+.sk-toggle { flex: none; flex-direction: row; align-items: center; gap: 7px; margin: 0; }
+.sk-toggle input[type=checkbox] { align-self: center; }
+.sk-filename-badge {
+  font-size: .72rem;
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--muted);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  flex: none;
+}
+.skill-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: .82rem;
+  color: var(--muted);
+  font-weight: 600;
+  max-width: none;
+  margin: 0;
+}
+.skill-field-label input,
+.skill-field-label textarea { width: 100%; margin: 0; }
+.skill-field-label .hint { font-weight: 400; font-size: .72rem; }
+.skill-editor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.skill-editor-actions .result { padding: 0; margin: 0; }
+
+/* ---- Settings section ------------------------------------- */
+/* ---- Settings groups (clusters of related accordions) ------ */
+.settings-group { margin-top: 28px; }
+.settings-group:first-of-type { margin-top: 0; }
+.settings-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-group-title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.page-head-actions { position: absolute; right: 0; top: 2px; display: flex; gap: 8px; }
+/* .page-head .ghost-btn's own absolute-positioning rule (below) is meant
+   for a single lone button; override it back to static here since this
+   wrapper already positions the whole group instead. */
+.page-head-actions .ghost-btn { position: static; }
+
+/* Quick-jump chips to each settings group below — 7 groups spanning ~27
+   accordion cards is too much to scroll past just to reach e.g.
+   "Protokoll" at the very end. Plain anchor links (not JS-driven scroll),
+   so it degrades to normal in-page navigation with no script attached. */
+.settings-jumpnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 22px;
+}
+.settings-jumpnav a {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.settings-jumpnav a:hover,
+.settings-jumpnav a:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* ---- Settings accordion ------------------------------------ */
+.settings-accordion {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.2s;
+}
+/* A faint accent hairline across the top of every card — just enough
+   brand color to keep a page full of otherwise-gray cards from reading
+   as flat and interchangeable, without tinting the whole card. */
+.settings-accordion::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent 85%);
+  opacity: 0.55;
+}
+.settings-accordion:has(summary:hover),
+.settings-accordion[open] {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  box-shadow: var(--shadow-lg);
+}
+.settings-accordion summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  transition: background 0.15s;
+}
+.settings-accordion summary::-webkit-details-marker { display: none; }
+.settings-accordion summary h2 { margin: 0; }
+.settings-accordion summary::after {
+  content: "›";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  transform: rotate(90deg);
+  transition: transform 0.18s ease, background 0.15s, color 0.15s;
+  color: var(--muted);
+  font-size: 1.2rem;
+  flex: none;
+}
+.settings-accordion[open] summary::after { transform: rotate(-90deg); }
+.settings-accordion summary:hover { background: var(--sb-hover); }
+.settings-accordion summary:hover::after { color: var(--accent); background: var(--accent-dim); }
+.settings-accordion .settings-grid { margin: 0; padding: 0 20px 20px; }
+/* Content fades/slides in every time an accordion opens (see r3-fade,
+   already used for chat messages) — browsers restart a plain CSS
+   `animation` whenever an element goes from display:none to displayed, so
+   this replays on every toggle with no JS needed, including the
+   already-`open`-by-default accordions on first page load. */
+.settings-accordion[open] > .settings-grid { animation: r3-fade 0.22s ease; }
+
+/* ---- Help tab: plain-content accordion body ----------------
+   The Help tab reuses .settings-accordion's card/summary chrome for its
+   own "aufklappbare Elemente", but its content is plain flowing paragraphs/
+   lists, not a form — .settings-grid's 2-column CSS grid (and the
+   .settings-section card treatment nested inside it) would be wrong here,
+   so this is just the padding half of that rule against plain content. */
+.help-accordion-body { padding: 0 20px 20px; }
+.settings-accordion[open] > .help-accordion-body { animation: r3-fade 0.22s ease; }
+.help-accordion-body p { margin: 0 0 10px; line-height: 1.5; }
+.help-accordion-body p:last-child { margin-bottom: 0; }
+.help-accordion-body ul { margin: 0; padding-left: 20px; }
+.help-accordion-body li { margin-bottom: 6px; line-height: 1.5; }
+
+/* help-availability-list: one row per active/inactive source or tool
+   (Help tab's dynamic "Verfügbare Quellen"/"Verfügbare Werkzeuge"/"Weitere
+   mögliche Module" sections, populated by renderHelpAvailability in
+   app.js) — a plain icon + name + description row, deliberately lighter
+   chrome than .settings-section's full card treatment since these are
+   read-only descriptive rows, not editable form fields. */
+.help-availability-list { display: flex; flex-direction: column; gap: 2px; margin: 10px 0; }
+.help-availability-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.help-availability-item:hover { background: var(--sb-hover); }
+.help-availability-icon { font-size: 1.3rem; line-height: 1.3; flex: none; }
+.help-availability-body { min-width: 0; }
+.help-availability-name { font-weight: 600; }
+.help-availability-desc { color: var(--muted); font-size: 0.88rem; margin-top: 2px; }
+/* Inactive modules read as available-but-dimmed, not broken/erroneous —
+   plain opacity, no red/warning color, since "not configured yet" is a
+   completely normal, expected state, not a problem to flag. */
+.help-availability-inactive .help-availability-item { opacity: 0.6; }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.settings-grid .span-2 { grid-column: 1 / -1; }
+/* An accordion body that's just one full-width section would otherwise be
+   a card inside a card — same border/shadow/background repeated twice for
+   no visual reason. Flatten it into plain content directly in the
+   accordion body instead; accordions with several side-by-side sections
+   (e.g. "LLM-Backends & Routing") keep their section cards, since those
+   genuinely separate distinct sub-topics. */
+.settings-grid:has(> .settings-section.span-2:only-child) { display: block; margin-bottom: 0; }
+.settings-grid:has(> .settings-section.span-2:only-child) > .settings-section {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.settings-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+}
+/* A .settings-section sitting inside a .settings-grid is always nested
+   INSIDE an already-bordered, already-shadowed .settings-accordion — using
+   the exact same --panel/shadow for both reads as a card stamped inside an
+   identical card. --panel2 (a step lighter/darker depending on theme,
+   already used elsewhere for this same "one level in" relationship) and a
+   quieter border/shadow tell the two levels apart at a glance. */
+.settings-grid .settings-section {
+  background: var(--panel2);
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+.settings-section h3 {
+  margin-top: 0;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  font-size: 0.98rem;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section label { max-width: none; }
+.settings-section label:last-child { margin-bottom: 0; }
+/* Sub-group headers within one settings-section box — e.g. "Bild"/"Datei"/
+   "Prompt-Länge" grouping several related fields under one shared <h3>
+   without splitting them into separate boxes. */
+.settings-section h4 { margin: 16px 0 6px; font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.settings-section h4:first-of-type { margin-top: 0; }
+/* "Verbindung testen" button: a secondary action tucked under a card's
+   fields, not the primary save action — ghost-btn already looks the part,
+   this just gives it room to breathe above and keeps it from stretching
+   edge-to-edge like the fields above it. */
+.settings-section > .ghost-btn { margin-top: 8px; }
+.settings-section > .ghost-btn + .result { margin-top: 6px; margin-bottom: 0; }
+
+/* ---- Settings save bar -------------------------------------- */
+/* Deliberately NOT position:sticky: a sticky bottom bar keeps its normal
+   document-flow space AND paints a second, floating copy pinned to the
+   scrollport's bottom edge for the entire time its natural position
+   hasn't scrolled into view yet — which reads as visually broken (a card
+   overlapping whatever accordion happens to be at that screen position)
+   rather than as a deliberate floating toolbar. Plain flow, styled like
+   any other card, is calmer and still easy to find since "Alle
+   aufklappen"/"Alle einklappen" (page header) make the whole page short
+   enough to reach quickly either way. */
+.settings-save-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 28px;
+  padding: 14px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.settings-save-bar #settingsResult { margin: 0; padding: 0; }
+.settings-save-state {
+  color: var(--muted);
+  font-size: 0.84rem;
+  min-height: 1.2em;
+}
+.settings-save-state-error { color: var(--danger); }
+
+/* ---- Settings: live operations -------------------------------------- */
+/* Compact operational telemetry: enough hierarchy to scan users versus
+   running agent work at a glance, deliberately lighter than a data table so
+   this stays useful on a narrow Settings panel too. */
+.operations-summary { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
+.operations-kpi {
+  padding: 7px 10px;
+  background: var(--accent-dim);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+.operations-kpi strong { font-variant-numeric: tabular-nums; }
+.operations-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.operations-grid h4 { margin: 0 0 7px; }
+.operations-list { list-style: none; margin: 0; padding: 0; }
+.operations-list li {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+}
+.operations-list li:last-child { margin-bottom: 0; }
+.operations-primary { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.operations-primary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operations-status { color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
+.operations-status.is-active { color: var(--ok); }
+.operations-meta { color: var(--muted); font-size: 0.78rem; margin-top: 3px; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .operations-grid { grid-template-columns: 1fr; } }
+
+/* ---- Responsive ------------------------------------------- */
+@media (max-width: 1000px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 860px) {
+  .menu-toggle { display: flex; }
+  .sidebar-collapse-btn { display: none; }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .panel.active { padding: 64px 16px 32px; }
+  .chat-log { padding: 64px 14px 10px; }
+  .ask-form { padding: 6px 12px 12px; }
+  .composer-hint { display: none; }
+  .page-head .ghost-btn { position: static; margin-top: 8px; }
+  .page-head-actions { position: static; margin-top: 8px; }
+  td.name, #chunksTable td.name { max-width: 160px; }
+}
+
+/* ---- Scrollbar styling ------------------------------------ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ---- Settings overhaul: badges, search, history, conn details ---------- */
+.settings-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  vertical-align: middle;
+  background: var(--border);
+  color: var(--muted);
+}
+.settings-badge-on {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.settings-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.settings-search-wrap svg {
+  position: absolute;
+  left: 12px;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  pointer-events: none;
+}
+/* input.settings-search, not just .settings-search: the shared
+   input[type=search] rule above (specificity 0,1,1 — an attribute
+   selector counts as a class) otherwise beats a bare class selector
+   (0,1,0) and silently wins the 8px radius/11px padding back. Tying its
+   specificity at 0,1,1 and declaring it later settles the cascade in this
+   rule's favor instead. */
+input.settings-search {
+  width: 240px;
+  max-width: 50vw;
+  padding-left: 32px;
+  border-radius: 999px;
+}
+/* input[type=search]:focus above also re-asserts border-color/box-shadow
+   at the same 0,1,1 specificity — repeat border-radius here too so focus
+   doesn't revert the pill shape back to the shared 8px corner. */
+input.settings-search:focus { border-radius: 999px; }
+.settings-search-wrap:focus-within svg { color: var(--accent); }
+#saveSettings.save-dirty {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.conn-exchanges {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+}
+.conn-exchanges summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+.conn-exchanges summary:hover { color: var(--text); }
+.conn-exchanges h5 {
+  margin: 10px 0 4px;
+  font-size: 0.78rem;
+}
+.conn-exchange-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 6px 0 2px;
+}
+.conn-hex-toggle {
+  font-size: 0.7rem;
+  padding: 1px 8px;
+}
+.conn-exchanges .debug-pre {
+  max-height: 320px;
+  overflow: auto;
+}
+.settings-history-list { margin-top: 10px; }
+.settings-history-entry { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.settings-history-entry:last-child { border-bottom: none; }
+.settings-history-changes {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+}
+.settings-history-changes code { word-break: break-all; }
+.settings-history-changes s { color: var(--muted); }
+
+/* Token-usage chart (Settings → Protokoll → Token-Nutzung) — a stacked
+   bar per LLM backend (Prompt/Completion tokens), built the same way the
+   Chunks tab's single-value .freshness-bar is: plain flexbox divs with
+   computed sizes, no canvas/SVG/charting library, consistent with the
+   rest of this codebase. Colors: --tok-prompt/--tok-completion (defined
+   per theme above), never --accent/--danger/--success/--warn — see
+   those definitions' comments for why. */
+.tokusage-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  height: 180px;
+  padding: 12px 4px 0;
+  border-bottom: 1px solid var(--border);
+  margin-top: 10px;
+  overflow-x: auto;
+}
+.tokusage-chart:empty::after {
+  content: "Noch keine Token-Nutzung im gewählten Zeitraum aufgezeichnet.";
+  color: var(--muted);
+  font-size: 0.85rem;
+  align-self: center;
+}
+.tokusage-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  min-width: 64px;
+  flex: 1 1 0;
+}
+.tokusage-bar-total {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+.tokusage-bar {
+  width: 40px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 2px; /* the dataviz skill's "2px surface gap between stacked segments" */
+  border-radius: 4px 4px 0 0; /* rounded top — the one free "data end" on a stacked bar anchored to the baseline */
+  overflow: hidden;
+  background: var(--border); /* shows through the 2px gap as a hairline separator */
+  flex: none;
+}
+.tokusage-seg-prompt { background: var(--tok-prompt); }
+.tokusage-seg-completion { background: var(--tok-completion); }
+.tokusage-bar-label {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: var(--text);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.tokusage-legend { display: flex; gap: 18px; margin-top: 10px; font-size: 0.83rem; }
+.tokusage-legend-item { display: flex; align-items: center; gap: 6px; }
+.tokusage-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.tokusage-swatch-prompt { background: var(--tok-prompt); }
+.tokusage-swatch-completion { background: var(--tok-completion); }
+
+.tokusage-table { width: 100%; margin-top: 4px; border-collapse: collapse; font-size: 0.85rem; }
+.tokusage-table th, .tokusage-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.tokusage-table th:nth-child(n+3), .tokusage-table td:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+.tokusage-table th { color: var(--muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+
+/* Query-template structured editor (SQL + HTTP tool templates) */
+.qt-editor { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
+.qt-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg); }
+.qt-card-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.qt-card-head > label:first-child { flex: 1 1 240px; }
+/* A grid, not the single flex column this used to be: connector kinds with
+   many short fields (SharePoint/Exchange/Teams each hold 6-9 — tenant/
+   client/secret plus their own site/mailbox/channel fields) used to render
+   as a long stack of full-width rows, most of them holding a short value
+   like a GUID. Flowing them 2-3 to a row (same minmax(260px,1fr) idea as
+   .settings-grid above) keeps a card scannable at a glance instead of a
+   full-page scroll per connection. Anything that genuinely needs the full
+   width — a checkbox's longer descriptive label, a multi-line jsontext
+   textarea, the test/discover result areas, a connector's customSection —
+   opts back into spanning every column below. */
+.qt-card-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px 16px;
+  margin-top: 10px;
+  align-items: start;
+}
+.qt-card-body > label:has(input[type="checkbox"]),
+.qt-card-body > label:has(textarea),
+.qt-card-body > .qt-test,
+.qt-card-body > .discover-tree,
+.qt-card-body > .qt-card-extra,
+.qt-card-body > .conn-subsection {
+  grid-column: 1 / -1;
+}
+.qt-card label { font-size: 0.85rem; }
+.qt-remove { color: var(--danger); white-space: nowrap; }
+
+/* Connector card header menu (connCardMenu, web/app.js) — Entfernen/
+   Exportieren/Importieren/Duplizieren/Testen, replacing the old single
+   "Verbindung entfernen" button. Same visual language as .theme-menu-*
+   (sidebar theme switcher) but opens downward, since this toggle sits at
+   the top of its card rather than the bottom of the sidebar. */
+.conn-card-menu { position: relative; }
+.conn-card-menu-toggle {
+  width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--text); cursor: pointer; font-size: 1.1rem; line-height: 1;
+}
+.conn-card-menu-toggle:hover, .conn-card-menu-toggle[aria-expanded="true"] { background: var(--sb-hover); filter: none; }
+.conn-card-menu-popover {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-lg); padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  min-width: 200px; z-index: 30;
+}
+.conn-card-menu-option {
+  display: block; width: 100%; padding: 7px 10px; border-radius: 7px; border: none;
+  background: transparent; color: var(--text); cursor: pointer; text-align: left; font-size: 0.85rem;
+}
+.conn-card-menu-option:hover { background: var(--sb-hover); filter: none; }
+.conn-card-menu-option-danger { color: var(--danger); }
+
+.qt-params { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.qt-params-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; }
+.qt-param-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 6px; }
+.qt-param-row > label { flex: 1 1 120px; }
+.qt-raw { margin-top: 8px; }
+.qt-raw summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+
+/* Discover: recursive structure preview (SharePoint/Folder/Exchange) —
+   nested tree, unlike .pst-folder-list's flat one-level checklist above,
+   so it gets its own small family rather than retrofitting that one. */
+.discover-tree { margin-top: 8px; }
+.discover-tree:empty { display: none; }
+.discover-node { margin: 2px 0 2px 4px; }
+.discover-node > summary { cursor: pointer; font-size: 0.85rem; padding: 2px 4px; border-radius: 6px; list-style: none; }
+.discover-node > summary::-webkit-details-marker { display: none; }
+.discover-node > summary::before { content: "▸ "; }
+.discover-node[open] > summary::before { content: "▾ "; }
+.discover-node > summary:hover { background: var(--sb-hover); }
+.discover-children, .discover-leaf { margin-left: 18px; border-left: 1px dashed var(--border); padding-left: 10px; }
+.discover-leaf { font-size: 0.85rem; padding: 2px 4px; color: var(--muted); }
+.discover-node-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.discover-node-truncated { color: var(--accent-h); }
+.discover-node-error { color: var(--danger); }
+/* discover-node-selectable: the Mail tab's folder picker (renderDiscoverNode's
+   onSelect) makes a node's label itself clickable — the read-only admin
+   Discover trees never set this class, so they stay unaffected. */
+.discover-node-selectable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.discover-node-selectable:hover, .discover-node-selectable:focus-visible { background: var(--sb-hover); }
+
+.mail-graph-folder-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+
+/* Agent step timeline (Demo mode: live orchestration view) */
+.agent-steps { margin: 6px 0 10px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--bg); }
+.agent-steps summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+.agent-steps-list { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.agent-step { font-size: 0.85rem; line-height: 1.4; }
+.agent-step.nested { margin-left: 16px; }
+.agent-step.subagent { margin-top: 4px; }
+.agent-step .step-ico { display: inline-block; width: 1.3em; }
+.agent-step.pending { color: var(--muted); }
+.agent-step.ok { color: var(--text); }
+.agent-step.err { color: var(--danger); }
+.agent-step .step-err { color: var(--danger); }
+.agent-step .step-spin { animation: r3blink 1s steps(3) infinite; }
+@keyframes r3blink { 50% { opacity: 0.3; } }
+/* Expandable "what came back" detail under a resolved tool/sub-agent
+   step (agentStepsPanel's resultBlock, web/app.js) — collapsed by
+   default so the timeline stays scannable; the truncated result text is
+   already server-capped (300 chars), so no extra wrapping/scroll needed. */
+.agent-step .step-result { margin: 2px 0 2px 1.9em; }
+.agent-step .step-result summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; }
+.agent-step .step-result pre { margin: 4px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--panel2); color: var(--text); font-size: 0.8rem; white-space: pre-wrap; word-break: break-word; }
+#agentDemoBtn { margin-top: 14px; }
+
+/* ---- Agent-steps view toggle + graphical view (web/app.js's
+   agentStepsPanel/buildStepGraphMermaid/renderAgentGraph) --------------
+   Same step stream as the list above, rendered as a live Mermaid
+   flowchart of who called/started what — a node's "#N" prefix matches
+   the same number on its row in the list view, so switching back to the
+   list for full args/results is a matter of finding that number rather
+   than needing interactive click handling inside the rendered SVG. */
+.agent-steps-view-toggle { display: flex; gap: 6px; margin: 6px 0 2px; }
+.agent-steps-view-toggle .ghost-btn { padding: 2px 10px; font-size: 0.78rem; }
+.agent-steps-view-toggle .ghost-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.step-seq { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 2px; }
+.agent-steps-graph { margin: 6px 0 0; padding: 6px; border-radius: 8px; background: var(--panel2); overflow-x: auto; }
+.agent-steps-graph svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+
+/* ---- novapop.js theme bridge --------------------------------
+   novapop.js (web/novapop.js) injects its own <style> lazily, on its
+   first popup()/confirm()/toast()/tooltip() call — after this stylesheet
+   has already loaded — so a normal (non-!important) override here would
+   lose to its later-inserted rule despite matching selector/specificity.
+   !important sidesteps that ordering race entirely (and also beats the
+   inline `icon.style.background = ...` novapop.js sets per-toast-type in
+   JS, since an !important stylesheet rule outranks a plain inline style).
+   Every value below routes through R3's own theme tokens (--panel/--text/
+   --accent/... from the "Theme-Tokens" block at the top of this file) so
+   toasts/popups/tooltips re-skin automatically with every theme switch —
+   including win2k, whose separate `[data-theme="win2k"] * { border-radius:
+   0 !important }` rule (above) already flattens every novapop corner too,
+   without any novapop-specific rule needed here. */
+:root {
+  --np-bg:          var(--panel) !important;
+  --np-fg:          var(--text) !important;
+  --np-muted:       var(--muted) !important;
+  --np-backdrop:    rgba(0,0,0,.5) !important;
+  --np-accent:      var(--accent) !important;
+  --np-radius:      10px !important;
+  --np-shadow:      var(--shadow-lg) !important;
+  --np-tooltip-bg:  var(--panel2) !important;
+  --np-tooltip-fg:  var(--text) !important;
+  --np-toast-bg:    var(--panel) !important;
+  --np-toast-fg:    var(--text) !important;
+  --np-danger:      var(--danger) !important;
+  --np-success:     var(--success) !important;
+  --np-warning:     var(--warn) !important;
+}
+.np-body { color: var(--text) !important; }
+.np-actions {
+  border-top: 1px solid var(--border) !important;
+  background: var(--panel) !important;
+}
+.np-btn {
+  background: var(--panel2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+.np-btn.np-accent { background: var(--accent) !important; color: var(--accent-fg) !important; border-color: var(--accent) !important; }
+.np-btn.np-danger { background: var(--danger) !important; color: #fff !important; border-color: var(--danger) !important; }
+.np-close, .np-arrow {
+  background: var(--panel2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+.np-close:hover, .np-arrow:hover { background: var(--sb-hover) !important; }
+.np-input, .np-select, .np-textarea {
+  background: var(--bg2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+.np-caption { color: var(--text) !important; }
+/* .np-icon's background is set inline per toast type by novapop.js's
+   toast() as e.g. `background: var(--np-success)` for type success/error/
+   warn — those already resolve through the --np-success/--np-danger/
+   --np-warning overrides above since it's a var() reference, not a literal
+   color. Only the default "info" type (class np-toast.info) falls through
+   to its own hardcoded gray instead of a variable, so that's the one case
+   scoped here — deliberately NOT a bare `.np-toast .np-icon` rule, which
+   would out-!important and flatten every type's inline var() to one color. */
+.np-toast.info .np-icon { background: var(--muted) !important; }
+
+/* Agent audit: indent a sub-agent's tool calls under the orchestrator */
+.agent-audit-sub .pst-folder-path { padding-left: 14px; border-left: 2px solid var(--border); }

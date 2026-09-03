@@ -1,0 +1,97 @@
+{{define "tab-help"}}
+    <section id="tab-help" class="panel" role="tabpanel" aria-labelledby="navtab-help">
+      <header class="page-head">
+        <h1 data-i18n="page.help.title">Was kann R3?</h1>
+        <p class="hint" data-i18n="page.help.hint">Ein kurzer Überblick, was dieses Tool tut, worauf es zugreift und was es bewusst nicht tut.</p>
+      </header>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="help.chat.title">💬 Chat</h2></summary>
+        <div class="help-accordion-body">
+        <p data-i18n="help.chat.p1">Stelle im Chat eine Frage in normaler Sprache. R3 sucht in den hinterlegten Dokumenten/Mailboxen nach den passendsten Textstellen, gibt sie dem Sprachmodell als Grundlage mit und antwortet darauf gestützt — nicht aus allgemeinem "Weltwissen".</p>
+        <p data-i18n="help.chat.p2">Jede Antwort zeigt anklickbare Quellenangaben (z.&nbsp;B. „[Q1]“). Nur Textstellen, auf die sich die Antwort tatsächlich stützt, erscheinen als Quelle — nicht alles, was bei der Suche gefunden wurde. Über die Quelle lässt sich der Originaltext einsehen.</p>
+        <p data-i18n="help.chat.p3">👍/👎 unter jeder Antwort hilft, gute von schlechten Antworten zu unterscheiden — kurz Feedback geben, wenn eine Antwort daneben liegt oder besonders treffend war.</p>
+        </div>
+      </details>
+
+      <details class="settings-accordion" open>
+        <summary><h2 data-i18n="help.sources.title">📚 Was steht in der Wissensbasis?</h2></summary>
+        <div class="help-accordion-body">
+        <p data-i18n="help.sources.p1b">Zwei Arten stehen immer zur Verfügung, unabhängig von der Einrichtung: hochgeladene Dateien (Admin-Bereich → Import) und einzelne Webseiten/RSS-Feeds. Je nach Einrichtung kommen weitere, unten aufgeführte Quellen hinzu.</p>
+        <div id="helpAvailableSources" class="help-availability-list"></div>
+        <p data-i18n="help.sources.p2">Manche Quellenarten sind nur für bestimmte Abteilungen sichtbar, oder werden zwar zur Beantwortung genutzt, aber nicht namentlich als Quelle angezeigt (etwa bei besonders sensiblen Postfächern) — das steuert die Administration zentral, nicht jede Einzelfrage.</p>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="help.tools.title">🛠️ Verfügbare Werkzeuge</h2></summary>
+        <div class="help-accordion-body">
+        <p data-i18n="help.tools.p1">Im Agent-Modus (und teilweise im normalen Chat) kann R3 zusätzlich zur Wissensbasis-Suche gezielt weitere Werkzeuge einsetzen — welche, hängt von der Einrichtung ab. Ob ein Werkzeug für eine bestimmte Frage tatsächlich zum Einsatz kommt, kann zusätzlich von Login, Abteilung oder gewähltem Preset abhängen — was hier steht, ist also "grundsätzlich verfügbar", nicht zwingend "für jede Anfrage nutzbar".</p>
+        <div id="helpAvailableTools" class="help-availability-list"></div>
+        <p id="helpNoToolsHint" class="hint" data-i18n="help.tools.none" hidden>In dieser Einrichtung ist aktuell kein zusätzliches Werkzeug freigeschaltet — R3 beantwortet Fragen ausschließlich anhand der Wissensbasis.</p>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="help.agent.title">🤖 Agent</h2></summary>
+        <div class="help-accordion-body">
+        <p data-i18n="help.agent.p1">Der Agent-Modus eignet sich für Aufgaben, die mehrere Schritte brauchen, statt einer einzelnen Frage: er darf die Wissensbasis mehrfach durchsuchen, einzelne Quellen im Volltext nachlesen und (falls freigeschaltet) weitere Werkzeuge nutzen, bevor er eine abschließende Antwort gibt.</p>
+        <p data-i18n="help.agent.p2">Welche Werkzeuge aktiv sind (siehe Abschnitt oben), entscheidet die Administration; nicht freigeschaltete Werkzeuge werden dem Agenten gar nicht erst angeboten.</p>
+        <p data-i18n="help.agent.p3">Ist eine Aufgabe mehrdeutig (z.&nbsp;B. "Storniere die Bestellung" bei mehreren offenen Bestellungen), fragt der Agent lieber nach, statt zu raten — oft als anklickbare Auswahl-Buttons unter der Rückfrage. Ein Klick beantwortet die Rückfrage direkt, genauso als hätte man sie eingetippt.</p>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="help.render.title">🧩 Formatierte Antworten</h2></summary>
+        <div class="help-accordion-body">
+        <p data-i18n="help.render.p1">Chat und Agent stellen Antworten formatiert dar: Überschriften, Listen, Hervorhebungen und Tabellen, dazu farbig hervorgehobene JSON-/XML-Blöcke und Code mit „Kopieren“-Knopf.</p>
+        <p data-i18n="help.render.p2">Wo es hilft, kann das Modell auch ein Diagramm (Mermaid, z.&nbsp;B. ein Flussdiagramm) oder eine kleine Datenvisualisierung (d3) zeichnen. Lässt sich ein Diagramm nicht laden (z.&nbsp;B. offline), wird stattdessen der Quelltext angezeigt — es geht nichts verloren.</p>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="help.mail.title">✉️ Mail</h2></summary>
+        <div class="help-accordion-body">
+        <p data-i18n="help.mail.p1">Der Mail-Tab hilft beim Formulieren — entweder als Antwortentwurf auf eine eingefügte E-Mail, oder als neue E-Mail aus ein paar Stichpunkten. Der Vorschlag stützt sich ebenfalls auf die Wissensbasis (z.&nbsp;B. ähnliche frühere Fälle).</p>
+        <p data-i18n="help.mail.p2"><strong data-i18n="help.mail.p2strong">R3 versendet nie automatisch eine E-Mail.</strong> Jeder Entwurf landet in einem editierbaren Feld — zum Kopieren, als .eml-Datei zum Öffnen in Outlook, oder (falls freigeschaltet) zum Ablegen im Entwürfe-Ordner des Postfachs. Verschicken tut immer ein Mensch.</p>
+        <p data-i18n="help.mail.p3">Über „Länge“ und „Format“ lässt sich der Entwurf steuern — kürzer/ausführlicher bzw. Fließtext oder Stichpunkte. Das ändert nur Ton und Umfang, nicht die zugrunde liegenden Fakten.</p>
+        <p data-i18n="help.mail.p4">„Zusätzliche Hinweise“ nimmt einen situativen Hinweis für genau diesen einen Entwurf auf — z.&nbsp;B. einen bevorstehenden Termin oder eine Kommunikationsvorliebe, die weder in der eingefügten Mail noch in der Wissensbasis steht. Das fließt in die Formulierung ein, wird aber nie als neue Sachinformation über den Fall behandelt.</p>
+        <p data-i18n="help.mail.p5">Nach dem Erstellen lässt sich der Entwurf weiter verfeinern, ohne die Fakten neu zu recherchieren: „Stil anwenden“ formuliert den aktuellen Text in einem anderen Tonfall um (z.&nbsp;B. kollegial statt förmlich), „Signatur einfügen“ ergänzt Name/Abteilung des angemeldeten Kontos am Ende.</p>
+        <p data-i18n="help.mail.p6">Ist ein Postfach freigeschaltet, zeigt „Mein Postfach“ eingehende E-Mails direkt aus Outlook/Exchange an — eine Auswahl füllt die Eingabe automatisch, ganz ohne Kopieren/Einfügen von Hand. Anhänge werden dabei mitgelesen, soweit unterstützt (Text/Bilder/Office-Dokumente), und fließen in den Entwurf mit ein.</p>
+        <p data-i18n="help.mail.p7">Ein fertiger Entwurf lässt sich kopieren, als .eml-Datei herunterladen, an die eigene Adresse senden oder (falls freigeschaltet) direkt im Entwürfe-Ordner des Postfachs ablegen.</p>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="help.privacy.title">🔒 Was R3 nicht tut</h2></summary>
+        <div class="help-accordion-body">
+        <ul>
+          <li data-i18n="help.privacy.li1">Keine automatisch versendeten E-Mails — jeder Entwurf braucht einen Menschen, der ihn abschickt.</li>
+          <li data-i18n="help.privacy.li2">Keine Antworten „aus dem Nichts“ ohne Quellenbezug im normalen Chat — die Grundlage lässt sich über die Quellenangaben immer nachvollziehen.</li>
+          <li data-i18n="help.privacy.li3">Kein Zugriff auf Inhalte, die nicht eingebunden wurden, und keine Umgehung von Abteilungs-/Zugriffsbeschränkungen, die für den eigenen Zugang gelten.</li>
+        </ul>
+        </div>
+      </details>
+
+      <details class="settings-accordion">
+        <summary><h2 data-i18n="help.tips.title">⚙️ Kleine Tipps</h2></summary>
+        <div class="help-accordion-body">
+        <ul>
+          <li data-i18n="help.tips.li1">Konkrete Fragen (mit Namen, Zeitraum, Aktenzeichen o.&nbsp;Ä.) liefern treffendere Antworten als sehr allgemeine.</li>
+          <li data-i18n="help.tips.li2">Theme und Schriftgröße lassen sich unten in der Seitenleiste anpassen — die Wahl bleibt im Browser gespeichert.</li>
+          <li data-i18n="help.tips.li3">„Verlauf“ merkt sich bisherige Unterhaltungen nur im eigenen Browser (nicht auf dem Server) — praktisch für spätere Rückfragen zum selben Thema.</li>
+        </ul>
+        </div>
+      </details>
+
+      <details class="settings-accordion" id="helpInactiveModulesCard">
+        <summary><h2 data-i18n="help.inactive.title">➕ Weitere mögliche Module (aktuell nicht aktiv)</h2></summary>
+        <div class="help-accordion-body">
+        <p class="hint" data-i18n="help.inactive.intro">R3 unterstützt noch weitere Quellen und Werkzeuge, die in dieser Einrichtung derzeit nicht konfiguriert oder nicht freigeschaltet sind. Eine Administration kann sie bei Bedarf unter Einstellungen aktivieren.</p>
+        <div id="helpInactiveModules" class="help-availability-list help-availability-inactive"></div>
+        </div>
+      </details>
+
+      <p class="hint help-credits" data-i18n-html="help.credits">R3 (RubixRAG) wird von Simon Waldherr entwickelt. Bei Fragen oder Problemen: <a href="mailto:simon.waldherr@rubix.com">simon.waldherr@rubix.com</a>.</p>
+    </section>
+{{end}}

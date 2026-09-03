@@ -1,7 +1,8 @@
 # LLM Provider Setup
 
 tinyRAG is provider-agnostic: anything that speaks the OpenAI `/v1/chat/completions`
-and `/v1/embeddings` API works, local or cloud. This page collects setup
+and `/v1/embeddings` API works, local or cloud. Servers exposing the native
+Ollama `/api` endpoints are supported as well. This page collects setup
 notes for every provider preset in the web UI's provider switcher
 (`#llmSwitcher` in [index.html](../index.html)), plus how to wire up
 something that isn't in the list.
@@ -11,6 +12,14 @@ Two independent endpoints can be configured — `chat_base` and `embed_base`
 both from the same base URL; for cloud chat-only providers (e.g. Anthropic,
 Groq) you typically keep a separate embedding backend (a local model, or
 OpenAI) since not every provider offers an embeddings endpoint.
+
+The **Inference-Schnittstelle** setting controls the wire profile:
+
+- `auto` (default) infers local Ollama conventions and retries the other
+  profile only when a route is missing;
+- `openai` uses `/v1/models`, `/v1/chat/completions` and `/v1/embeddings`;
+- `ollama` uses `/api/tags`, `/api/chat` and `/api/embed`, with a fallback to
+  the older one-input `/api/embeddings` route.
 
 ## Local runners
 
@@ -27,7 +36,17 @@ OpenAI) since not every provider offers an embeddings endpoint.
 - Pull models: `ollama pull llama3.1` and `ollama pull nomic-embed-text`.
 - Default base URL: `http://localhost:11434`.
 - Ollama's OpenAI-compatibility layer lives under `/v1` — tinyRAG accounts
-  for this automatically.
+  for this automatically. Selecting `Ollama nativ` uses `/api` directly and
+  is useful for deployments that do not expose the compatibility layer.
+
+### GopherLLM and RustyLLM
+
+Both names are supported as provider hints in the UI. The normal profile is
+**OpenAI-kompatibel**: point tinyRAG at the server's base URL and use
+`/v1/models`, `/v1/chat/completions` and `/v1/embeddings`. This also keeps the
+setup compatible with other Go/Rust inference applications that expose the
+same contract. The switcher uses `http://localhost:8091` for the bundled demo
+default; change the URL when the server listens elsewhere.
 
 ### llama.cpp (`llama-server`)
 - Build or download `llama-server` from
@@ -150,11 +169,11 @@ no key is stored in `settings.json`.
 
 Pick "Custom..." in the provider switcher (or just fill in Settings → LLM
 Backend directly): any server implementing `/v1/chat/completions` and
-`/v1/embeddings` works, including self-hosted proxies, Azure OpenAI
-deployments, or a provider added after this document was written. Enter the
-base URL (without a trailing `/v1` — tinyRAG normalizes that), click
-"Test & Load Models" to populate the model dropdowns via `/v1/models`, then
-save.
+`/v1/embeddings` works, including self-hosted proxies or a provider added
+after this document was written. For Ollama-native deployments select the
+`ollama` profile. Enter the base URL (without a trailing `/v1` — tinyRAG
+normalizes that), click "Test & Load Models" to populate the model dropdowns,
+then save.
 
 ## How auto-detection works
 

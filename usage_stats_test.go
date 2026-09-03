@@ -74,6 +74,7 @@ func TestUsageRecordFromTelemetry(t *testing.T) {
 	tel.TotalMS = 123
 	tel.recordTool(ToolInvocationRecord{Tool: "wikipedia"})
 	tel.recordTool(ToolInvocationRecord{Tool: "calculate", Deduplicated: true}) // must be skipped
+	tel.recordTool(ToolInvocationRecord{Tool: "shell", PolicyDecision: "confirmation_required:code_requires_explicit_user_action"})
 
 	us.recordFromTelemetry(tel, "vertrieb")
 	sum := us.summarize(7)
@@ -81,6 +82,6 @@ func TestUsageRecordFromTelemetry(t *testing.T) {
 		t.Fatalf("unexpected summary: %+v", sum)
 	}
 	if sum.TotalToolCalls != 1 || sum.PerTool["wikipedia"] != 1 {
-		t.Errorf("deduplicated tools must not count: %+v", sum.PerTool)
+		t.Errorf("non-executed tools must not count: %+v", sum.PerTool)
 	}
 }

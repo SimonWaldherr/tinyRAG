@@ -39,7 +39,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -71,12 +70,15 @@ func defaultEngineConfig() EngineConfig {
 
 // ToolResult holds the outcome of a single tool execution.
 type ToolResult struct {
-	Call      XMLToolCall
-	Text      string
-	Source    string
-	Error     error
-	StartedAt time.Time
-	Duration  time.Duration
+	Call              XMLToolCall
+	Text              string
+	Source            string
+	Error             error
+	Phase             string
+	ContentHash       string
+	EvidenceTruncated bool
+	StartedAt         time.Time
+	Duration          time.Duration
 }
 
 // EngineRequest captures all inputs for one /api/ask execution.
@@ -230,25 +232,27 @@ func (e *StreamingEngine) Run(
 
 			// Launch tool calls concurrently as they complete
 			for _, call := range result.Calls {
-				dedupKey := toolDedupKey(call.Name, call.Query)
+				var decision toolPolicyDecision
+				call, decision = e.admitToolCall(s, call, req.AutoSearch)
+				if !decision.Allowed {
+					log.Printf("ENGINE[%s] tool not allowed: %s (%s)", req.RequestID, call.Name, decision.Reason)
+					e.recordToolSkip(sw, tel, call, "inline", decision)
+					continue
+				}
+				dedupKey := canonicalToolCallKey(call)
 				if seen[dedupKey] {
 					log.Printf("ENGINE[%s] dedup skip: %s(%s)", req.RequestID, call.Name, truncate(call.Query, 60))
-					tel.recordTool(ToolInvocationRecord{
-						ID: call.ID, Tool: call.Name, Query: call.Query,
-						Deduplicated: true, StartTime: time.Now(), EndTime: time.Now(),
-					})
+					e.recordToolSkip(sw, tel, call, "inline", denyTool("deny", "duplicate_call", decision.Risk))
 					continue
 				}
 				if totalTools >= e.cfg.MaxToolsTotal {
 					log.Printf("ENGINE[%s] tool cap reached (%d), skipping %s", req.RequestID, e.cfg.MaxToolsTotal, call.Name)
+					e.recordToolSkip(sw, tel, call, "inline", denyTool("deny", "request_tool_cap_reached", decision.Risk))
 					continue
 				}
 				if len(pendingTools) >= e.cfg.MaxToolsPerRound {
 					log.Printf("ENGINE[%s] per-round tool cap (%d) reached", req.RequestID, e.cfg.MaxToolsPerRound)
-					continue
-				}
-				if !e.toolAllowed(s, call.Name, req.AutoSearch) {
-					log.Printf("ENGINE[%s] tool not allowed: %s (role=%s auto_search=%t)", req.RequestID, call.Name, s.ActiveRole, req.AutoSearch)
+					e.recordToolSkip(sw, tel, call, "inline", denyTool("deny", "round_tool_cap_reached", decision.Risk))
 					continue
 				}
 
@@ -256,14 +260,15 @@ func (e *StreamingEngine) Run(
 				totalTools++
 
 				// Notify frontend that tool is starting
-				startPayload, _ := json.Marshal(map[string]string{
+				startPayload, _ := json.Marshal(map[string]any{
 					"id": call.ID, "tool": call.Name, "query": call.Query,
+					"arguments": call.Arguments, "phase": "inline",
 				})
 				sw.event("tool_start", string(startPayload))
 
 				// Launch tool goroutine
 				resCh := make(chan ToolResult, 1)
-				go e.execTool(ctx, call, s, resCh)
+				go e.execTool(ctx, call, s, "inline", resCh)
 				pendingTools = append(pendingTools, pendingTool{call: call, res: resCh})
 
 				log.Printf("ENGINE[%s] tool started: id=%s name=%s query=%q", req.RequestID, call.ID, call.Name, truncate(call.Query, 80))
@@ -308,46 +313,27 @@ func (e *StreamingEngine) Run(
 			break
 		}
 
-		// Collect all tool results (with individual timeouts already applied
-		// inside execTool, so this Wait should return quickly).
-		var toolResults []ToolResult
-		var wg sync.WaitGroup
-		resultsMu := sync.Mutex{}
+		// Tools run concurrently, but collect their buffered results in call
+		// order. This makes evidence, telemetry and SSE traces reproducible and
+		// avoids concurrent writes to the streaming response.
+		toolResults := make([]ToolResult, 0, len(pendingTools))
 		for _, pt := range pendingTools {
-			wg.Add(1)
-			go func(ch chan ToolResult, call XMLToolCall) {
-				defer wg.Done()
-				res := <-ch
-				resultsMu.Lock()
-				toolResults = append(toolResults, res)
-				resultsMu.Unlock()
-
-				// Record telemetry
-				rec := ToolInvocationRecord{
-					ID:         call.ID,
-					Tool:       call.Name,
-					Query:      call.Query,
-					StartTime:  res.StartedAt,
-					EndTime:    res.StartedAt.Add(res.Duration),
-					DurationMS: res.Duration.Milliseconds(),
-				}
-				if res.Error != nil {
-					rec.Error = res.Error.Error()
-				} else {
-					rec.ResultBytes = len(res.Text)
-				}
-				tel.recordTool(rec)
-
-				// Notify frontend of result
-				payload, _ := json.Marshal(map[string]any{
-					"id": call.ID, "tool": call.Name, "query": call.Query,
-					"source": res.Source, "error": errStr(res.Error),
-					"result_bytes": len(res.Text),
-				})
-				sw.event("tool_result", string(payload))
-			}(pt.res, pt.call)
+			toolResults = append(toolResults, <-pt.res)
 		}
-		wg.Wait()
+		evidence := buildToolEvidenceMessage(toolResults, "inline")
+		for i, res := range toolResults {
+			toolResults[i].EvidenceTruncated = evidence.TruncatedCallIDs[res.Call.ID]
+			rec := toolInvocationRecordFromResult(toolResults[i])
+			tel.recordTool(rec)
+
+			payload, _ := json.Marshal(map[string]any{
+				"id": res.Call.ID, "tool": res.Call.Name, "query": res.Call.Query,
+				"arguments": res.Call.Arguments, "source": res.Source, "error": errStr(res.Error),
+				"result_bytes": len(res.Text), "content_hash": res.ContentHash,
+				"evidence_truncated": toolResults[i].EvidenceTruncated, "phase": res.Phase,
+			})
+			sw.event("tool_result", string(payload))
+		}
 
 		if round >= e.cfg.MaxContinuations {
 			log.Printf("ENGINE[%s] max continuations reached, stopping", req.RequestID)
@@ -402,7 +388,7 @@ func (e *StreamingEngine) Run(
 			}
 		}
 
-		contMsg := buildContinuationMessage(toolResults)
+		contMsg := evidence.Content
 		msgs = append(msgs, chatMsg{Role: "assistant", Content: roundAnswer.String()})
 		msgs = append(msgs, chatMsg{Role: "user", Content: contMsg})
 
@@ -424,12 +410,12 @@ func (e *StreamingEngine) Run(
 // execTool runs the named tool and sends the result on resCh.
 // It applies the configured ToolTimeout via a derived context.
 // The context is passed to executeToolRequest to support cancellation.
-func (e *StreamingEngine) execTool(ctx context.Context, call XMLToolCall, s appSettings, resCh chan<- ToolResult) {
+func (e *StreamingEngine) execTool(ctx context.Context, call XMLToolCall, s appSettings, phase string, resCh chan<- ToolResult) {
 	startedAt := time.Now()
 	tctx, cancel := context.WithTimeout(ctx, e.cfg.ToolTimeout)
 	defer cancel()
 
-	tr := toolRequest{Tool: call.Name, Query: call.Query}
+	tr := toolRequest{Tool: call.Name, Query: call.Query, Arguments: call.Arguments}
 	rag := e.rag
 	text, source, err := executeToolRequestCtx(tctx, tr, s, rag, e.customAPIs, e.modules, e.connectors, e.connExec)
 	duration := time.Since(startedAt)
@@ -440,16 +426,74 @@ func (e *StreamingEngine) execTool(ctx context.Context, call XMLToolCall, s appS
 		log.Printf("ENGINE tool done: id=%s name=%s bytes=%d duration=%s", call.ID, call.Name, len(text), duration)
 	}
 
+	contentHash := ""
+	if err == nil {
+		contentHash = toolContentHash(text)
+	}
 	resCh <- ToolResult{
-		Call: call, Text: text, Source: source,
-		Error: err, StartedAt: startedAt, Duration: duration,
+		Call: call, Text: text, Source: source, Phase: phase,
+		ContentHash: contentHash, Error: err, StartedAt: startedAt, Duration: duration,
 	}
 }
 
 // toolAllowed checks whether a tool may be executed in the current context.
 func (e *StreamingEngine) toolAllowed(s appSettings, toolName string, autoSearch bool) bool {
-	tr := toolRequest{Tool: toolName}
-	return shouldAutoExecuteTool(s, tr, autoSearch)
+	return e.evaluateToolPolicy(s, XMLToolCall{Name: toolName, Query: "_"}, autoSearch).Allowed
+}
+
+func toolInvocationRecordFromResult(res ToolResult) ToolInvocationRecord {
+	rec := ToolInvocationRecord{
+		ID:                res.Call.ID,
+		Tool:              res.Call.Name,
+		Query:             res.Call.Query,
+		Phase:             res.Phase,
+		StartTime:         res.StartedAt,
+		EndTime:           res.StartedAt.Add(res.Duration),
+		DurationMS:        res.Duration.Milliseconds(),
+		ContentHash:       res.ContentHash,
+		EvidenceTruncated: res.EvidenceTruncated,
+		PolicyDecision:    "allow",
+	}
+	if res.Error != nil {
+		rec.Error = res.Error.Error()
+	} else {
+		rec.ResultBytes = len(res.Text)
+	}
+	return rec
+}
+
+// recordToolSkip records policy and budget decisions in one place so the UI,
+// logs and request telemetry all observe the same agent trace.
+func (e *StreamingEngine) recordToolSkip(sw *sseWriter, tel *RequestTelemetry, call XMLToolCall, phase string, decision toolPolicyDecision) {
+	now := time.Now()
+	rec := ToolInvocationRecord{
+		ID:             call.ID,
+		Tool:           call.Name,
+		Query:          call.Query,
+		Phase:          phase,
+		StartTime:      now,
+		EndTime:        now,
+		PolicyDecision: decision.Mode + ":" + decision.Reason,
+		Deduplicated:   decision.Reason == "duplicate_call",
+	}
+	tel.recordTool(rec)
+	if e.rag != nil {
+		e.rag.logR3Audit(AuditEvent{
+			EventType:   "tool_policy",
+			Actor:       "engine",
+			EntityType:  "tool_call",
+			EntityID:    call.ID,
+			Decision:    decision.Mode,
+			PolicyClass: string(decision.Risk),
+			Details:     phase + ":" + decision.Reason,
+		})
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"id": call.ID, "tool": call.Name, "query": call.Query,
+		"arguments": call.Arguments, "phase": phase,
+		"reason": decision.Reason, "policy": decision.Mode,
+	})
+	sw.event("tool_skipped", string(payload))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -459,27 +503,7 @@ func (e *StreamingEngine) toolAllowed(s appSettings, toolName string, autoSearch
 // buildContinuationMessage builds the user message that injects tool results
 // back into the conversation for the next LLM round.
 func buildContinuationMessage(results []ToolResult) string {
-	var sb strings.Builder
-	sb.WriteString("Die folgenden Tools wurden ausgeführt. Verarbeite die Ergebnisse und erstelle eine präzise, vollständige Antwort.\n\n")
-
-	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("### Tool: %s\nQuery: %s\n", r.Call.Name, r.Call.Query))
-		if r.Error != nil {
-			sb.WriteString(fmt.Sprintf("Fehler: %s\n", r.Error.Error()))
-			sb.WriteString("Hinweis: Erkläre dem Nutzer ehrlich, dass dieses Tool fehlgeschlagen ist. Erfinde keine Daten.\n")
-		} else {
-			sb.WriteString(fmt.Sprintf("Ergebnis (%d Zeichen):\n%s\n", len(r.Text), r.Text))
-		}
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("\nRegeln für die Antwort:\n")
-	sb.WriteString("- Verwende alle verfügbaren Tool-Ergebnisse.\n")
-	sb.WriteString("- Trenne lokales Wissen und Tool-Ergebnisse klar.\n")
-	sb.WriteString("- Wenn ein Tool fehlschlug, sage das offen.\n")
-	sb.WriteString("- Keine neuen <tool>-Blöcke emittieren, außer wenn unbedingt nötig.\n")
-	sb.WriteString("- Kompakte, faktische Antwort ohne Marketing-Sprache.\n")
-	return sb.String()
+	return buildToolEvidenceMessage(results, "inline").Content
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -497,6 +521,6 @@ func errStr(err error) string {
 // Using a hash avoids false positives when a query legitimately contains the separator.
 func toolDedupKey(name, query string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s", name, query)
+	fmt.Fprintf(h, "%s\x00%s", strings.ToLower(strings.TrimSpace(name)), strings.Join(strings.Fields(query), " "))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

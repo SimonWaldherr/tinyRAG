@@ -28,6 +28,20 @@ func newTestRAGForIngest(t *testing.T) *ragSystem {
 	return r
 }
 
+type failAfterEmbeddingLM struct {
+	r3MockLM
+	calls      int
+	failOnCall int
+}
+
+func (m *failAfterEmbeddingLM) embed(texts []string) ([][]float64, error) {
+	m.calls++
+	if m.calls >= m.failOnCall {
+		return nil, fmt.Errorf("embedding service unavailable")
+	}
+	return m.r3MockLM.embed(texts)
+}
+
 func TestUpsertDocumentSkipsUnchangedAndReplacesChanged(t *testing.T) {
 	r := newTestRAGForIngest(t)
 	meta := R3IngestMetadata{
@@ -76,6 +90,46 @@ func TestUpsertDocumentSkipsUnchangedAndReplacesChanged(t *testing.T) {
 	got, _ := tinysql.GetVal(rs.Rows[0], "content")
 	if !strings.Contains(fmt.Sprint(got), "new policy text") {
 		t.Fatalf("expected updated content, got %v", got)
+	}
+}
+
+func TestFailedUpsertKeepsPreviousDocumentAvailable(t *testing.T) {
+	r := newTestRAGForIngest(t)
+	meta := R3IngestMetadata{
+		DocumentID: "doc-safe-refresh",
+		SourceType: "official_doc",
+		UpdateMode: "upsert",
+	}
+	if _, err := r.addChunksWithMetadataResult("Runbook", []string{"stable previous content"}, "embed", []string{"it"}, meta); err != nil {
+		t.Fatalf("initial ingest failed: %v", err)
+	}
+
+	// The replacement has two embedding batches. The second fails, so no write
+	// may occur and the first version must remain retrievable.
+	r.setLM(&failAfterEmbeddingLM{failOnCall: 2})
+	replacement := make([]string, 17)
+	for i := range replacement {
+		replacement[i] = fmt.Sprintf("replacement chunk %d", i)
+	}
+	if _, err := r.addChunksWithMetadataResult("Runbook", replacement, "embed", []string{"it"}, meta); err == nil {
+		t.Fatal("expected replacement embedding failure")
+	}
+
+	stmt, err := tinysql.ParseSQL("SELECT content FROM chunks WHERE document_id = 'doc-safe-refresh'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := tinysql.Execute(context.Background(), r.db, "default", stmt)
+	if err != nil || rs == nil || len(rs.Rows) != 1 {
+		rows := 0
+		if rs != nil {
+			rows = len(rs.Rows)
+		}
+		t.Fatalf("previous source was not preserved (rows=%d, err=%v)", rows, err)
+	}
+	content, _ := tinysql.GetVal(rs.Rows[0], "content")
+	if fmt.Sprint(content) != "stable previous content" {
+		t.Fatalf("previous content = %q, want stable version", content)
 	}
 }
 

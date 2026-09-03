@@ -88,6 +88,8 @@
           <option value="koboldcpp">KoboldCpp</option>
           <option value="jan">Jan</option>
           <option value="localai">LocalAI</option>
+          <option value="gopherllm">GopherLLM</option>
+          <option value="rustyllm">RustyLLM</option>
         </optgroup>
         <optgroup label="Cloud">
           <option value="openai">ChatGPT (OpenAI)</option>
@@ -424,6 +426,7 @@
       <button class="settings-tab" data-settings-tab="apis" role="tab" aria-selected="false" aria-controls="settings-apis" id="stab-apis" title="Manage custom external API search sources"><span data-i18n="custom_apis">Custom APIs</span></button>
       <button class="settings-tab" data-settings-tab="modules" role="tab" aria-selected="false" aria-controls="settings-modules" id="stab-modules" title="Manage connector modules for external data sources"><span data-i18n="modules">Module</span></button>
       <button class="settings-tab" data-settings-tab="personas" role="tab" aria-selected="false" aria-controls="settings-personas" id="stab-personas" title="Manage conversation personas (pre-prompts)"><span data-i18n="personas">Personas</span></button>
+      <button class="settings-tab" data-settings-tab="memory" role="tab" aria-selected="false" aria-controls="settings-memory" id="stab-memory" title="Manage explicit persistent assistant memory"><span>Memory</span></button>
       <button class="settings-tab" data-settings-tab="admin" role="tab" aria-selected="false" aria-controls="settings-admin" id="stab-admin" title="Manage API users and route access control"><span>Admin</span></button>
       <button class="settings-tab" data-settings-tab="branding" role="tab" aria-selected="false" aria-controls="settings-branding" id="stab-branding" title="Customize application name, logo and CSS (white-label)"><span>Branding</span></button>
       <button class="settings-tab" data-settings-tab="auth" role="tab" aria-selected="false" aria-controls="settings-auth" id="stab-auth" title="Configure web UI authentication, users and LDAP"><span>Auth &amp; Security</span></button>
@@ -560,7 +563,13 @@
         <div>
           <label for="setBaseUrl" data-i18n="api_endpoint">API Endpoint (OpenAI-kompatibel)</label>
           <input id="setBaseUrl" type="text" placeholder="http://localhost:1234" aria-label="API Endpoint" title="Base URL of the OpenAI-compatible API endpoint (without /v1)">
-          <p class="hint">Standard: derselbe Endpoint wird für Chat und Embeddings verwendet. Für fortgeschrittene Setups kannst du getrennte Endpoints verwenden.</p>
+          <label for="setInferenceAPI">Inference-Schnittstelle</label>
+          <select id="setInferenceAPI" aria-label="Inference protocol" title="Wire protocol used by the inference server">
+            <option value="auto">Auto (OpenAI-kompatibel / Ollama)</option>
+            <option value="openai">OpenAI-kompatibel (v1)</option>
+            <option value="ollama">Ollama nativ (/api)</option>
+          </select>
+          <p class="hint">Auto erkennt lokale Server und fällt bei nicht unterstützten Routen auf das jeweils andere Profil zurück. GopherLLM, RustyLLM und die meisten lokalen Runner nutzen OpenAI-kompatibel.</p>
 
           <label class="inline-check" title="Use different base URLs for chat completions and embedding requests">
             <input type="checkbox" id="useSeparateEndpoints">
@@ -644,6 +653,24 @@
       <div class="actions-row">
         <button class="btn-primary" id="btnAddPersona" aria-label="Add persona" title="Add this persona to the list"><span data-i18n="add">Hinzufügen</span></button>
         <button class="btn-secondary" id="btnAddSamplePersonas" aria-label="Add sample personas" title="Load a set of example personas to get started">Beispiel-Personas hinzufügen</button>
+      </div>
+    </div>
+
+    <!-- Tab: persistent agent memory (explicit, never inferred) -->
+    <div id="settings-memory" class="settings-panel settings-section" role="tabpanel" aria-labelledby="stab-memory">
+      <h3>Persistente Memory</h3>
+      <p class="hint">Wie bei OpenClaw speichert tinyRAG nur Einträge, die du hier bewusst hinzufügst. Chatverläufe und Modellantworten werden nicht automatisch übernommen.</p>
+      <label class="inline-check" for="agentMemoryEnabled">
+        <input type="checkbox" id="agentMemoryEnabled" aria-describedby="agentMemoryHint">
+        <span>Memory in künftige Antworten einbeziehen</span>
+      </label>
+      <p id="agentMemoryHint" class="hint">Nutze dies für stabile Präferenzen, Projekte oder Arbeitskontext. Einträge sind Hintergrund, keine Systemanweisungen.</p>
+      <div id="agentMemoryList" class="api-list" role="list" aria-label="Persistent memory"><p class="muted">Lade…</p></div>
+      <h4>Eintrag merken</h4>
+      <textarea id="newAgentMemory" rows="3" maxlength="800" placeholder="z.B. Das Team bevorzugt Antworten auf Deutsch und nutzt UTC für Zeitangaben." aria-label="New persistent memory entry"></textarea>
+      <div class="actions-row">
+        <button class="btn-primary" id="btnAddAgentMemory" aria-label="Add persistent memory">Merken</button>
+        <span class="tool-status" id="agentMemoryStatus" role="status" aria-live="polite"></span>
       </div>
     </div>
 

@@ -76,6 +76,17 @@ func TestRunSafeInvalidSourceReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunSafeBoundsSourceAndTimeout(t *testing.T) {
+	if _, err := RunSafe(strings.Repeat("x", maxNanoGoSourceRunes+1), time.Second); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected source-size rejection, got %v", err)
+	}
+	// The configured maximum is applied inside RunSafe rather than trusting
+	// an unbounded timeout supplied by a caller.
+	if maxNanoGoTimeout != 15*time.Second {
+		t.Fatalf("unexpected nanoGo timeout ceiling: %s", maxNanoGoTimeout)
+	}
+}
+
 func TestRunSafeTimesOutOnLongLoop(t *testing.T) {
 	// nanoGo has no cancellation hook (see runInterpreted's doc comment): the
 	// interpreter goroutine keeps running in the background after RunSafe

@@ -64,6 +64,30 @@ func TestR3RankingCorrectness(t *testing.T) {
 	}
 }
 
+func TestDiversifyRetrievalHitsPrefersDistinctSources(t *testing.T) {
+	hits := []retrievalHit{
+		{DocumentID: "a", Article: "A", ChunkIdx: 0},
+		{DocumentID: "a", Article: "A", ChunkIdx: 1},
+		{DocumentID: "a", Article: "A", ChunkIdx: 2},
+		{DocumentID: "b", Article: "B", ChunkIdx: 0},
+	}
+	got := diversifyRetrievalHits(hits, 2)
+	if len(got) != len(hits) {
+		t.Fatalf("got %d hits, want %d", len(got), len(hits))
+	}
+	if got[0].DocumentID != "a" || got[1].DocumentID != "a" || got[2].DocumentID != "b" || got[3].ChunkIdx != 2 {
+		t.Fatalf("unexpected source-diverse order: %#v", got)
+	}
+}
+
+func TestDiversifyRetrievalHitsKeepsSingleSourceRecall(t *testing.T) {
+	hits := []retrievalHit{{DocumentID: "a", ChunkIdx: 0}, {DocumentID: "a", ChunkIdx: 1}, {DocumentID: "a", ChunkIdx: 2}}
+	got := diversifyRetrievalHits(hits, 1)
+	if len(got) != len(hits) {
+		t.Fatalf("single-source hits were dropped: %#v", got)
+	}
+}
+
 func TestR3ACLEnforcement(t *testing.T) {
 	p := ACLPolicy{}
 	if !p.CanRoleAccess("it", "|it|", "|it|") {

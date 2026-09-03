@@ -1,0 +1,44 @@
+{{define "tab-sources"}}
+    <section id="tab-sources" class="panel" role="tabpanel" aria-labelledby="navtab-sources">
+      <header class="page-head">
+        <h1 data-i18n="page.sources.title">Quellen</h1>
+        <p class="hint" data-i18n="page.sources.hint">Alle importierten Quellen mit Umfang und Aktualität.</p>
+        <button id="refreshSources" class="ghost-btn">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M16 10a6 6 0 11-1.76-4.24M16 3v3.5h-3.5"/>
+          </svg>
+          <span data-i18n="sources.reload">Aktualisieren</span>
+        </button>
+      </header>
+      <div id="importBatches" class="import-batches"></div>
+
+      <form id="sourceFilterForm" class="chunk-filters" onsubmit="return false;">
+        <label class="sr-only" for="sourceFilterQuery" data-i18n="sources.filter.queryLabel">Suchbegriff</label>
+        <input type="text" id="sourceFilterQuery" placeholder="Suchbegriff (Name oder Pfad)…" data-i18n-placeholder="sources.filter.queryPlaceholder">
+        <label class="sr-only" for="sourceFilterKind" data-i18n="sources.filter.kindLabel">Typ</label>
+        <select id="sourceFilterKind">
+          <option value="" data-i18n="sources.filter.allKinds">Alle Typen</option>
+        </select>
+        <label class="sr-only" for="sourceFilterExt" data-i18n="sources.filter.extLabel">Dateityp</label>
+        <select id="sourceFilterExt">
+          <option value="" data-i18n="sources.filter.allExtensions">Alle Dateitypen</option>
+        </select>
+        <span id="sourceFilterCount" class="hint" role="status"></span>
+        <button type="button" id="sourceFilterDeleteBtn" class="small-btn" hidden title="Löscht genau die Quellen, die die obigen Filter aktuell sichtbar lassen — z. B. nur PDFs, oder nur Treffer für einen Suchbegriff, statt eines ganzen Quelltyps." data-i18n-title="sources.filter.deleteFilteredButton.title">Gefilterte Quellen löschen</button>
+      </form>
+
+      <div class="table-wrap">
+        <table id="sourcesTable">
+          <thead><tr>
+            <th scope="col" data-i18n="sources.table.source">Quelle</th>
+            <th scope="col" data-i18n="sources.table.kind">Typ</th>
+            <th scope="col" data-i18n="sources.table.loaded">Geladen</th>
+            <th scope="col" data-i18n="sources.table.docDate">Dok.-Datum</th>
+            <th scope="col" data-i18n="sources.table.chunks">Chunks</th>
+            <th scope="col"><span class="sr-only" data-i18n="sources.table.actions">Aktionen</span></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+{{end}}

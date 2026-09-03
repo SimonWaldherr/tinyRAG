@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
@@ -617,6 +618,18 @@ func isSafeFetchURL(rawURL string) error {
 		}
 	}
 	return nil
+}
+
+// newExternalHTTPClient applies the public-target check to every redirect.
+// Local model clients intentionally use newHTTPClient directly, while web and
+// connector traffic must not turn a safe public URL into a private target via
+// a redirect.
+func newExternalHTTPClient(timeout time.Duration) *http.Client {
+	client := newHTTPClient(timeout)
+	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+		return isSafeFetchURL(req.URL.String())
+	}
+	return client
 }
 
 func sortHitsDeterministic[T any](hits []T, less func(a, b T) bool) {

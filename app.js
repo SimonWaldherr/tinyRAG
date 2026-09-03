@@ -253,6 +253,8 @@ function resolveProviderName(url){
   }
   const hostname = parsed.hostname.toLowerCase();
   const port = parsed.port;
+  if(hostname.includes('gopherllm')) return 'GopherLLM';
+  if(hostname.includes('rustyllm')) return 'RustyLLM';
   if(hostname === 'api.openai.com' || hostname.endsWith('.openai.com')) return 'OpenAI';
   if(hostname === 'api.anthropic.com' || hostname.endsWith('.anthropic.com')) return 'Anthropic';
   if(hostname.endsWith('.googleapis.com') || hostname === 'generativelanguage.googleapis.com') return 'Google Gemini';
@@ -271,6 +273,7 @@ function resolveProviderName(url){
     if(port === '5000') return 'text-generation-webui';
     if(port === '5001') return 'KoboldCpp';
     if(port === '1337') return 'Jan';
+    if(port === '8091') return 'GopherLLM';
     return 'Local LLM';
   }
   return 'Remote LLM';
@@ -428,11 +431,16 @@ function replaceXMLToolBlocksWithCards(raw){
     const queryMatch = inner.match(/<query>([\s\S]*?)<\/query>/i);
     const urlMatch = inner.match(/<url>([\s\S]*?)<\/url>/i);
     const sourceMatch = inner.match(/<source>([\s\S]*?)<\/source>/i);
+    const argumentsMatch = inner.match(/<arguments>([\s\S]*?)<\/arguments>/i);
     if(queryMatch) content = queryMatch[1].trim();
     else if(urlMatch) content = urlMatch[1].trim();
     else if(sourceMatch){
       const src = sourceMatch[1].trim();
       content = src.length > MAX_TOOL_SOURCE_PREVIEW ? src.slice(0, MAX_TOOL_SOURCE_PREVIEW)+'…' : src;
+    }
+    else if(argumentsMatch){
+      const args = argumentsMatch[1].trim();
+      content = args.length > MAX_TOOL_SOURCE_PREVIEW ? args.slice(0, MAX_TOOL_SOURCE_PREVIEW)+'…' : args;
     }
     const icon = toolIconFor(toolName);
     return `\n\n<div class="xml-tool-card" data-tool="${escHtml(toolName)}" data-status="running">` +
@@ -1492,6 +1500,40 @@ function addMessage(role, content, timeIso, model, modelMeta, thinking){
   wrap.scrollTop = wrap.scrollHeight;
 }
 
+function addFeedbackControls(message, requestID, citations){
+  if(!message || !requestID || !Array.isArray(citations) || citations.length === 0) return;
+  const refs = [];
+  const seen = new Set();
+  citations.forEach(c => {
+    const documentID = String(c?.document_id || '').trim();
+    if(!documentID || seen.has(documentID)) return;
+    seen.add(documentID);
+    refs.push({document_id: documentID, chunk_id: String(c?.chunk_id || '').trim()});
+  });
+  if(refs.length === 0) return;
+  const actions = message.querySelector('.msg-actions');
+  if(!actions || actions.querySelector('.feedback-btn')) return;
+  const submit = async (rating, btn) => {
+    try{
+      await apiPost('/api/feedback', {request_id: requestID, rating, citations: refs});
+      actions.querySelectorAll('.feedback-btn').forEach(b => { b.disabled = true; b.classList.toggle('selected', b === btn); });
+      btn.title = rating === 'up' ? 'Als hilfreich bewertet' : 'Als nicht hilfreich bewertet';
+    }catch(e){
+      btn.title = 'Bewertung konnte nicht gespeichert werden';
+    }
+  };
+  [['up', '👍', 'Hilfreich bewerten'], ['down', '👎', 'Nicht hilfreich bewerten']].forEach(([rating, icon, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'icon-btn feedback-btn';
+    btn.type = 'button';
+    btn.textContent = icon;
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.addEventListener('click', () => submit(rating, btn));
+    actions.appendChild(btn);
+  });
+}
+
 function replaceAssistantLast(text){
   const msgs = $$('#chatMessages .msg.assistant .bubble');
   if(msgs.length === 0) return;
@@ -1534,22 +1576,26 @@ function replaceAssistantLastHTML(htmlContent){
 
 /**
  * Update the status badge of an XML tool card by tool ID.
- * Status values: 'running' | 'done' | 'error'
+ * Status values: 'running' | 'done' | 'error' | 'skipped'
  */
-function updateXMLToolCard(id, toolName, query, status){
-  const icon = status === 'done' ? '✓' : status === 'error' ? '✗' : '⟳';
+function updateXMLToolCard(id, toolName, query, status, reason){
+  const icon = status === 'done' ? '✓' : status === 'error' ? '✗' : status === 'skipped' ? '⊘' : '⟳';
   // Look for card by data-tool attribute in all bubbles
   const bubbles = $$('#chatMessages .msg.assistant .bubble');
   if(!bubbles.length) return;
   const bubble = bubbles[bubbles.length-1];
   const cards = bubble.querySelectorAll('.xml-tool-card');
-  cards.forEach(card => {
+  const exact = id ? Array.from(cards).filter(card => card.dataset.id === id) : [];
+  const candidates = exact.length ? exact : Array.from(cards).filter(card => card.dataset.tool === toolName && !card.dataset.id);
+  candidates.forEach(card => {
     if(card.dataset.tool === toolName){
       const badge = card.querySelector('.tool-status-badge');
       if(badge) badge.textContent = icon;
       card.dataset.status = status;
       card.classList.toggle('tool-done', status === 'done');
       card.classList.toggle('tool-error', status === 'error');
+      card.classList.toggle('tool-skipped', status === 'skipped');
+      if(reason) card.title = reason;
     }
   });
 }
@@ -1564,8 +1610,12 @@ function ensureToolCard(id, toolName, query){
   const bubble = bubbles[bubbles.length-1];
   // Check if a card already exists for this tool name
   const existing = Array.from(bubble.querySelectorAll('.xml-tool-card'))
-    .find(c => c.dataset.tool === toolName);
-  if(existing) return;
+    .find(c => c.dataset.id === id) || Array.from(bubble.querySelectorAll('.xml-tool-card'))
+    .find(c => c.dataset.tool === toolName && !c.dataset.id);
+  if(existing){
+    if(id) existing.dataset.id = id;
+    return;
+  }
   // Insert a new card
   const icon = toolIconFor(toolName);
   const card = document.createElement('div');
@@ -1724,7 +1774,7 @@ async function refreshSources(src){
       if(ev.target && ev.target.classList.contains('danger')){
         ev.stopPropagation();
         if(!confirm('Diese Quelle komplett löschen?\n\n'+s.article)) return;
-        await apiPost('/api/sources/delete', {article: s.article});
+        await apiPost('/api/sources/delete', {document_id: s.document_id || '', article: s.article});
         await refreshStats();
       }
     });
@@ -1763,6 +1813,7 @@ async function initSettingsUI(){
     roleSel.value = currentRole;
   }
   $('#setBaseUrl').value = s.base_url || 'http://localhost:1234';
+  if($('#setInferenceAPI')) $('#setInferenceAPI').value = s.inference_api || 'auto';
   // Support separate chat/embed bases
   $('#setChatBase').value = s.chat_base || s.base_url || 'http://localhost:1234';
   $('#setEmbedBase').value = s.embed_base || s.base_url || 'http://localhost:1234';
@@ -1812,6 +1863,7 @@ async function initSettingsUI(){
     btnUse.addEventListener('click', ()=>{
       // Set base URL to OpenAI host
       $('#setBaseUrl').value = 'https://api.openai.com';
+      if($('#setInferenceAPI')) $('#setInferenceAPI').value = 'openai';
       // Disable advanced endpoints (simple mode)
       if($('#useSeparateEndpoints')){ $('#useSeparateEndpoints').checked = false; const adv = $('#advancedEndpoints'); if(adv) adv.style.display='none'; }
       if(keyInp && keyInp.value.trim() === '' && s.openai_key_present){
@@ -1829,6 +1881,7 @@ async function initSettingsUI(){
       try{
         await apiPost('/api/settings', {
           base_url: $('#setBaseUrl').value.trim(),
+          inference_api: $('#setInferenceAPI') ? $('#setInferenceAPI').value : 'auto',
           chat_base: ($('#useSeparateEndpoints') && $('#useSeparateEndpoints').checked) ? $('#setChatBase').value.trim() : '',
           embed_base: ($('#useSeparateEndpoints') && $('#useSeparateEndpoints').checked) ? $('#setEmbedBase').value.trim() : '',
           chat_model: $('#setChatModel').value,
@@ -1854,6 +1907,7 @@ async function initSettingsUI(){
   await loadCustomApis();
   await loadModules();
   await loadPersonas();
+  await loadAgentMemory();
   await loadAdmin();
   await loadBranding(s);
   await loadAuthSettings();
@@ -1961,6 +2015,7 @@ function buildQuickChatModelOptions(resp, currentChatModel){
 async function applyQuickLocalModel(baseUrl, chatModel, currentSettings){
   const payload = {
     base_url: currentSettings.base_url || baseUrl,
+    inference_api: currentSettings.inference_api || 'auto',
     chat_base: currentSettings.chat_base || baseUrl,
     embed_base: currentSettings.embed_base || currentSettings.base_url || baseUrl,
     chat_model: chatModel,
@@ -1985,7 +2040,7 @@ async function refreshQuickModelSwitcher(s){
   }
 
   try{
-    const resp = await apiPost('/api/llm/list-models', {base_url: baseUrl});
+    const resp = await apiPost('/api/llm/list-models', {base_url: baseUrl, inference_api: s?.inference_api || 'auto'});
     const opts = buildQuickChatModelOptions(resp, currentChatModel);
     if(!opts.length){
       modelSel.style.display = 'none';
@@ -2051,6 +2106,7 @@ async function initLLMSwitcher(s){
     'DeepSeek': 'deepseek', 'OpenRouter': 'openrouter',
     'Google Gemini': 'gemini', 'Together AI': 'togetherai', 'xAI': 'xai',
     'Cohere': 'cohere', 'Perplexity': 'perplexity',
+    'GopherLLM': 'gopherllm', 'RustyLLM': 'rustyllm',
     'vLLM': 'vllm', 'text-generation-webui': 'textgenwebui',
     'KoboldCpp': 'koboldcpp', 'Jan': 'jan',
     // "llmster" is ambiguous (llama.cpp/LocalAI/llmster all default to
@@ -2083,6 +2139,10 @@ async function initLLMSwitcher(s){
       koboldcpp: 'http://localhost:5001',
       jan: 'http://localhost:1337',
       localai: 'http://localhost:8080',
+      // The embedded demo server uses :8091 by default; external
+      // deployments can be changed in Settings after selecting the preset.
+      gopherllm: 'http://localhost:8091',
+      rustyllm: 'http://localhost:8091',
       // Cloud
       openai: 'https://api.openai.com',
       groq: 'https://api.groq.com/openai',
@@ -2103,7 +2163,8 @@ async function initLLMSwitcher(s){
     const applyBtn = $('#llmApplyBtn');
     setLoading(sel, true);
     try{
-      const resp = await apiPost('/api/llm/list-models', {base_url: baseUrl});
+      const protocol = (v === 'gopherllm' || v === 'rustyllm') ? 'openai' : (v === 'ollama' ? 'auto' : 'openai');
+      const resp = await apiPost('/api/llm/list-models', {base_url: baseUrl, inference_api: protocol});
       // Build option list: prefer recommend_chat first, then unique models
       const opts = [];
       const seen = {};
@@ -2134,7 +2195,7 @@ async function initLLMSwitcher(s){
         try{
           const selected = modelSel.value || ((resp.recommend_chat && resp.recommend_chat.length)?resp.recommend_chat[0]:opts[0].value);
           const embedModel = (resp.recommend_embed && resp.recommend_embed.length) ? resp.recommend_embed[0] : selected;
-          await apiPost('/api/settings', {chat_base: baseUrl, embed_base: baseUrl, chat_model: selected, embed_model: embedModel});
+          await apiPost('/api/settings', {base_url: baseUrl, inference_api: protocol, chat_base: baseUrl, embed_base: baseUrl, chat_model: selected, embed_model: embedModel});
           const s2 = await apiGet('/api/settings');
           updateOpenAIBadge(s2);
           await refreshQuickModelSwitcher(s2);
@@ -2303,8 +2364,13 @@ async function testEndpointAndLoadModels(){
 
   try{
     const maybeKey = $('#setOpenAIKey') ? $('#setOpenAIKey').value.trim() : '';
-    const r = await apiPost('/api/llm/list-models', {base_url: base, openai_api_key: maybeKey});
-    setStatus($('#endpointStatus'), `OK (${r.provider_hint}). ${r.models.length} Modelle gefunden.`, 'ok');
+    const r = await apiPost('/api/llm/list-models', {
+      base_url: base,
+      inference_api: $('#setInferenceAPI') ? $('#setInferenceAPI').value : 'auto',
+      openai_api_key: maybeKey
+    });
+    const apiLabel = r.api_style ? ` · ${r.api_style}` : '';
+    setStatus($('#endpointStatus'), `OK (${r.provider_hint}${apiLabel}). ${r.models.length} Modelle gefunden.`, 'ok');
 
     // Fill selects
     const chatSel = $('#setChatModel');
@@ -2384,6 +2450,7 @@ async function saveSettings(force=false){
     // Only send chat_base/embed_base when advanced mode is used; otherwise server will use base_url
     const payload = {
       base_url: base,
+      inference_api: $('#setInferenceAPI') ? $('#setInferenceAPI').value : 'auto',
       chat_model: chat,
       embed_model: emb,
       openai_api_key: openaiKey,
@@ -2826,6 +2893,67 @@ async function addPersona(){
   }
 }
 
+async function loadAgentMemory(){
+  const box = $('#agentMemoryList');
+  const enabled = $('#agentMemoryEnabled');
+  if(!box || !enabled) return;
+  try{
+    const data = await apiGet('/api/memory');
+    enabled.checked = !!data.enabled;
+    enabled.onchange = async ()=>{
+      try{
+        await apiPost('/api/memory', {enabled: !!enabled.checked});
+        setStatus($('#agentMemoryStatus'), enabled.checked ? 'Memory aktiviert' : 'Memory deaktiviert', 'ok');
+      }catch(e){
+        enabled.checked = !enabled.checked;
+        setStatus($('#agentMemoryStatus'), 'Fehler: '+(e.message||String(e)), 'err');
+      }
+    };
+    const entries = data.items || [];
+    if(!entries.length){
+      box.innerHTML = '<p class="muted">Noch keine gespeicherten Einträge.</p>';
+      return;
+    }
+    box.innerHTML = '';
+    entries.forEach(entry => {
+      const div = document.createElement('div');
+      div.className = 'api-item';
+      div.innerHTML = `<div class="desc">${escHtml(entry.content || '')}</div><div class="actions"><button class="tool-btn danger">Löschen</button></div>`;
+      div.querySelector('button').onclick = async ()=>{
+        if(!confirm('Diesen Memory-Eintrag löschen?')) return;
+        try{
+          await apiPost('/api/memory/delete', {id: entry.id});
+          await loadAgentMemory();
+        }catch(e){ setStatus($('#agentMemoryStatus'), 'Fehler: '+(e.message||String(e)), 'err'); }
+      };
+      box.appendChild(div);
+    });
+  }catch(e){
+    box.innerHTML = '<p class="muted">Memory konnte nicht geladen werden.</p>';
+  }
+}
+
+async function addAgentMemory(){
+  const input = $('#newAgentMemory');
+  const status = $('#agentMemoryStatus');
+  const content = input ? input.value.trim() : '';
+  if(!content){
+    setStatus(status, 'Bitte einen Eintrag formulieren.', 'err');
+    return;
+  }
+  setLoading('#btnAddAgentMemory', true);
+  try{
+    await apiPost('/api/memory', {content});
+    input.value = '';
+    setStatus(status, 'Gespeichert', 'ok');
+    await loadAgentMemory();
+  }catch(e){
+    setStatus(status, 'Fehler: '+(e.message||String(e)), 'err');
+  }finally{
+    setLoading('#btnAddAgentMemory', false);
+  }
+}
+
 // Insert a curated set of sample personas to help new users.
 async function addSamplePersonas(){
   const samples = [
@@ -3087,8 +3215,8 @@ async function logoutUser(){
 }
 
 // Tool suggestion UI (adapted from original tinyRAG)
-var toolIcons={wikipedia:'\u{1F4D6}',duckduckgo:'\u{1F50E}',wiktionary:'\u{1F4DD}',stackoverflow:'\u{1F4BB}',websearch:'\u{1F50D}',news:'\u{1F4F0}',calculate:'\u{1F522}',nanogo:'\u{1F680}',vector_query:'\u{1F9E0}',sql_query:'\u{1F5C4}'};
-var toolLabels={wikipedia:'Wikipedia',duckduckgo:'DuckDuckGo',wiktionary:'Wiktionary',stackoverflow:'StackOverflow',websearch:'Websuche',news:'News',calculate:'Rechnen',nanogo:'Go-Code',vector_query:'Vektorsuche',sql_query:'SQL-Abfrage'};
+var toolIcons={wikipedia:'\u{1F4D6}',duckduckgo:'\u{1F50E}',wiktionary:'\u{1F4DD}',stackoverflow:'\u{1F4BB}',websearch:'\u{1F50D}',url_fetch:'\u{1F517}',news:'\u{1F4F0}',calculate:'\u{1F522}',datetime:'\u{1F552}',nanogo:'\u{1F680}',vector_query:'\u{1F9E0}',sql_query:'\u{1F5C4}'};
+var toolLabels={wikipedia:'Wikipedia',duckduckgo:'DuckDuckGo',wiktionary:'Wiktionary',stackoverflow:'StackOverflow',websearch:'Websuche',url_fetch:'URL abrufen',news:'News',calculate:'Rechnen',datetime:'Datum & Uhrzeit',nanogo:'Go-Code',vector_query:'Vektorsuche',sql_query:'SQL-Abfrage'};
 var cachedCustomAPIs=[];
 var cachedModules=[];
 var cachedPersonas=[];
@@ -3099,8 +3227,10 @@ const TOOL_META = {
   wiktionary: {group:'reference'},
   stackoverflow: {group:'code'},
   websearch: {group:'research'},
+  url_fetch: {group:'research'},
   news: {group:'research'},
   calculate: {group:'compute'},
+  datetime: {group:'compute'},
   nanogo: {group:'compute'},
   shell: {group:'danger'},
   tinygo: {group:'danger'}
@@ -3118,7 +3248,7 @@ function renderToolSuggestion(tr, chatEl, originalQuestion){
   const suggestedLabel = toolLabels[suggestedTool] || suggestedTool;
   const suggestedGroup = TOOL_META[suggestedTool]?.group || 'research';
 
-  const builtinTools = ['websearch','wikipedia','duckduckgo','news','stackoverflow','wiktionary','calculate','nanogo','shell','tinygo'];
+  const builtinTools = ['websearch','url_fetch','wikipedia','duckduckgo','news','stackoverflow','wiktionary','calculate','datetime','nanogo','shell','tinygo'];
   const preferredAlternatives = builtinTools.filter(t => t !== suggestedTool && TOOL_META[t]?.group === suggestedGroup && TOOL_META[t]?.group !== 'danger').slice(0, 2);
   const secondaryAlternatives = builtinTools.filter(t => t !== suggestedTool && !preferredAlternatives.includes(t) && TOOL_META[t]?.group !== 'danger');
   const advancedTools = builtinTools.filter(t => TOOL_META[t]?.group === 'danger');
@@ -3289,6 +3419,8 @@ async function askChat(){
   let acc = '';
   let reasoningAcc = '';
   let hasError = false;
+  let feedbackRequestID = '';
+  let feedbackCitations = [];
 
   try{
     const payload = {
@@ -3343,6 +3475,7 @@ async function askChat(){
         if(event === 'meta'){
           try{
             const meta = JSON.parse(dataStr);
+            if(meta.request_id) feedbackRequestID = meta.request_id;
             if(meta.chat_id) currentChatId = meta.chat_id;
             if(meta.persona_id){
               currentPersonaId = meta.persona_id;
@@ -3361,6 +3494,13 @@ async function askChat(){
             refreshChats();
             updateWorkspaceStrip();
           }catch(e){}
+          continue;
+        }
+        if(event === 'citation_cards'){
+          try{
+            const citations = JSON.parse(dataStr);
+            feedbackCitations = Array.isArray(citations) ? citations : [];
+          }catch(e){ feedbackCitations = []; }
           continue;
         }
         if(event === 'debug'){
@@ -3422,6 +3562,16 @@ async function askChat(){
           }catch(e){}
           continue;
         }
+        if(event === 'tool_skipped'){
+          try{
+            const skipped = JSON.parse(dataStr);
+            if(skipped && skipped.id && skipped.tool){
+              ensureToolCard(skipped.id, skipped.tool, skipped.query || JSON.stringify(skipped.arguments || {}));
+              updateXMLToolCard(skipped.id, skipped.tool, skipped.query, 'skipped', skipped.reason || skipped.policy || 'Nicht freigegeben');
+            }
+          }catch(e){}
+          continue;
+        }
         if(event === 'route'){
           // Debug: routing decision
           try{ console.debug('Route:', JSON.parse(dataStr)); }catch(e){}
@@ -3464,6 +3614,7 @@ async function askChat(){
                   cardContainer.innerHTML = existingCards.join('');
                   bubble.appendChild(cardContainer);
                 }
+                addFeedbackControls(bubble.closest('.msg'), feedbackRequestID, feedbackCitations);
               }
             }
           }catch(e){}
@@ -4403,6 +4554,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   $('#btnSaveSettings').addEventListener('click', ()=>saveSettings(false));
   $('#btnAddCustomApi').addEventListener('click', addCustomApi);
   $('#btnAddPersona').addEventListener('click', addPersona);
+  $('#btnAddAgentMemory').addEventListener('click', addAgentMemory);
   const btnAddAdminUser = $('#btnAddAdminUser'); if(btnAddAdminUser) btnAddAdminUser.addEventListener('click', addAdminUser);
   const btnSamples = $('#btnAddSamplePersonas'); if(btnSamples) btnSamples.addEventListener('click', addSamplePersonas);
 

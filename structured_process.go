@@ -465,7 +465,7 @@ func runStructuredProcess(ctx context.Context, rag *ragSystem, s appSettings, pe
 			k = rag.k
 		}
 		var err error
-		ctxText, retrieval, err = rag.prepareDirectContext(query, k)
+		ctxText, retrieval, err = rag.prepareDirectContextContext(ctx, query, k)
 		if err != nil {
 			resp.Attempts = 0
 			resp.DurationMS = time.Since(start).Milliseconds()

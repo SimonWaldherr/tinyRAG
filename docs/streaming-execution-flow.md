@@ -23,9 +23,9 @@ streaming-first, inline-tool architecture.  The key property is:
 │             ├─ result.Visible → SSE data: "token"                   │
 │             │                                                       │
 │             └─ result.Calls[] → for each completed XMLToolCall:     │
-│                   1. Check dedup (seen map)                         │
-│                   2. Check caps (totalTools, pendingTools)          │
-│                   3. Check toolAllowed()                            │
+│                   1. Validate registered capability + policy        │
+│                   2. Check canonical dedup (seen map)               │
+│                   3. Check caps (totalTools, pendingTools)          │
 │                   4. Emit SSE event: tool_start                     │
 │                   5. Launch execTool() goroutine ──────────────────►│
 │                                                                     │
@@ -36,7 +36,7 @@ streaming-first, inline-tool architecture.  The key property is:
 
 After the LLM stream pipe closes:
 1. Flush remaining parser buffer
-2. Collect all pending tool results (via channel receive)
+2. Collect all pending tool results in call order (via channel receive)
 3. Emit SSE `event: tool_result` for each
 4. If results exist → build continuation message → start next round
 5. If cap reached or no tools → emit `[DONE]`
@@ -88,9 +88,11 @@ resCh := make(chan ToolResult, 1)
 go execTool(ctx, call, settings, resCh)
 ```
 
-`execTool` applies a per-tool timeout and calls `executeToolRequest`.
-Results are collected after the LLM stream ends by ranging over all
-`pendingTools` channels.
+`execTool` applies a per-tool timeout and calls the context-aware tool
+executor. The request context is forwarded to the planner, engine, URL fetch,
+and connector execution. Results are collected after the LLM stream ends in
+call order, so the prompt and telemetry stay deterministic even if tools
+finish in another order.
 
 ---
 
@@ -98,10 +100,12 @@ Results are collected after the LLM stream ends by ranging over all
 
 After the first round completes with tool results:
 
-1. Build `contMsg` via `buildContinuationMessage(results)`:
-   - Lists each tool result or error
-   - Instructs the model to produce a single revised answer
-   - Instructs the model not to emit new `<tool>` blocks unless necessary
+1. Build `contMsg` from a bounded evidence packet:
+   - Includes call ID, tool, source, phase, and content hash
+   - Wraps output in an explicit untrusted-data delimiter
+   - Limits each result and the complete evidence packet
+   - Instructs the model to produce a single revised answer without following
+     instructions embedded in a tool result
 
 2. Append to messages:
    ```
@@ -126,23 +130,27 @@ After the first round completes with tool results:
 | Max tools per round | 3 | `EngineConfig.MaxToolsPerRound` |
 | Max tools per request | 5 | `EngineConfig.MaxToolsTotal` |
 | Per-tool timeout | 30 s | `EngineConfig.ToolTimeout` |
+| Tool-evidence packet | 18,000 runes | Fixed server-side budget |
+| One tool result in evidence | 6,000 runes | Fixed server-side budget |
 
 When `MaxContinuations` is reached, `tel.FallbackReason` is set to
 `"max_continuations_reached"` and the engine returns the accumulated answer.
 
 ---
 
-## Tool Result Ingestion
+## Tool Result Persistence
 
-Successful tool results are ingested into the RAG store as chunks:
+Successful tool results are evaluated by `ToolPersistencePolicy`; the default
+for external and connector results is transient. Only a policy-approved source
+is ingested as chunks:
 
 ```go
 chunks, _ := chunksForIngest(tr.Text, s)
 rag.addChunks(tr.Source, chunks, s.EmbedModel)
 ```
 
-This allows subsequent vector searches (including in the same continuation
-round) to find content from executed tools.
+This keeps long-lived retrieval separate from transient agent evidence and
+prevents the agent loop from turning every fetched response into corpus data.
 
 ---
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -80,6 +81,42 @@ func TestConnectorStoreUpsertValidation(t *testing.T) {
 	}
 	if c.Config == nil || c.Headers == nil {
 		t.Error("nil Config/Headers should be normalized to empty maps")
+	}
+	if _, err := store.upsert(Connector{
+		Name: "rpc", Type: ConnectorTypeRPC, BaseURL: "https://example.com/rpc",
+		Capabilities: []Capability{{Name: "lookup", RPCMethod: "catalog.lookup"}},
+	}); err != nil {
+		t.Fatalf("valid RPC connector should be accepted: %v", err)
+	}
+	if _, err := store.upsert(Connector{Name: "invalid RPC", Type: ConnectorTypeRPC}); err == nil {
+		t.Fatal("RPC connector without an endpoint must be rejected")
+	}
+}
+
+func TestBuildJSONRPCRequestUsesStructuredParams(t *testing.T) {
+	payload, err := buildJSONRPCRequest(Capability{
+		Name: "catalog_lookup", RPCMethod: "catalog.lookup",
+	}, map[string]any{"sku": "A-42", "include_stock": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		JSONRPC string         `json:"jsonrpc"`
+		ID      string         `json:"id"`
+		Method  string         `json:"method"`
+		Params  map[string]any `json:"params"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.JSONRPC != "2.0" || decoded.ID != "catalog_lookup" || decoded.Method != "catalog.lookup" {
+		t.Fatalf("unexpected RPC envelope: %+v", decoded)
+	}
+	if decoded.Params["sku"] != "A-42" || decoded.Params["include_stock"] != true {
+		t.Fatalf("unexpected RPC params: %#v", decoded.Params)
+	}
+	if _, err := buildJSONRPCRequest(Capability{Name: "missing-method"}, nil); err == nil {
+		t.Fatal("RPC capability without rpc_method must be rejected")
 	}
 }
 

@@ -1,0 +1,103 @@
+{{define "tab-mail"}}
+    <section id="tab-mail" class="panel" role="tabpanel" aria-labelledby="navtab-mail">
+      <header class="page-head">
+        <h1 data-i18n="page.mail.title">Mail-Entwurf</h1>
+        <p class="hint" data-i18n="page.mail.hint">Antwort auf eine eingehende E-Mail oder eine neue E-Mail aus Stichpunkten — gestützt auf die Wissensbasis. Immer nur ein Vorschlag zur Prüfung durch einen Menschen; R3 versendet nichts automatisch.</p>
+      </header>
+
+      <div id="mailGraphPanel" class="card" hidden>
+        <h2 data-i18n="mail.graphPanel.title">Mein Postfach</h2>
+        <p class="hint" data-i18n="mail.graphPanel.hint">Zeigt E-Mails direkt aus einem Postfach (Microsoft Exchange), ohne Copy-and-Paste — Auswahl füllt die Eingabe unten automatisch. Nur sichtbar, wenn ein Admin dies für dein Konto freigeschaltet hat.</p>
+        <label title="Welches Postfach durchsucht werden soll — dein eigenes, oder ein gemeinschaftliches/Team-Postfach, das ein Admin dafür freigegeben hat." data-i18n-title="mail.tooltip.mailboxSelect"><span data-i18n="mail.graphPanel.mailboxLabel">Postfach</span>
+          <select id="mailGraphMailboxSelect"></select>
+        </label>
+        <div class="mail-graph-folder-row">
+          <button type="button" id="mailGraphFoldersBtn" class="ghost-btn" data-i18n="mail.graphPanel.showFolders">Ordnerstruktur anzeigen</button>
+          <span id="mailGraphCurrentFolder" class="hint"></span>
+        </div>
+        <div id="mailGraphFolderTree" class="discover-tree" hidden></div>
+        <button type="button" id="mailGraphLoadBtn" class="ghost-btn" data-i18n="mail.graphPanel.loadMessages">Nachrichten laden</button>
+        <div id="mailGraphListResult" class="result" role="status"></div>
+        <ul id="mailGraphList" class="pst-folder-list" hidden></ul>
+        <div id="mailGraphMessageView" hidden>
+          <h3 data-i18n="mail.graphPanel.selectedMessage">Ausgewählte Nachricht</h3>
+          <div id="mailGraphMessageMeta" class="hint"></div>
+          <div id="mailGraphMessageBody" class="mail-graph-body"></div>
+          <ul id="mailGraphMessageAttachments" class="pst-folder-list" hidden></ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <label title="„Antwort“: eine erhaltene E-Mail einfügen, R3 schlägt eine Antwort vor. „Neue E-Mail“: Empfänger, Thema und Stichpunkte beschreiben, R3 formuliert die Mail — beides gestützt auf ähnliche Fälle aus der Wissensbasis." data-i18n-title="mail.tooltip.mode"><span data-i18n="mail.mode.label">Modus</span>
+          <select id="mailMode">
+            <option value="reply" data-i18n="mail.mode.reply">Antwort auf eingehende E-Mail</option>
+            <option value="compose" data-i18n="mail.mode.compose">Neue E-Mail verfassen</option>
+          </select>
+        </label>
+        <label class="sr-only" for="mailInput" data-i18n="mail.inputLabel">Eingabe</label>
+        <textarea id="mailInput" class="prompt-editor" rows="12" data-i18n-placeholder="mail.inputPlaceholder"></textarea>
+        <label title="Situativer Hinweis für diesen einen Entwurf — z. B. ein bevorstehender Kundentermin oder eine Kommunikationsvorliebe, die weder in der eingefügten Mail noch in der Wissensbasis steht. Fließt als Anweisung in die Formulierung ein, wird aber nicht als neue Sachinformation über den Fall behandelt." data-i18n-title="mail.tooltip.instructions"><span data-i18n="mail.instructions.label">Zusätzliche Hinweise (optional)</span>
+          <textarea id="mailInstructions" class="prompt-editor" rows="2" placeholder="z. B. „Kunde hat morgen einen Termin mit uns, bitte kurz darauf Bezug nehmen.“" data-i18n-placeholder="mail.instructions.placeholder"></textarea>
+        </label>
+        <div class="mail-options">
+          <label title="Wie lang soll der Entwurf werden? Steuert nur den Umfang der Formulierung — die zugrunde liegenden Fakten aus der Wissensbasis bleiben gleich." data-i18n-title="mail.tooltip.length"><span data-i18n="mail.length.label">Länge</span>
+            <select id="mailLength">
+              <option value="" data-i18n="mail.length.normal">Normal</option>
+              <option value="kurz" data-i18n="mail.length.short">Kurz</option>
+              <option value="ausfuehrlich" data-i18n="mail.length.detailed">Ausführlich</option>
+            </select>
+          </label>
+          <label title="Fließtext oder gegliederte Stichpunkte im Hauptteil. Anrede und Grußformel bleiben immer normaler Fließtext." data-i18n-title="mail.tooltip.format"><span data-i18n="mail.format.label">Format</span>
+            <select id="mailFormat">
+              <option value="" data-i18n="mail.format.prose">Fließtext</option>
+              <option value="stichpunkte" data-i18n="mail.format.bullets">Stichpunkte</option>
+            </select>
+          </label>
+        </div>
+        <button id="mailDraftBtn" data-i18n="mail.draftButton">Antwortentwurf nur anzeigen</button>
+        <div id="mailDraftResult" class="result" role="status"></div>
+      </div>
+
+      <div id="mailDraftSection" class="card" hidden>
+        <h2 data-i18n="mail.draftHeading">Entwurf</h2>
+        <p class="draft-banner" data-i18n="modal.draftBanner">⚠ Entwurf zur Prüfung durch einen Menschen — R3 versendet nichts automatisch.</p>
+        <p id="mailDraftContext" class="hint" hidden></p>
+        <label title="Optionale Empfängeradresse — landet nur im heruntergeladenen .eml bzw. im gespeicherten Postfach-Entwurf, R3 selbst versendet nie etwas. Bei einer Antwort automatisch aus der Absenderadresse der eingefügten Mail vorausgefüllt, falls erkennbar — vor dem Weiterverwenden prüfen." data-i18n-title="mail.tooltip.draftTo"><span data-i18n="mail.draftTo.label">An (optional)</span> <input id="mailDraftTo" type="email" placeholder="empfaenger@firma.de"></label>
+        <label title="Vorschlag von R3 („AW: …“ bei Antworten, generiert bei neuen Mails) — vor dem Weiterverwenden prüfen/anpassen." data-i18n-title="mail.tooltip.draftSubject"><span data-i18n="mail.draftSubject.label">Betreff</span> <input id="mailDraftSubject"></label>
+        <label class="sr-only" for="mailDraftBody" data-i18n="mail.draftBody.label">Entwurfstext</label>
+        <textarea id="mailDraftBody" class="prompt-editor" rows="14"></textarea>
+        <div id="mailDraftCitations" class="citations"></div>
+        <div id="mailDraftDebug"></div>
+        <div class="mail-attach-row">
+          <button type="button" id="mailAttachBtn" class="ghost-btn" title="Datei (z. B. Scan/Foto) an diesen Entwurf anhängen — landet im gespeicherten Postfach-Entwurf, im heruntergeladenen .eml und in einer per „An mich senden“ verschickten Mail." data-i18n-title="mail.tooltip.attachButton"><span data-i18n="mail.attach.button">📎 Datei anhängen</span></button>
+          <input type="file" id="mailAttachInput" multiple hidden>
+        </div>
+        <div id="mailAttachList" class="attach-list" hidden></div>
+        <label title="Formuliert den aktuellen Entwurfstext oben in einem anderen Stil um — Inhalt/Fakten bleiben unverändert, es ändert sich nur Tonfall und Formulierung. Wirkt auf den Text, wie er gerade im Feld oben steht, inklusive eigener Änderungen." data-i18n-title="mail.tooltip.style"><span data-i18n="mail.style.label">Stil</span>
+          <select id="mailDraftStyle">
+            <option value="professionell" data-i18n="mail.style.professional">Professionell</option>
+            <option value="kollegial" data-i18n="mail.style.collegial">Kollegial</option>
+            <option value="persoenlich" data-i18n="mail.style.personal">Persönlich</option>
+            <option value="distanziert" data-i18n="mail.style.distant">Distanziert</option>
+            <option value="ausfuehrlich" data-i18n="mail.style.detailed">Ausführlicher</option>
+            <option value="technisch" data-i18n="mail.style.technical">Technisch</option>
+            <option value="kundenorientiert" data-i18n="mail.style.customerFocused">Kundenorientiert</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button id="mailDraftRestyle" class="ghost-btn" title="Formt den Entwurfstext oben in den links gewählten Stil um, ohne den fachlichen Inhalt zu verändern." data-i18n-title="mail.tooltip.restyle" data-i18n="mail.draftRestyle">Stil anwenden</button>
+          <button id="mailDraftRegenerate" class="ghost-btn" title="Verwirft diesen Entwurf und lässt aus derselben Eingabe einen neuen generieren — z. B. wenn der Ton oder die Formulierung nicht passt. Bereits vorgenommene Änderungen an Betreff/Text gehen dabei verloren." data-i18n-title="mail.tooltip.regenerate" data-i18n="mail.draftRegenerate">Entwurf neu generieren</button>
+          <button id="mailDraftInsertSignature" class="ghost-btn" title="Fügt am Ende des Entwurfstexts eine Signatur mit Name/Abteilung des angemeldeten Kontos ein (ohne Anmeldung: Platzhalter zum Ausfüllen von Hand) — ersetzt dabei eine bereits vorhandene Grußformel/Signatur, damit keine doppelte entsteht. R3 selbst schlägt nie einen fremden Namen als Absender vor." data-i18n-title="mail.tooltip.insertSignature" data-i18n="mail.insertSignature">Signatur einfügen</button>
+          <button id="mailDraftCopy" class="ghost-btn" data-i18n="modal.copyDraft">Entwurf kopieren</button>
+          <button id="mailDraftEml" class="ghost-btn" title="Lädt den Entwurf als .eml-Datei herunter — lässt sich in Outlook & Co. öffnen und von dort als normale Mail weiterbearbeiten/versenden." data-i18n-title="mail.tooltip.downloadEml" data-i18n="mail.downloadEml">Als .eml herunterladen</button>
+          <button id="mailDraftSendSelf" class="ghost-btn" hidden title="Schickt den Entwurf als E-Mail an die eigene, im Konto hinterlegte Adresse — zur Weiterbearbeitung im eigenen Mail-Programm. Nur dorthin, nie an eine andere Adresse; erfordert eine Anmeldung und konfiguriertes SMTP." data-i18n-title="mail.tooltip.sendSelf" data-i18n="mail.sendSelf">An mich senden</button>
+          <button id="mailDraftSaveImap" class="ghost-btn admin-only" title="Legt den Entwurf per IMAP im Entwürfe-Ordner des konfigurierten Postfachs ab (Einstellungen → IMAP → Entwürfe-Ordner). Nur ablegen — geprüft und versendet wird weiterhin von einem Menschen im Mail-Programm." data-i18n-title="mail.tooltip.saveImap" data-i18n="mail.saveImap">In Postfach-Entwürfe speichern</button>
+          <button id="mailDraftSaveGraph" class="ghost-btn" hidden title="Legt diesen Entwurf direkt im Entwürfe-Ordner deines eigenen Outlook-Postfachs ab (Microsoft Graph), als Antwort auf die oben ausgewählte Nachricht. Nur ablegen — geprüft und versendet wird weiterhin von dir selbst in Outlook." data-i18n-title="mail.tooltip.saveGraph" data-i18n="mail.saveGraph">In mein Outlook-Postfach speichern</button>
+          <span class="feedback-buttons" title="War dieser Entwurf brauchbar? Hilft, die Antwortqualität einzuschätzen." data-i18n-title="mail.feedback.title">
+            <button type="button" id="mailDraftFeedbackUp" class="ghost-btn feedback-btn">👍</button>
+            <button type="button" id="mailDraftFeedbackDown" class="ghost-btn feedback-btn">👎</button>
+          </span>
+        </div>
+      </div>
+    </section>
+{{end}}

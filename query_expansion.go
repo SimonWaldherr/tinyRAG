@@ -7,11 +7,110 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type weightedSearchQuery struct {
 	Query  string
 	Weight float64
+}
+
+const (
+	retrievalPlannerMinK          = 1
+	retrievalPlannerMaxK          = 24
+	retrievalPlannerMinThreshold  = 0.45
+	retrievalPlannerMaxThreshold  = 0.90
+	retrievalPlannerQuestionRunes = 1200
+	retrievalPlannerSummaryRunes  = 2400
+	retrievalPlannerQueryRunes    = 500
+)
+
+// retrievalPlannerTimeout keeps the optional planning request bounded. It is
+// a variable so tests can validate the fail-open path without waiting for the
+// production timeout.
+var retrievalPlannerTimeout = 8 * time.Second
+
+type retrievalPlan struct {
+	Action    string
+	K         int
+	Threshold float64
+	Query     string
+}
+
+func boundedPlannerK(value, fallback int) int {
+	if fallback < retrievalPlannerMinK {
+		fallback = retrievalPlannerMinK
+	}
+	if fallback > retrievalPlannerMaxK {
+		fallback = retrievalPlannerMaxK
+	}
+	if value < retrievalPlannerMinK {
+		return fallback
+	}
+	if value > retrievalPlannerMaxK {
+		return retrievalPlannerMaxK
+	}
+	return value
+}
+
+func plannerNumber(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func boundedPlannerQuery(value any, fallback string) string {
+	query, ok := value.(string)
+	if !ok {
+		return fallback
+	}
+	query = strings.Join(strings.Fields(query), " ")
+	if query == "" {
+		return fallback
+	}
+	runes := []rune(query)
+	if len(runes) > retrievalPlannerQueryRunes {
+		query = string(runes[:retrievalPlannerQueryRunes])
+	}
+	return query
+}
+
+// normalizeRetrievalPlan treats model output as a bounded suggestion. The
+// configured relevance threshold remains a floor, so an LLM cannot relax a
+// caller's retrieval-quality policy.
+func normalizeRetrievalPlan(raw map[string]any, fallbackK int, threshold float64, fallbackQuery string) retrievalPlan {
+	plan := retrievalPlan{
+		Action:    "RETRIEVE_MORE",
+		K:         boundedPlannerK(fallbackK, fallbackK),
+		Threshold: clampUnitInterval(threshold),
+		Query:     fallbackQuery,
+	}
+	if raw == nil {
+		return plan
+	}
+	if action, ok := raw["action"].(string); ok && strings.EqualFold(strings.TrimSpace(action), "ANSWER_DIRECT") {
+		plan.Action = "ANSWER_DIRECT"
+	}
+	if value, ok := plannerNumber(raw["k"]); ok {
+		plan.K = boundedPlannerK(int(value), plan.K)
+	}
+	if value, ok := plannerNumber(raw["threshold"]); ok &&
+		value >= retrievalPlannerMinThreshold && value <= retrievalPlannerMaxThreshold && value > plan.Threshold {
+		plan.Threshold = value
+	}
+	if value, ok := raw["query"]; ok {
+		plan.Query = boundedPlannerQuery(value, plan.Query)
+	}
+	return plan
 }
 
 var searchTokenSplitter = regexp.MustCompile(`[^\p{L}\p{N}\-_.#+/]+`)
@@ -282,6 +381,13 @@ func refineSearchQuery(q string) string {
 // least an "action" key (ANSWER_DIRECT or RETRIEVE_MORE) and optional
 // parameters (k, threshold, query).
 func (r *ragSystem) analyzeQuestion(question, summary string) (map[string]any, error) {
+	return r.analyzeQuestionContext(context.Background(), question, summary)
+}
+
+func (r *ragSystem) analyzeQuestionContext(parent context.Context, question, summary string) (map[string]any, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
 	system := `You are a retrieval-planning agent for a RAG assistant.
 
 Task:
@@ -303,11 +409,15 @@ Examples:
 {"action":"RETRIEVE_MORE","k":8,"threshold":0.6,"query":"Karte.Bayern"}
 {"action":"RETRIEVE_MORE","k":12,"threshold":0.55}
 `
+	question = truncateRunes(strings.TrimSpace(question), retrievalPlannerQuestionRunes)
+	summary = truncateRunes(strings.TrimSpace(summary), retrievalPlannerSummaryRunes)
 	user := fmt.Sprintf("Question: %s\n\nCandidates: %s", question, summary)
 	msgs := []chatMsg{{Role: "user", Content: user}}
 
 	var buf bytes.Buffer
-	if err := r.getLM().chatStream(context.Background(), system, msgs, &buf); err != nil {
+	ctx, cancel := context.WithTimeout(parent, retrievalPlannerTimeout)
+	defer cancel()
+	if err := r.getLM().chatStream(ctx, system, msgs, &buf); err != nil {
 		return nil, err
 	}
 	out := buf.String()
@@ -320,26 +430,30 @@ Examples:
 		}
 		return map[string]any{"action": "RETRIEVE_MORE", "k": r.k, "threshold": 0.6}, nil
 	}
+	jsonText, err := extractFirstJSONValue(out[i:])
+	if err != nil {
+		return nil, err
+	}
 	var m map[string]any
-	if err := json.Unmarshal([]byte(out[i:]), &m); err != nil {
+	if err := json.Unmarshal([]byte(jsonText), &m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-// fetchNeighborContent loads the content of a chunk at (article, chunk_idx).
-// fetchNeighborContent returns the content for a specific chunk index
-// of an article, used to include context neighbors around hits.
-func (r *ragSystem) fetchNeighborContent(article string, chunkIdx int) (string, bool) {
+// fetchNeighborContent loads a neighboring chunk from the same source document.
+// Article matching remains only as a legacy fallback for rows without a stable
+// document ID.
+func (r *ragSystem) fetchNeighborContent(documentID, article string, chunkIdx int) (string, bool) {
 	activeRole := "it"
 	if settings != nil {
 		activeRole = settings.get().ActiveRole
 	}
-	return r.chunkStore.fetchNeighborContent(article, chunkIdx, roleAndACLFilterSQL(activeRole))
+	return r.chunkStore.fetchNeighborContent(documentID, article, chunkIdx, roleAndACLFilterSQL(activeRole))
 }
 
-// listSources returns distinct article names with their chunk counts
-// listSources returns metadata about stored articles and their chunk counts.
+// listSources returns metadata about stored source documents and their chunk
+// counts. Titles remain presentation metadata, not source identity.
 func (r *ragSystem) listSources() []map[string]any {
 	role := "it"
 	if settings != nil {
@@ -352,18 +466,17 @@ func (r *ragSystem) listSourcesForRole(role string) []map[string]any {
 	return r.chunkStore.listSources(roleAndACLFilterSQL(role))
 }
 
-// deleteSource removes all chunks belonging to `article` and persists
-// the change.
+// deleteSource removes a legacy article source and persists the change.
 func (r *ragSystem) deleteSource(article string) error {
 	role := "it"
 	if settings != nil {
 		role = settings.get().ActiveRole
 	}
-	return r.deleteSourceForRole(article, role)
+	return r.deleteSourceForRole("", article, role)
 }
 
-func (r *ragSystem) deleteSourceForRole(article, role string) error {
-	if err := r.chunkStore.deleteSource(article, roleAndACLFilterSQL(role)); err != nil {
+func (r *ragSystem) deleteSourceForRole(documentID, article, role string) error {
+	if err := r.chunkStore.deleteSource(documentID, article, roleAndACLFilterSQL(role)); err != nil {
 		return err
 	}
 	return r.save()

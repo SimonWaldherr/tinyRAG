@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	nanogo "simonwaldherr.de/go/nanogo/interp"
@@ -71,23 +73,77 @@ func execTinyGoProgram(source string) (string, error) {
 	return RunSafe(source, timeout)
 }
 
-// RunSafe executes untrusted Go source inside the nanoGo interpreter
-// with a context-based timeout. It captures ConsoleLog/ConsoleWarn/ConsoleError
-// output into a buffer and recovers from panics so the host application
-// is not crashed by user code.
+const (
+	maxNanoGoSourceRunes = 12000
+	maxNanoGoOutputBytes = 12000
+	maxNanoGoTimeout     = 15 * time.Second
+)
+
+// boundedNanoGoOutput prevents a program that repeatedly logs from growing
+// the host process's memory without bound. It is safe to read after a timeout
+// while the interpreter goroutine is still winding down.
+type boundedNanoGoOutput struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+func (b *boundedNanoGoOutput) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := b.max - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = b.buf.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+	_, err := b.buf.Write(p)
+	return len(p), err
+}
+
+func (b *boundedNanoGoOutput) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := b.buf.String()
+	if b.truncated {
+		out += "\n[... nanoGo output truncated ...]"
+	}
+	return out
+}
+
+// RunSafe executes untrusted Go source inside the nanoGo interpreter with a
+// bounded source size, runtime and output buffer. Panics from the interpreter
+// goroutine are converted to ordinary errors instead of crashing the host.
 func RunSafe(source string, timeout time.Duration) (string, error) {
-	defer func() {
-		if r := recover(); r != nil {
-			// recovered panic will be returned as error below
-		}
-	}()
+	if strings.TrimSpace(source) == "" {
+		return "", fmt.Errorf("nanoGo source is empty")
+	}
+	if len([]rune(source)) > maxNanoGoSourceRunes {
+		return "", fmt.Errorf("nanoGo source exceeds %d characters", maxNanoGoSourceRunes)
+	}
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if timeout > maxNanoGoTimeout {
+		timeout = maxNanoGoTimeout
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	outBuf := &bytes.Buffer{}
+	outBuf := &boundedNanoGoOutput{max: maxNanoGoOutputBytes}
 	done := make(chan error, 1)
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				done <- fmt.Errorf("nanoGo interpreter panic: %v", recovered)
+			}
+		}()
 		done <- runInterpreted(ctx, source, outBuf)
 	}()
 
@@ -110,7 +166,7 @@ func RunSafe(source string, timeout time.Duration) (string, error) {
 // indefinitely, acquiring the slot itself respects ctx: once the caller's
 // own timeout elapses, a still-queued request fails fast with a clear
 // "sandbox busy" error instead of silently hanging past its stated timeout.
-func runInterpreted(ctx context.Context, source string, out *bytes.Buffer) error {
+func runInterpreted(ctx context.Context, source string, out io.Writer) error {
 	// Limit concurrent interpreter instances to avoid spikes.
 	select {
 	case nanoGoSem <- struct{}{}:
@@ -127,7 +183,7 @@ func runInterpreted(ctx context.Context, source string, out *bytes.Buffer) error
 
 // registerSafeNatives installs a minimal set of host functions that are
 // safe to expose to untrusted user code. Output is written to `out`.
-func registerSafeNatives(vm *nanogo.Interpreter, out *bytes.Buffer) {
+func registerSafeNatives(vm *nanogo.Interpreter, out io.Writer) {
 	vm.RegisterNative("ConsoleLog", func(args []any) (any, error) {
 		if len(args) > 0 {
 			fmt.Fprintln(out, nanogo.ToString(args[0]))

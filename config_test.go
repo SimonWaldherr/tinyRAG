@@ -129,6 +129,9 @@ func TestLoadOrCreateSettingsRoundTrip(t *testing.T) {
 	if got.ChunkSize != 800 || got.K != 4 {
 		t.Errorf("expected chunk/k from defaults, got chunk=%d k=%d", got.ChunkSize, got.K)
 	}
+	if got.InferenceAPI != inferenceAPIAuto {
+		t.Errorf("expected auto inference protocol by default, got %q", got.InferenceAPI)
+	}
 
 	// Reload from disk; normalization must be idempotent and role/lang must persist.
 	ss2, err := loadOrCreateSettings(path, defaults)

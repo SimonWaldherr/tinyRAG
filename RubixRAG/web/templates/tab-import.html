@@ -1,0 +1,340 @@
+{{define "tab-import"}}
+    <section id="tab-import" class="panel" role="tabpanel" aria-labelledby="navtab-import">
+      <header class="page-head">
+        <h1 data-i18n="page.import.title">Import</h1>
+        <p class="hint" data-i18n="page.import.hint">Dokumente, Postfächer und Server-Ordner in die Wissensbasis aufnehmen.</p>
+        <label class="check-label" id="dryRunToggleLabel" title="Simuliert jeden Import unten: Extraktion, Zerlegung in Chunks und der Duplikat-Check (unverändert vs. neu/geändert) laufen ganz normal, aber es wird nichts eingebettet oder in die Wissensbasis geschrieben — auch bei PST/IMAP/SharePoint-Delta-Sync werden keine Fortschrittsmarker (zuletzt importierte UID/Delta-Link) aktualisiert. Ergebnis zeigt exakt, was passiert wäre. Gilt für jeden Import-Start auf dieser Seite, solange aktiviert.">
+          <input type="checkbox" id="dryRunToggle"> <span data-i18n="import.dryRun.label">🧪 Dry-Run (nur simulieren, nichts speichern)</span>
+        </label>
+      </header>
+
+      <div class="card">
+        <h2 data-i18n="import.files.title">Dateien importieren</h2>
+        <p class="hint">TXT, MD, CSV/TSV, JSON/JSONL, HTML, EML/MBOX, MHTML, VCF, ICS und SRT/VTT nativ. DOCX/DOCM/PPTX/PPTM/XLSX/XLSM/PDF/RTF/ODT/… über <a href="https://github.com/microsoft/markitdown" target="_blank" rel="noopener">markitdown</a>; Audio/Video und .7z benötigen zusätzlich die konfigurierten externen Werkzeuge.</p>
+        <form id="uploadForm">
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Dateien auswählen oder hierher ziehen" data-i18n-aria-label="import.dropzone.ariaLabel">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M10 13V4M6.5 7.5L10 4l3.5 3.5M3 13v2a2 2 0 002 2h10a2 2 0 002-2v-2"/>
+            </svg>
+            <span class="dz-title" data-i18n="import.dropzone.title">Dateien hierher ziehen oder klicken</span>
+            <span id="dzFiles" class="dz-files" data-i18n="import.dropzone.emptyState">Keine Dateien ausgewählt</span>
+            <label class="sr-only" for="fileInput" data-i18n="import.files.selectLabel">Dateien auswählen</label>
+            <input type="file" id="fileInput" multiple>
+          </div>
+          <label class="check-label"><input type="checkbox" id="keepOriginal"> <span data-i18n="import.files.keepOriginal">Original-Datei behalten (ermöglicht späteren Download über die Quellenangabe)</span></label>
+          <button type="submit" data-i18n="import.actions.upload">Hochladen</button>
+        </form>
+        <div id="uploadResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.pst.title">PST-/OST-Postfach importieren</h2>
+        <p class="hint" data-i18n="import.pst.hint">Outlook-.pst- oder .ost-Export. Nach dem Hochladen zeigt R3 die enthaltenen Ordner mit Nachrichtenzahl zur Auswahl, bevor tatsächlich importiert wird. Jede E-Mail wird als eigene, zitierbare Quelle gespeichert; ein erneuter Import derselben Datei ersetzt nur geänderte Nachrichten.</p>
+        <form id="pstPreviewForm">
+          <label class="sr-only" for="pstInput" data-i18n="import.pst.selectFileLabel">PST-Datei auswählen</label>
+          <input type="file" id="pstInput" accept=".pst,.ost">
+          <button type="submit" id="pstPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+          <button type="button" id="pstPreviewCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+        </form>
+        <p class="hint" data-i18n="import.pst.hint2">Für sehr große Postfächer (mehrere GB) ist ein Browser-Upload oft unzuverlässig oder langsam. Alternativ kann die Datei direkt auf dem Server abgelegt werden (z.B. per Netzlaufwerk oder scp) — dann hier den vollständigen Pfad auf dem Server angeben, ganz ohne Upload:</p>
+        <form id="pstPreviewPathForm">
+          <label class="sr-only" for="pstPathInput" data-i18n="import.pst.serverPathLabel">Pfad zur PST-Datei auf dem Server</label>
+          <input type="text" id="pstPathInput" placeholder="z.B. /opt/r3/incoming/Postfach.pst" data-i18n-placeholder="import.pst.serverPathPlaceholder">
+          <button type="submit" id="pstPreviewPathSubmit" data-i18n="import.pst.loadPreviewServerPath">Vorschau laden (Server-Pfad)</button>
+        </form>
+        <div id="pstPreviewResult" class="result" role="status"></div>
+        <label class="check-label" id="pstDebugToggleLabel" title="Zeigt am Ende des Imports jeden als Signatur/Disclaimer erkannten und herausgefilterten Absatz einzeln an (Textprobe, Zeichenanzahl, wie oft er vorkam) — zur Kontrolle, dass dabei nichts Inhaltliches herausgefiltert wurde. Ändert nichts an der eigentlichen Filterung, nur an der Anzeige.">
+          <input type="checkbox" id="pstDebugToggle"> <span data-i18n="import.pst.debugToggle">🔍 Debug: gefilterte Boilerplate-Absätze anzeigen</span>
+        </label>
+
+        <div id="pstFolderPicker" class="pst-folder-picker" hidden>
+          <label class="sr-only" for="pstFolderFilter" data-i18n="import.pst.filterLabel">PST-Ordner filtern</label>
+          <input type="search" id="pstFolderFilter" class="pst-folder-filter" placeholder="Ordner filtern…" autocomplete="off" data-i18n-placeholder="import.pst.filterPlaceholder">
+          <div class="pst-folder-toolbar">
+            <button type="button" id="pstSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="pstSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="pstSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="pstFolderList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="pstImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="pstCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="pstPhaseStatus" class="pst-phase-status" role="status" hidden></div>
+        <div id="pstResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.sharepoint.title">SharePoint importieren</h2>
+        <p class="hint" data-i18n="import.sharepoint.hint">Listet Dateien in einem SharePoint-Ordner (eine Ebene) und importiert die ausgewählten. Erfordert eine konfigurierte Azure-AD-App-Registrierung unter „Einstellungen → SharePoint". Jede „Site-URL" dort ist genau eine SharePoint-Site — Unterordner wie „Freigegebene Dokumente" gehören NICHT ins Site-URL-Feld, sondern in den Ordnerpfad unten; oft ist z.B. „Support/Logistik" tatsächlich eine eigene Unter-Site und braucht eine eigene, zusätzliche Verbindung.</p>
+        {{/* Hidden whenever 0/1 SharePoint connections are configured
+             (populated by app.js's loadImportConnectionSelectors, called
+             when this tab is activated) — one connection picked here
+             applies to every SharePoint action in this card (files, Site
+             Pages, Freigabe-Links below), since they're all reached
+             through the same Azure AD app + site grant. */}}
+        <div id="spConnectionWrap" style="margin-bottom:10px;" hidden>
+          <label for="spConnectionSelect"><span data-i18n="import.sharepoint.connectionLabel">Verbindung</span> <select id="spConnectionSelect"></select></label>
+        </div>
+        <form id="spPreviewForm">
+          <label class="sr-only" for="spFolderPath" data-i18n="import.sharepoint.folderPathLabel">Ordnerpfad in der Dokumentbibliothek</label>
+          <input type="text" id="spFolderPath" placeholder="z.B. Allgemein/Vertrieb (leer = Stammordner)" data-i18n-placeholder="import.sharepoint.folderPathPlaceholder">
+          <button type="submit" id="spPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+        </form>
+        <div id="spPreviewResult" class="result" role="status"></div>
+
+        <div id="spFilePicker" class="pst-folder-picker" hidden>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="spSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="spSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="spSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="spFileList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="spImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="spCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="spResult" class="result" role="status"></div>
+
+        <div class="pst-folder-toolbar" style="margin-top:14px; border-top:1px solid var(--border); padding-top:14px;">
+          <button type="button" id="spDeltaSyncSubmit" data-i18n="import.sharepoint.deltaSyncButton">Delta-Sync jetzt</button>
+          <span class="hint" data-i18n="import.sharepoint.deltaSyncHint">Importiert/löscht nur, was sich seit dem letzten Delta-Sync geändert hat — unabhängig vom Ordnerpfad oben, für das ganze Drive.</span>
+        </div>
+        <div id="spDeltaSyncResult" class="result" role="status"></div>
+
+        <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:14px;">
+          <h3 data-i18n="import.sharepoint.sitePages.title">Site Pages (.aspx-Seiten)</h3>
+          <p class="hint" data-i18n="import.sharepoint.sitePages.hint">Die eingebauten Wiki-/News-/Landingpages einer Site (z.B. „Neue-Mailstruktur-in-der-Logistik.aspx") liegen in einer separaten Bibliothek, die der Ordner-Import oben nicht sieht — hier werden sie eigens aufgelistet. Nur Text-Textbausteine der Seite werden gelesen; Bilder/Einbettungen/Listen-Web-Parts tragen nichts bei.</p>
+          <button type="button" id="spPagesPreviewSubmit" data-i18n="import.sharepoint.sitePages.listButton">Seiten auflisten</button>
+          <div id="spPagesPreviewResult" class="result" role="status"></div>
+
+          <div id="spPagesPicker" class="pst-folder-picker" hidden>
+            <div class="pst-folder-toolbar">
+              <button type="button" id="spPagesSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+              <button type="button" id="spPagesSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+              <span id="spPagesSelectedSummary" class="hint"></span>
+            </div>
+            <ul id="spPagesList" class="pst-folder-list"></ul>
+            <div class="pst-folder-toolbar">
+              <button type="button" id="spPagesImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+              <button type="button" id="spPagesCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+            </div>
+          </div>
+          <div id="spPagesResult" class="result" role="status"></div>
+        </div>
+
+        <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:14px;">
+          <h3 data-i18n="import.sharepoint.shareLink.title">Freigabe-Link importieren</h3>
+          <p class="hint" data-i18n-html="import.sharepoint.shareLink.hintHtml">Ein einzelner, per „Link kopieren" geteilter Link (<code>.../:b:/...</code>, <code>.../:x:/...</code> usw.) — auch aus einer Site, die oben nicht als eigene Verbindung konfiguriert ist, solange die Azure-AD-App für DIESE Site per Sites.Selected freigegeben wurde. Ein Link pro Zeile.</p>
+          <label class="sr-only" for="spShareLinkInput" data-i18n="import.sharepoint.shareLinkLabel">Freigabe-Link(s)</label>
+          <textarea id="spShareLinkInput" rows="3" placeholder="https://groupiph.sharepoint.com/:b:/s/intranet_de/Allgemein/…"></textarea>
+          <button type="button" id="spShareLinkImportSubmit" data-i18n="import.actions.import">Importieren</button>
+          <div id="spShareLinkResult" class="result" role="status"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>OneDrive for Business</h2>
+        <p class="hint">Synchronisiert den in den Einstellungen angelegten Drive über Microsoft Graph Delta. Neue, geänderte, verschobene und gelöschte Dateien werden verarbeitet; der Lauf setzt beim nächsten Aufruf am gespeicherten Delta-Cursor fort.</p>
+        <div id="onedriveConnectionWrap" style="margin-bottom:10px;" hidden>
+          <label for="onedriveConnectionSelect">Verbindung <select id="onedriveConnectionSelect"></select></label>
+        </div>
+        <button type="button" id="onedriveSyncSubmit">Delta-Sync jetzt</button>
+        <div id="onedriveSyncResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2>GitHub</h2>
+        <p class="hint">Synchronisiert README, Issues und Pull Requests des konfigurierten Repositories. Große Erstimporte werden über mehrere Läufe fortgesetzt; unveränderte Dokumente werden übersprungen.</p>
+        <div id="githubConnectionWrap" style="margin-bottom:10px;" hidden>
+          <label for="githubConnectionSelect">Verbindung <select id="githubConnectionSelect"></select></label>
+        </div>
+        <button type="button" id="githubSyncSubmit">Repository synchronisieren</button>
+        <div id="githubSyncResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2>SAP S/4HANA (OData)</h2>
+        <p class="hint">Synchronisiert genau die konfigurierte OData-Entity. Der Import liest nur die in den Einstellungen freigegebenen Felder und nutzt einen Delta-Link, sofern der SAP-Service einen anbietet.</p>
+        <div id="sapS4ConnectionWrap" style="margin-bottom:10px;" hidden>
+          <label for="sapS4ConnectionSelect">Verbindung <select id="sapS4ConnectionSelect"></select></label>
+        </div>
+        <button type="button" id="sapS4SyncSubmit">OData synchronisieren</button>
+        <div id="sapS4SyncResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.outlook.title">Outlook / Exchange Online (Microsoft Graph)</h2>
+        <p class="hint" data-i18n="import.outlook.hint">Listet die neuesten Nachrichten in einem freigegebenen Postfach und importiert die ausgewählten. Erfordert eine Azure-AD-App-Registrierung unter „Einstellungen → Outlook/Exchange". Für On-Prem-Exchange oder IMAP-Postfächer siehe die IMAP-Karte weiter unten.</p>
+        <form id="exPreviewForm">
+          <button type="submit" id="exPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+        </form>
+        <div id="exPreviewResult" class="result" role="status"></div>
+
+        <div id="exMessagePicker" class="pst-folder-picker" hidden>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="exSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="exSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="exSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="exMessageList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="exImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="exCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="exResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.teams.title">Microsoft Teams (Kanal-Nachrichten)</h2>
+        <p class="hint" data-i18n="import.teams.hint">Listet die neuesten Beiträge im konfigurierten Kanal und importiert die ausgewählten (nur Hauptbeiträge, keine Thread-Antworten). Erfordert eine Azure-AD-App-Registrierung unter „Einstellungen → Microsoft Teams".</p>
+        <form id="teamsPreviewForm">
+          <button type="submit" id="teamsPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+        </form>
+        <div id="teamsPreviewResult" class="result" role="status"></div>
+
+        <div id="teamsMessagePicker" class="pst-folder-picker" hidden>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="teamsSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="teamsSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="teamsSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="teamsMessageList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="teamsImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="teamsCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="teamsResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.imap.title">IMAP (On-Prem Exchange / generische Postfächer)</h2>
+        <p class="hint" data-i18n="import.imap.hint">Holt alle Nachrichten, die seit dem letzten Lauf neu im Postfach eingegangen sind (kein Vorschau-/Auswahlschritt nötig — IMAP-UIDs sind bereits fortlaufend und werden nicht doppelt importiert). Erfordert Zugangsdaten unter „Einstellungen → IMAP".</p>
+        <button type="button" id="imapImportSubmit" data-i18n="import.imap.importNowButton">Import jetzt</button>
+        <div id="imapResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.confluence.title">Confluence</h2>
+        <p class="hint" data-i18n="import.confluence.hint">Listet die zuletzt geänderten Seiten im konfigurierten Space und importiert die ausgewählten. Erfordert einen API-Token unter „Einstellungen → Confluence".</p>
+        <form id="confPreviewForm">
+          <button type="submit" id="confPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+        </form>
+        <div id="confPreviewResult" class="result" role="status"></div>
+
+        <div id="confPagePicker" class="pst-folder-picker" hidden>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="confSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="confSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="confSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="confPageList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="confImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="confCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="confResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.jira.title">Jira</h2>
+        <p class="hint" data-i18n="import.jira.hint">Listet die zuletzt geänderten Issues im konfigurierten Projekt und importiert die ausgewählten. Erfordert einen API-Token unter „Einstellungen → Jira" (derselbe Atlassian-Token wie für Confluence funktioniert, falls der Account beides lesen darf).</p>
+        <form id="jiraPreviewForm">
+          <button type="submit" id="jiraPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+        </form>
+        <div id="jiraPreviewResult" class="result" role="status"></div>
+
+        <div id="jiraIssuePicker" class="pst-folder-picker" hidden>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="jiraSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="jiraSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="jiraSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="jiraIssueList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="jiraImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="jiraCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="jiraResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.freshservice.title">Freshservice</h2>
+        <p class="hint" data-i18n="import.freshservice.hint">Listet die zuletzt geänderten Tickets und importiert die ausgewählten. Erfordert einen API-Key unter „Einstellungen → Freshservice". Kann dort zusätzlich auf automatischen periodischen Sync gestellt werden, statt nur hier per Hand zu importieren.</p>
+        <form id="fsPreviewForm">
+          <button type="submit" id="fsPreviewSubmit" data-i18n="import.actions.loadPreview">Vorschau laden</button>
+        </form>
+        <div id="fsPreviewResult" class="result" role="status"></div>
+
+        <div id="fsTicketPicker" class="pst-folder-picker" hidden>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="fsSelectAll" class="ghost-btn" data-i18n="import.actions.selectAll">Alle</button>
+            <button type="button" id="fsSelectNone" class="ghost-btn" data-i18n="import.actions.selectNone">Keine</button>
+            <span id="fsSelectedSummary" class="hint"></span>
+          </div>
+          <ul id="fsTicketList" class="pst-folder-list"></ul>
+          <div class="pst-folder-toolbar">
+            <button type="button" id="fsImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="fsCancel" class="ghost-btn" hidden data-i18n="import.actions.cancel">Abbrechen</button>
+          </div>
+        </div>
+        <div id="fsResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.web.title">Webseite (URL-Import)</h2>
+        <p class="hint" data-i18n="import.web.hint">Holt eine oder mehrere Webseiten per HTTP(S) und importiert den extrahierten Text. Optional rekursiv: folgt Links auf der Seite, um eine ganze Website zu erfassen. Kein Setup nötig — aber der Server ruft exakt die eingegebenen URLs (bzw. beim Crawlen: von dort aus erreichbare Seiten) ab, also nur URLs aus vertrauenswürdigen Quellen einfügen (eine URL pro Zeile).</p>
+        <form id="webImportForm">
+          <textarea id="webImportUrls" rows="4" aria-label="URLs zum Importieren, eine pro Zeile" placeholder="https://intranet.rubix.com/docs/beispiel&#10;https://example.com/artikel" data-i18n-aria-label="import.web.urlsAriaLabel"></textarea>
+          <label><input type="checkbox" id="webImportCrawl"> <span data-i18n="import.web.crawlLabel">Rekursiv crawlen (Links auf der Seite folgen)</span></label>
+          <label title="Wie viele Klicks tief ab der Start-URL gefolgt wird."><span data-i18n="import.web.depthLabel">Tiefe</span> <input id="webImportMaxDepth" type="number" min="1" max="5" placeholder="2"></label>
+          <label title="Wie viele Seiten insgesamt maximal geholt werden — Sicherheitsgrenze gegen einen unbeabsichtigt riesigen Crawl."><span data-i18n="import.web.maxPagesLabel">Max. Seiten</span> <input id="webImportMaxPages" type="number" min="1" max="200" placeholder="20"></label>
+          <label><input type="checkbox" id="webImportOtherHosts"> <span data-i18n="import.web.otherHostsLabel">Auch andere Domains als die Start-URL zulassen</span></label>
+          <div class="modal-actions">
+            <button type="submit" id="webImportSubmit" data-i18n="import.actions.startImport">Import starten</button>
+            <button type="button" id="webImportTest" class="ghost-btn" title="Probelauf: ruft die eingegebenen URLs (bzw. beim Crawlen: die erreichten Seiten) ab und meldet, wie viele Seiten/Chunks entstehen würden — ohne etwas in die Wissensbasis zu schreiben. Zum Prüfen von Erreichbarkeit und Ergebnis vor dem echten Import." data-i18n="import.actions.dryRunTest">Probelauf (testen)</button>
+          </div>
+        </form>
+        <div id="webImportResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.rss.title">RSS / Atom-Feed importieren</h2>
+        <p class="hint" data-i18n="import.rss.hint">Liest die Einträge eines öffentlichen RSS- oder Atom-Feeds ein. Bereits bekannte Einträge werden über ihre Feed-ID bzw. URL übersprungen.</p>
+        <form id="rssImportForm">
+          <input id="rssImportUrl" type="url" placeholder="https://example.com/feed.xml" aria-label="RSS- oder Atom-Feed-URL" data-i18n-aria-label="import.rss.urlAriaLabel">
+          <div class="modal-actions">
+            <button type="submit" data-i18n="import.rss.importButton">Feed importieren</button>
+            <button type="button" id="rssImportTest" class="ghost-btn" title="Probelauf: liest den Feed und meldet, wie viele Einträge/Chunks entstehen würden — ohne etwas in die Wissensbasis zu schreiben. Zum Prüfen von Erreichbarkeit und Feed-Format vor dem echten Import." data-i18n="import.actions.dryRunTest">Probelauf (testen)</button>
+          </div>
+        </form>
+        <div id="rssImportResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.folder.title">Server-Ordner importieren</h2>
+        <p class="hint" data-i18n="import.folder.hint">Rekursiver Import eines Ordnerpfads auf dem Server — auch für SMB-Freigaben, wenn diese zuvor vom Server als lokaler Pfad eingehängt wurden.</p>
+        <form id="folderForm">
+          <label class="sr-only" for="folderPath" data-i18n="import.folder.pathLabel">Ordnerpfad auf dem Server</label>
+          <input type="text" id="folderPath" placeholder="z.B. C:\Freigaben\Vertrieb">
+          <button type="submit" data-i18n="import.folder.importButton">Ordner importieren</button>
+        </form>
+        <div id="folderResult" class="result" role="status"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="import.selfSource.title">🐕 R3-Quellcode importieren</h2>
+        <p class="hint" data-i18n="import.selfSource.hint">Lädt R3s eigenen Quellcode (Go/JS/CSS/HTML/Markdown) in die eigene Wissensbasis, damit R3 auch Fragen zu seiner eigenen Implementierung beantworten kann — mit Zitat auf die jeweilige Datei. Läuft ausschließlich im Arbeitsverzeichnis des Server-Prozesses; Einstellungsdateien mit Zugangsdaten (z.&nbsp;B. settings.json) und andere sensible Pfade werden dabei grundsätzlich ausgeschlossen. Rein optional — dieser Import startet nie automatisch.</p>
+        <form id="selfSourceForm">
+          <button type="submit" data-i18n="import.selfSource.importButton">R3-Quellcode importieren</button>
+        </form>
+        <div id="selfSourceResult" class="result" role="status"></div>
+      </div>
+    </section>
+{{end}}

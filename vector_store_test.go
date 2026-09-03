@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"sync"
 	"testing"
 
@@ -69,6 +70,35 @@ func TestTinySQLChunkStoreInsertEmptyIsNoOp(t *testing.T) {
 	}
 	if got := store.countChunks("1=1"); got != 0 {
 		t.Errorf("expected 0 chunks, got %d", got)
+	}
+}
+
+func TestTinySQLChunkStoreReplaceKeepsExistingChunksWhenWriteFails(t *testing.T) {
+	store := newTestChunkStore(t)
+	old := testStoredChunk(0, "safe-refresh", 0, []float64{1, 0, 0}, "|all|")
+	old.DocumentID = "safe-refresh-doc"
+	old.ChunkID = "safe-refresh-doc:0"
+	old.Content = "known good source"
+	if err := store.insertChunks([]storedChunk{old}); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := old
+	bad.ID = 1
+	bad.Content = "replacement that must not become visible"
+	// This produces an invalid SQL float literal and makes the replacement
+	// write fail after the old source has been located but before it is deleted.
+	bad.TrustLevel = math.Inf(1)
+	if err := store.replaceDocumentChunks(old.DocumentID, old.RoleScope, []storedChunk{bad}); err == nil {
+		t.Fatal("expected replacement write to fail")
+	}
+
+	rows, err := store.loadArticleChunks(old.Article, "1=1")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("stored rows after failed replacement = %#v, %v", rows, err)
+	}
+	if got := rows[0]["content"]; got != "known good source" {
+		t.Fatalf("old source was not preserved: %#v", got)
 	}
 }
 
@@ -168,12 +198,35 @@ func TestTinySQLChunkStoreFetchNeighborContent(t *testing.T) {
 	if err := store.insertChunks(chunks); err != nil {
 		t.Fatalf("insertChunks failed: %v", err)
 	}
-	content, ok := store.fetchNeighborContent("golang", 1, "1=1")
+	content, ok := store.fetchNeighborContent("doc-golang", "golang", 1, "1=1")
 	if !ok || content != "content for golang" {
 		t.Fatalf("unexpected neighbor content: %q ok=%v", content, ok)
 	}
-	if _, ok := store.fetchNeighborContent("golang", 99, "1=1"); ok {
+	if _, ok := store.fetchNeighborContent("doc-golang", "golang", 99, "1=1"); ok {
 		t.Error("expected no neighbor content for an out-of-range chunk index")
+	}
+}
+
+func TestTinySQLChunkStoreFetchNeighborContentIsDocumentScoped(t *testing.T) {
+	store := newTestChunkStore(t)
+	first := testStoredChunk(0, "Handbuch", 1, []float64{1, 0, 0}, "|all|")
+	first.DocumentID = "handbook-a"
+	first.ChunkID = "handbook-a:1"
+	first.Content = "Nachbar aus Dokument A"
+	second := testStoredChunk(1, "Handbuch", 1, []float64{0, 1, 0}, "|all|")
+	second.DocumentID = "handbook-b"
+	second.ChunkID = "handbook-b:1"
+	second.Content = "Nachbar aus Dokument B"
+	if err := store.insertChunks([]storedChunk{first, second}); err != nil {
+		t.Fatal(err)
+	}
+
+	content, ok := store.fetchNeighborContent("handbook-b", "Handbuch", 1, "1=1")
+	if !ok || content != "Nachbar aus Dokument B" {
+		t.Fatalf("document-scoped neighbor = %q ok=%v", content, ok)
+	}
+	if _, ok := store.fetchNeighborContent("missing-document", "Handbuch", 1, "1=1"); ok {
+		t.Fatal("known document IDs must not fall back to same-titled sources")
 	}
 }
 
@@ -193,7 +246,7 @@ func TestTinySQLChunkStoreListSourcesAndDelete(t *testing.T) {
 		t.Fatalf("expected 2 distinct sources, got %d: %+v", len(sources), sources)
 	}
 
-	if err := store.deleteSource("golang", "1=1"); err != nil {
+	if err := store.deleteSource("doc-golang", "golang", "1=1"); err != nil {
 		t.Fatalf("deleteSource failed: %v", err)
 	}
 	if got := store.countChunks("1=1"); got != 1 {
@@ -202,6 +255,34 @@ func TestTinySQLChunkStoreListSourcesAndDelete(t *testing.T) {
 	sources = store.listSources("1=1")
 	if len(sources) != 1 || sources[0]["article"] != "python" {
 		t.Errorf("expected only 'python' to remain, got %+v", sources)
+	}
+}
+
+func TestTinySQLChunkStoreListsAndDeletesSameTitledDocumentsIndependently(t *testing.T) {
+	store := newTestChunkStore(t)
+	first := testStoredChunk(0, "Handbuch", 0, []float64{1, 0, 0}, "|all|")
+	first.DocumentID = "handbook-a"
+	first.ChunkID = "handbook-a:0"
+	second := testStoredChunk(1, "Handbuch", 0, []float64{0, 1, 0}, "|all|")
+	second.DocumentID = "handbook-b"
+	second.ChunkID = "handbook-b:0"
+	if err := store.insertChunks([]storedChunk{first, second}); err != nil {
+		t.Fatal(err)
+	}
+
+	sources := store.listSources("1=1")
+	if len(sources) != 2 {
+		t.Fatalf("same-titled document sources = %+v", sources)
+	}
+	if err := store.deleteSource("handbook-b", "Handbuch", "1=1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.countChunks("1=1"); got != 1 {
+		t.Fatalf("remaining chunks after document delete = %d", got)
+	}
+	rows, err := store.loadArticleChunks("Handbuch", "1=1")
+	if err != nil || len(rows) != 1 || rows[0]["document_id"] != "handbook-a" {
+		t.Fatalf("remaining same-titled source = %#v, err=%v", rows, err)
 	}
 }
 

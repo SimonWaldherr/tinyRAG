@@ -40,6 +40,11 @@ const (
 	llmRerankTopN = 16
 	// llmRerankTimeout bounds the grading call so retrieval latency stays sane.
 	llmRerankTimeout = 12 * time.Second
+	// maxPreferredHitsPerSource keeps the first context window from being
+	// monopolized by several adjacent chunks of one document. Extra chunks are
+	// retained and only moved behind evidence from other sources, so a query
+	// whose answer genuinely lives in one document still has its full recall.
+	maxPreferredHitsPerSource = 2
 )
 
 // normalizeRerankMode maps arbitrary input to a valid rerank mode.
@@ -96,11 +101,12 @@ func lexicalOverlapScore(query, content string) float64 {
 	return score / float64(len(terms))
 }
 
-// rerankKey identifies a hit independently of its slice position.
-type rerankKey struct {
-	article string
-	chunk   int
-	id      string
+// rerankKey identifies a hit independently of its slice position. It uses the
+// stable source identity so same-titled documents never share a blended score.
+type rerankKey string
+
+func makeRerankKey(hit retrievalHit) rerankKey {
+	return rerankKey(retrievalHitIdentity(hit))
 }
 
 // rerankLexical reorders hits by blending R³ score with lexical overlap.
@@ -112,11 +118,11 @@ func rerankLexical(query string, hits []retrievalHit) []retrievalHit {
 	blended := make(map[rerankKey]float64, len(hits))
 	for _, h := range hits {
 		lex := lexicalOverlapScore(query, h.Content)
-		blended[rerankKey{h.Article, h.ChunkIdx, h.ChunkID}] = h.R3Score*(1-lexicalBlendWeight) + lex*lexicalBlendWeight
+		blended[makeRerankKey(h)] = h.R3Score*(1-lexicalBlendWeight) + lex*lexicalBlendWeight
 	}
 	sortHitsDeterministic(hits, func(a, b retrievalHit) bool {
-		ba := blended[rerankKey{a.Article, a.ChunkIdx, a.ChunkID}]
-		bb := blended[rerankKey{b.Article, b.ChunkIdx, b.ChunkID}]
+		ba := blended[makeRerankKey(a)]
+		bb := blended[makeRerankKey(b)]
 		if ba != bb {
 			return ba > bb
 		}
@@ -202,7 +208,7 @@ func rerankLLM(ctx context.Context, lm lmProvider, query string, hits []retrieva
 	}
 	blended := make(map[rerankKey]float64, len(hits))
 	for i, h := range hits {
-		k := rerankKey{h.Article, h.ChunkIdx, h.ChunkID}
+		k := makeRerankKey(h)
 		if g, ok := grades[i]; ok {
 			blended[k] = h.R3Score*(1-llmBlendWeight) + g*llmBlendWeight
 		} else {
@@ -210,8 +216,8 @@ func rerankLLM(ctx context.Context, lm lmProvider, query string, hits []retrieva
 		}
 	}
 	sortHitsDeterministic(hits, func(a, b retrievalHit) bool {
-		ba := blended[rerankKey{a.Article, a.ChunkIdx, a.ChunkID}]
-		bb := blended[rerankKey{b.Article, b.ChunkIdx, b.ChunkID}]
+		ba := blended[makeRerankKey(a)]
+		bb := blended[makeRerankKey(b)]
 		if ba != bb {
 			return ba > bb
 		}
@@ -229,16 +235,53 @@ func rerankLLM(ctx context.Context, lm lmProvider, query string, hits []retrieva
 // applyRerank applies the configured rerank mode to the candidate hits.
 // Called at the end of searchCandidatesSingle / searchCandidates.
 func (r *ragSystem) applyRerank(query string, hits []retrievalHit) []retrievalHit {
+	return r.applyRerankContext(context.Background(), query, hits)
+}
+
+func (r *ragSystem) applyRerankContext(ctx context.Context, query string, hits []retrievalHit) []retrievalHit {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	mode := rerankModeLexical
 	if settings != nil {
 		mode = normalizeRerankMode(settings.get().RerankMode)
 	}
 	switch mode {
 	case rerankModeOff:
-		return hits
+		return diversifyRetrievalHits(hits, maxPreferredHitsPerSource)
 	case rerankModeLLM:
-		return rerankLLM(context.Background(), r.getLM(), query, hits)
+		hits = rerankLLM(ctx, r.getLM(), query, hits)
 	default:
-		return rerankLexical(query, hits)
+		hits = rerankLexical(query, hits)
 	}
+	return diversifyRetrievalHits(hits, maxPreferredHitsPerSource)
+}
+
+// diversifyRetrievalHits preserves the rank order within each source while
+// prioritizing evidence from distinct documents near the front of the list.
+// It intentionally does not discard overflow hits: callers can still use more
+// than maxPreferredHitsPerSource chunks when the answer requires one source.
+func diversifyRetrievalHits(hits []retrievalHit, maxPerSource int) []retrievalHit {
+	if len(hits) < 2 || maxPerSource < 1 {
+		return hits
+	}
+	selected := make([]retrievalHit, 0, len(hits))
+	overflow := make([]retrievalHit, 0, len(hits))
+	perSource := make(map[string]int)
+	for _, hit := range hits {
+		source := strings.TrimSpace(hit.DocumentID)
+		if source == "" {
+			source = strings.TrimSpace(hit.Article)
+		}
+		if source == "" {
+			source = "unknown"
+		}
+		if perSource[source] < maxPerSource {
+			selected = append(selected, hit)
+			perSource[source]++
+			continue
+		}
+		overflow = append(overflow, hit)
+	}
+	return append(selected, overflow...)
 }
