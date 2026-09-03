@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +14,74 @@ func newTestModuleSettings(t *testing.T) *settingsStore {
 		t.Fatalf("loadOrCreateSettings failed: %v", err)
 	}
 	return ss
+}
+
+func TestStripXMLTagsPreservesDocxParagraphAndTableBoundaries(t *testing.T) {
+	docxXML := `<w:document><w:body>` +
+		`<w:p><w:r><w:t>Erster Absatz.</w:t></w:r></w:p>` +
+		`<w:p><w:r><w:t>Zweiter Absatz.</w:t></w:r></w:p>` +
+		`<w:tbl>` +
+		`<w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr>` +
+		`<w:tr><w:tc><w:p><w:r><w:t>1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>2</w:t></w:r></w:p></w:tc></w:tr>` +
+		`</w:tbl>` +
+		`</w:body></w:document>`
+	out := stripXMLTags(docxXML)
+	lines := strings.Split(out, "\n")
+
+	if !containsLine(lines, "Erster Absatz.") || !containsLine(lines, "Zweiter Absatz.") {
+		t.Fatalf("expected paragraphs on separate lines, got %q", out)
+	}
+	if !containsLine(lines, "A") || !containsLine(lines, "B") || !containsLine(lines, "1") || !containsLine(lines, "2") {
+		t.Fatalf("expected table cell text preserved, got %q", out)
+	}
+	// A and B must land on the same row (before the next row's "1"), i.e.
+	// row boundaries survived as line breaks distinct from cell content.
+	aIdx, bIdx, oneIdx := indexOfLine(lines, "A"), indexOfLine(lines, "B"), indexOfLine(lines, "1")
+	if aIdx < 0 || bIdx < 0 || oneIdx < 0 || !(aIdx < oneIdx && bIdx < oneIdx) {
+		t.Fatalf("expected row 'A|B' entirely before row '1|2', got lines %+v", lines)
+	}
+}
+
+func TestStripXMLTagsPreservesXLSXRowBoundaries(t *testing.T) {
+	xlsxXML := `<sheetData>` +
+		`<row><c><v>Name</v></c><c><v>Wert</v></c></row>` +
+		`<row><c><v>Alpha</v></c><c><v>1</v></c></row>` +
+		`<row><c><v>Beta</v></c><c><v>2</v></c></row>` +
+		`</sheetData>`
+	out := stripXMLTags(xlsxXML)
+	lines := strings.Split(out, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected each spreadsheet row on its own line, got %d line(s): %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "Name") || !strings.Contains(lines[0], "Wert") {
+		t.Errorf("expected header row intact on one line, got %q", lines[0])
+	}
+}
+
+func TestStripXMLTagsCollapsesNonBoundaryTagsToSpace(t *testing.T) {
+	// Unchanged historical behavior: a tag that isn't a recognized
+	// paragraph/row/cell boundary still collapses to a plain space, not a
+	// newline, and stays on one line.
+	out := stripXMLTags(`<span class="x">Hello</span> <b>World</b>`)
+	if strings.Contains(out, "\n") {
+		t.Fatalf("ordinary inline tags must not introduce a line break, got %q", out)
+	}
+	if !strings.Contains(out, "Hello") || !strings.Contains(out, "World") {
+		t.Errorf("expected both words preserved, got %q", out)
+	}
+}
+
+func containsLine(lines []string, want string) bool {
+	return indexOfLine(lines, want) >= 0
+}
+
+func indexOfLine(lines []string, want string) int {
+	for i, l := range lines {
+		if strings.TrimSpace(l) == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestNormalizeModulesFillsDefaults(t *testing.T) {

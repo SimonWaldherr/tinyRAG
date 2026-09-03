@@ -17,6 +17,22 @@ Standard bei.
   tinyRAG zusätzlich `FTS_SEARCH` als begrenzte Kandidatenquelle. Die Eingabe
   wird dabei in sichere Literale zerlegt, Rollen- und ACL-Filter gelten auch
   dort, und bei fehlender Unterstützung bleibt die Vektorsuche unverändert.
+- **Hybrid-Suche (Vektor + BM25):** Nutzt tinySQLs `HYBRID_SEARCH`, um die
+  Kosinus-Trefferliste per Reciprocal-Rank-Fusion mit einem echten BM25-Volltext-
+  Pass über die Chunk-Inhalte zu verschmelzen. Findet dadurch exakte Begriffe
+  (Fehlercodes, Produkt-IDs, Eigennamen), die eine reine Vektorsuche übersehen
+  kann. Genau wie bei `vector` wird danach das erweiterte Kandidatenfenster mit
+  den Rollen-/ACL-Filtern eingeschränkt; der an das R³-Ranking übergebene Score
+  bleibt eine gewöhnliche Kosinus-Ähnlichkeit, nicht der interne RRF-Wert.
+- **Vektor-Index (`flat`/`ivf`/`hnsw`):** Wählt den von `VEC_SEARCH` und
+  `HYBRID_SEARCH` verwendeten Suchindex. `flat` (exakter Scan) ist Standard und
+  empfohlene Baseline; `ivf`/`hnsw` lohnen sich erst bei größeren Korpora und
+  sollten vorher am eigenen Datenbestand benchmarkt werden (tinySQLs eigene
+  Benchmarks zeigen, dass `flat`/`ivf` `hnsw` bei kleinen Korpora schlagen
+  können). Beim Start wird der gewählte Index (bzw. bei `flat` nur der
+  Vektor-Spalten-Cache) einmalig vorgewärmt (`VEC_WARM`), damit die erste
+  Anfrage nicht den einmaligen Indexaufbau bezahlt. Bei `scalar` (Standard)
+  entfällt das Vorwärmen, da dieser Pfad `VEC_SEARCH` gar nicht verwendet.
 - **Geodaten-Import:** Erlaubt Uploads von GeoJSON, KML und OpenStreetMap XML
   über den Open-Data-Tab. Jeder Import erhält R3-Quellmetadaten und wird
   idempotent über den Dateinamen aktualisiert.
@@ -32,3 +48,45 @@ beiden Optionen benötigen daher einen Neustart.
 - **Audit-Statementtexte:** Die dynamische, schreibgeschützte SQL-Abfrage des
   Agenten nutzt `ExecSQL` mit Audit-Kontext. Bei aktivem Audit steht daher das
   originale SQL-Statement statt nur eines Statement-Typs im Hash-Protokoll.
+
+## tinySQL v0.49.0
+
+tinyRAG nutzt tinySQL v0.49.0. Die folgenden neueren Suchfunktionen werden
+optional und abwärtskompatibel eingesetzt:
+
+- `HYBRID_SEARCH` / `RAG_SEARCH` für den neuen `hybrid`-Retrieval-Modus.
+- `VEC_WARM` zum Vorwärmen von Vektor-Cache und ANN-Index beim Start.
+- Das `index`-Argument von `VEC_SEARCH` (`flat`/`ivf`/`hnsw`), jetzt über die
+  Einstellung „Vektor-Index" konfigurierbar statt hart auf `flat` gesetzt.
+
+## Strukturbewusstes Chunking & Ingestion-Härtung
+
+Unabhängig von tinySQL wurde die Ingestion-Pipeline generisch gehärtet, damit
+größere, stärker strukturierte Wissensbestände (verschachtelte Referenzseiten
+mit nummerierten Abläufen, Tabellen und Glossaren; oder viele kleine
+strukturierte Lerninhalte) zuverlässiger verarbeitet werden — ohne dass sich
+das Verhalten für bestehende, unstrukturierte Inhalte ändert:
+
+- **Blockbewusstes Chunking:** Listen-, Tabellen- und Code-Block-Zeilen werden
+  vor dem Zuschneiden zu atomaren Einheiten gruppiert, sodass ein
+  Zeichenbudget-Schnitt nicht mehr mitten in einer Schritt-für-Schritt-Anleitung
+  oder einer Tabellenzeile landet. Reiner Fließtext verhält sich unverändert.
+  Eine einzelne Zeile/Einheit, die selbst das Budget sprengt, wird jetzt
+  zeilen- bzw. wortgrenzenbewusst weiter aufgeteilt statt unbegrenzt
+  durchgereicht zu werden.
+- **Office-Struktur bleibt erhalten:** Die Text-Extraktion aus
+  DOCX/PPTX/XLSX/ODT/ODP/ODS erzeugt jetzt an Absatz-, Zeilen- und
+  Zellgrenzen echte Zeilenumbrüche statt alles zu einer einzigen Zeile zu
+  verschmelzen.
+- **Neue Quellart „structured_item":** Für kleine, in sich abgeschlossene
+  Datensätze (Glossareintrag, Tabellenzeile, Kursmodul, Frage-Antwort-Paar),
+  automatisch gesetzt beim CSV-/JSON-Zeilenimport.
+- **Konfigurierbare Terminologie** (`terminology`, verwaltet über
+  `GET`/`POST /api/settings/terminology`): Begriffspaare (z. B. Abkürzung ↔
+  ausgeschriebene Form), die die Abfrageerweiterung automatisch in beide
+  Richtungen ergänzt. Leer per Standard.
+- **Update-Modus für Wiki-/URL-/Text-Import:** `/api/add-wiki`,
+  `/api/add-url` und `/api/add-text` akzeptieren jetzt optional ein
+  `metadata`-Objekt mit `update_mode` (`skip` Standard / `upsert` /
+  `replace`), damit erneut importierte, inzwischen geänderte Inhalte
+  tatsächlich aktualisiert werden.

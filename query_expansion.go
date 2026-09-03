@@ -198,6 +198,67 @@ func looksTechnicalQuery(q string) bool {
 	return techScore >= 2
 }
 
+// configuredTerminology returns the operator-configured terminology table,
+// or nil if none is configured / settings aren't initialized yet.
+func configuredTerminology() []terminologyEntry {
+	if settings == nil {
+		return nil
+	}
+	return settings.get().Terminology
+}
+
+// expandTerminologyVariants returns additional standalone query variants for
+// any configured term (or one of its expansions) found in the query,
+// substituting in every OTHER member of that term's equivalence class. This
+// lets an operator bridge an abbreviation to its full form (or a domain
+// synonym pair) without relying on the embedding model alone to know the
+// mapping. Single-word terms must match a whole token (case-insensitive) to
+// avoid matching inside an unrelated longer word; multi-word terms match by
+// substring against the full query.
+func expandTerminologyVariants(base string, tokens []string, terms []terminologyEntry) []string {
+	if len(terms) == 0 || len(tokens) == 0 {
+		return nil
+	}
+	lowBase := strings.ToLower(base)
+	tokenSet := make(map[string]bool, len(tokens))
+	for _, t := range tokens {
+		tokenSet[strings.ToLower(t)] = true
+	}
+
+	var out []string
+	for _, entry := range terms {
+		members := append([]string{entry.Term}, entry.Expansions...)
+		matched := ""
+		for _, m := range members {
+			lm := strings.ToLower(strings.TrimSpace(m))
+			if lm == "" {
+				continue
+			}
+			if strings.Contains(lm, " ") {
+				if strings.Contains(lowBase, lm) {
+					matched = m
+					break
+				}
+				continue
+			}
+			if tokenSet[lm] {
+				matched = m
+				break
+			}
+		}
+		if matched == "" {
+			continue
+		}
+		for _, m := range members {
+			if m == "" || strings.EqualFold(m, matched) {
+				continue
+			}
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func expandRetrievalQueries(q string) []weightedSearchQuery {
 	base := strings.TrimSpace(refineSearchQuery(q))
 	if base == "" {
@@ -223,6 +284,13 @@ func expandRetrievalQueries(q string) []weightedSearchQuery {
 	tokens := splitSearchTokens(base)
 	if len(tokens) == 0 {
 		return out
+	}
+
+	// Terminology variants come first (after the verbatim query) so a
+	// configured abbreviation/synonym bridge survives the cap below even
+	// when several of the generic heuristics also fire.
+	for _, variant := range expandTerminologyVariants(base, tokens, configuredTerminology()) {
+		add(&out, variant, 0.94)
 	}
 
 	if len(tokens) >= 2 && (hasDigit(tokens[0]) || hasDigit(tokens[1])) {
@@ -281,6 +349,10 @@ func expandExternalSearchQueries(q string) []string {
 	var out []string
 	add(&out, base)
 	tokens := splitSearchTokens(base)
+
+	for _, variant := range expandTerminologyVariants(base, tokens, configuredTerminology()) {
+		add(&out, variant)
+	}
 
 	// Exact-phrase variant for short, multi-word queries
 	if len(tokens) >= 2 && len(tokens) <= 5 {

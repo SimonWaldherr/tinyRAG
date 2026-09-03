@@ -12,6 +12,21 @@ import (
 	tinysql "github.com/SimonWaldherr/tinySQL"
 )
 
+func TestSourceTypeQualityDefaultStructuredItem(t *testing.T) {
+	if got := sourceTypeQualityDefault("structured_item"); got != 0.80 {
+		t.Errorf("structured_item quality = %v, want 0.80", got)
+	}
+	if got := sourceTypeQualityDefault("STRUCTURED_ITEM"); got != 0.80 {
+		t.Errorf("structured_item quality should be case-insensitive, got %v", got)
+	}
+	if sourceTypeQualityDefault("structured_item") <= sourceTypeQualityDefault("document") {
+		t.Error("a well-formed structured record should outrank the generic document default")
+	}
+	if sourceTypeQualityDefault("structured_item") >= sourceTypeQualityDefault("open_dataset") {
+		t.Error("structured_item should still rank below a governed open dataset")
+	}
+}
+
 type r3MockLM struct{}
 
 func (r3MockLM) embed(texts []string) ([][]float64, error) {

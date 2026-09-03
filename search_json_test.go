@@ -9,7 +9,7 @@ type orderedSearchChunkStore struct {
 	hits []retrievalHit
 }
 
-func (s *orderedSearchChunkStore) searchTopK(_ []float64, _, _ string, _ int) ([]retrievalHit, error) {
+func (s *orderedSearchChunkStore) searchTopK(_ []float64, _, _, _ string, _ int) ([]retrievalHit, error) {
 	return append([]retrievalHit(nil), s.hits...), nil
 }
 
