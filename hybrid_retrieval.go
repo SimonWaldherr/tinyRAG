@@ -33,6 +33,18 @@ func shouldUseFullTextCandidates(query string) bool {
 	return false
 }
 
+// shouldSupplementFullTextCandidates avoids running FTS_SEARCH after
+// HYBRID_SEARCH. Hybrid retrieval already performs a BM25 pass and supplies
+// its fused candidate set, so a second FTS query would add latency without
+// improving recall. Scalar and vector retrieval retain the targeted fallback
+// for technical identifiers.
+func shouldSupplementFullTextCandidates() bool {
+	if settings == nil {
+		return true
+	}
+	return normalizeRetrievalMode(settings.get().RetrievalMode) != "hybrid"
+}
+
 // buildFullTextCandidateQuery creates a small, literal OR query for tinySQL
 // FTS. User text is never used as FTS syntax: boolean operators, quotes, and
 // punctuation are discarded before the terms reach the database.

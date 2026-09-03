@@ -589,6 +589,7 @@ func tinySQLRowToMap(row map[string]any, keys []string) map[string]any {
 }
 
 func (s *tinySQLChunkStore) searchTopK(vec []float64, queryText, embedModel, roleFilter string, limit int) ([]retrievalHit, error) {
+	escapedVector := escapeSQ(vecJSON(vec))
 	selectColumns := "id, content, article, chunk_idx, chunk_id, document_id, source_system, source_type," +
 		" source_title, source_url, source_object_id, source_version, role_scope, acl_groups," +
 		" business_owner, sensitivity, trust_level, source_quality, freshness_score, quality_score," +
@@ -597,7 +598,7 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, queryText, embedModel, rol
 		"SELECT %s,"+
 			" VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score"+
 			" FROM chunks WHERE embed_model = '%s' AND %s ORDER BY score DESC LIMIT %d",
-		selectColumns, escapeSQ(vecJSON(vec)), escapeSQ(embedModel), roleFilter, limit,
+		selectColumns, escapedVector, escapeSQ(embedModel), roleFilter, limit,
 	)
 	// VEC_SEARCH/HYBRID_SEARCH are optional because both table functions rank
 	// before this application's role/ACL filter (neither has pre-filter
@@ -607,8 +608,9 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, queryText, embedModel, rol
 	mode := "scalar"
 	indexMode := "flat"
 	if settings != nil {
-		mode = settings.get().RetrievalMode
-		indexMode = normalizeVectorIndexMode(settings.get().VectorIndexMode)
+		currentSettings := settings.get()
+		mode = normalizeRetrievalMode(currentSettings.RetrievalMode)
+		indexMode = normalizeVectorIndexMode(currentSettings.VectorIndexMode)
 	}
 	if mode == "hybrid" && strings.TrimSpace(queryText) == "" {
 		// No lexical signal to fuse in; fall back to the pure vector path.
@@ -623,7 +625,7 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, queryText, embedModel, rol
 		q = fmt.Sprintf(
 			"SELECT %s, _vec_similarity AS score FROM VEC_SEARCH('chunks', 'embedding', VEC_FROM_JSON('%s'), %d, 'cosine', '%s')"+
 				" WHERE embed_model = '%s' AND %s ORDER BY _vec_similarity DESC LIMIT %d",
-			selectColumns, escapeSQ(vecJSON(vec)), candidateLimit, indexMode, escapeSQ(embedModel), roleFilter, limit,
+			selectColumns, escapedVector, candidateLimit, indexMode, escapeSQ(embedModel), roleFilter, limit,
 		)
 	case "hybrid":
 		candidateLimit := limit * 12
@@ -644,7 +646,7 @@ func (s *tinySQLChunkStore) searchTopK(vec []float64, queryText, embedModel, rol
 			"SELECT %s, VEC_COSINE_SIMILARITY(embedding, VEC_FROM_JSON('%s')) AS score"+
 				" FROM HYBRID_SEARCH('chunks', 'embedding', 'content', '%s', VEC_FROM_JSON('%s'), %d, '%s')"+
 				" WHERE embed_model = '%s' AND %s ORDER BY _rrf_rank ASC LIMIT %d",
-			selectColumns, escapeSQ(vecJSON(vec)), escapeSQ(queryText), escapeSQ(vecJSON(vec)),
+			selectColumns, escapedVector, escapeSQ(queryText), escapedVector,
 			candidateLimit, escapeSQ(optsJSON), escapeSQ(embedModel), roleFilter, limit,
 		)
 	}

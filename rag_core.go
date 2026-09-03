@@ -829,7 +829,9 @@ func (r *ragSystem) searchCandidatesSingleContext(ctx context.Context, query str
 	if err := ctx.Err(); err != nil {
 		return nil, embedMs, time.Since(t1).Milliseconds(), err
 	}
-	rawHits = r.mergeFullTextCandidates(query, qvec, activeRole, k, rawHits)
+	if shouldSupplementFullTextCandidates() {
+		rawHits = r.mergeFullTextCandidates(query, qvec, activeRole, k, rawHits)
+	}
 	searchMs := time.Since(t1).Milliseconds()
 
 	rankPolicy := defaultRankingPolicy()
@@ -927,7 +929,7 @@ func (r *ragSystem) searchCandidatesContext(ctx context.Context, query string, k
 	for _, hit := range best {
 		hits = append(hits, hit)
 	}
-	if len(vecs) > 0 {
+	if len(vecs) > 0 && shouldSupplementFullTextCandidates() {
 		t2 := time.Now()
 		hits = r.mergeFullTextCandidates(query, vecs[0], activeRole, k, hits)
 		totalSearchMs += time.Since(t2).Milliseconds()

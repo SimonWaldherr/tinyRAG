@@ -30,6 +30,20 @@ func TestBuildFullTextCandidateQueryUsesLiteralTermsOnly(t *testing.T) {
 	}
 }
 
+func TestHybridRetrievalSkipsRedundantFullTextSupplement(t *testing.T) {
+	previous := settings
+	t.Cleanup(func() { settings = previous })
+
+	settings = &settingsStore{s: appSettings{RetrievalMode: "hybrid"}}
+	if shouldSupplementFullTextCandidates() {
+		t.Fatal("hybrid retrieval must not run a second full-text candidate query")
+	}
+	settings = &settingsStore{s: appSettings{RetrievalMode: "vector"}}
+	if !shouldSupplementFullTextCandidates() {
+		t.Fatal("vector retrieval should retain the targeted full-text supplement")
+	}
+}
+
 func TestMergeFullTextCandidatesDeduplicatesAndUsesBoundedFusion(t *testing.T) {
 	previous := settings
 	settings = &settingsStore{s: appSettings{EmbedModel: "test-embed"}}
